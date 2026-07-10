@@ -37,9 +37,11 @@ public final class AutoSwitchEngine: @unchecked Sendable {
         }?.id
     }
 
-    /// 활성 계정에서 rate-limit 이벤트 발생
+    /// 활성 계정에서 rate-limit 이벤트 발생.
+    /// 쿨다운 내 hit는 무시 — 전환 직후 구 세션이 계속 남기는 stale 로그를
+    /// 새 활성 계정의 소진으로 오인해 연쇄 전환(B→C→D)되는 것을 막는다.
     public func onRateLimitHit(file: AccountsFile, hit: RateLimitHit, now: Date) -> Decision {
-        guard file.autoSwitchEnabled, let active = file.active else { return .none }
+        guard file.autoSwitchEnabled, let active = file.active, !inCooldown(now) else { return .none }
         guard let next = firstAvailable(in: markedFile(file, activeID: active.id, hit: hit, now: now),
                                         excluding: active.id, now: now) else {
             return .allExhausted

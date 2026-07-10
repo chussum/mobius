@@ -70,6 +70,28 @@ final class AutoSwitchEngineTests: XCTestCase {
                        .switchTo(primary.id, reason: .primaryRecovered))
     }
 
+    func testCooldownSuppressesStaleRateLimitHits() {
+        // 전환 직후 구 세션이 남기는 stale rate-limit 로그를 새 활성 계정의
+        // 소진으로 오인해 연쇄 전환(B→C→D)되면 안 된다
+        let engine = AutoSwitchEngine()
+        let hit = RateLimitHit(resetsAt: t0.addingTimeInterval(3600))
+        XCTAssertEqual(engine.onRateLimitHit(file: file, hit: hit, now: t0),
+                       .switchTo(fb1.id, reason: .activeExhausted))
+        engine.noteSwitched(now: t0)
+        // 호출자가 전환을 반영: primary 한도 기록, fb1 활성
+        file.accounts[0].rateLimit = RateLimitInfo(resetsAt: t0.addingTimeInterval(3600), recordedAt: t0)
+        file.activeAccountID = fb1.id
+        // 쿨다운(120초) 내 hit → 억제
+        XCTAssertEqual(engine.onRateLimitHit(file: file, hit: hit, now: t0.addingTimeInterval(60)),
+                       .none)
+        // 경계 정각(t0 + cooldown): now < last + cooldown 이 거짓 → 허용
+        XCTAssertEqual(engine.onRateLimitHit(file: file, hit: hit, now: t0.addingTimeInterval(120)),
+                       .switchTo(fb2.id, reason: .activeExhausted))
+        // 쿨다운 경과 후 같은 hit → 전환
+        XCTAssertEqual(engine.onRateLimitHit(file: file, hit: hit, now: t0.addingTimeInterval(121)),
+                       .switchTo(fb2.id, reason: .activeExhausted))
+    }
+
     func testNilResetsAtUses24HourFallback() {
         // 월간 지출 한도 등 리셋 시각 없는 이벤트 → 보수적 24시간 폴백
         let hit = RateLimitHit(resetsAt: nil)

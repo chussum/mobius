@@ -56,7 +56,7 @@ struct Switch: ParsableCommand {
         try ctx.switcher.switchTo(target.id)
         MobiusNotification.postAccountsChanged()
         print("전환 완료 → \(target.nickname) <\(target.emailAddress)>")
-        print("실행 중인 claude 세션은 다음 요청부터 새 계정이 적용되지 않을 수 있습니다 — 그 경우 세션을 새로 시작하세요.")
+        print("실행 중인 claude 세션에는 새 계정이 즉시 적용되지 않을 수 있습니다 — 그 경우 세션을 새로 시작하세요.")
     }
 }
 
@@ -96,12 +96,14 @@ struct Auto: ParsableCommand {
     @Argument(help: "on 또는 off") var mode: String
     func run() throws {
         let ctx = try makeContext()
+        let enabled: Bool
         switch mode {
-        case "on": try ctx.store.setAutoSwitch(true)
-        case "off": try ctx.store.setAutoSwitch(false)
+        case "on": enabled = true
+        case "off": enabled = false
         default: throw ValidationError("on 또는 off만 가능합니다.")
         }
+        try ctx.store.setAutoSwitch(enabled)
         MobiusNotification.postAccountsChanged()
-        print("자동 전환: \(mode)")
+        print("자동 전환: \(enabled ? "켜짐" : "꺼짐")")
     }
 }
