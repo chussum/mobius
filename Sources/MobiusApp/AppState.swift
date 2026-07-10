@@ -155,7 +155,24 @@ final class AppState: ObservableObject {
         reload()
     }
 
-    func addAccount() { lastError = "계정 추가는 다음 태스크에서 구현" }
+    private var loginFlow: LoginFlowController?
+
+    func addAccount() {
+        guard loginFlow == nil else { return } // 진행 중이면 중복 실행 방지
+        let flow = LoginFlowController(io: io, store: store, switcher: switcher)
+        loginFlow = flow
+        Task { @MainActor in
+            do {
+                let profile = try await flow.run()
+                notify(title: "계정 추가 완료",
+                       body: "\(profile.nickname) <\(profile.emailAddress)>")
+                reload()
+            } catch {
+                lastError = error.localizedDescription
+            }
+            loginFlow = nil
+        }
+    }
 
     private func notify(title: String, body: String) {
         let content = UNMutableNotificationContent()
