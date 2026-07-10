@@ -76,8 +76,10 @@ final class LoginFlowController: NSObject, ASWebAuthenticationPresentationContex
                 return .added(profile)
             }
 
-            // (b) 취소: 창을 닫아도 로그인이 방금 끝났을 수 있으니 15초까지 완료를 더 기다린다.
-            if userCanceled, graceUntil == nil { graceUntil = Date().addingTimeInterval(15) }
+            // (b) 취소: 창을 닫아도 로그인이 방금 끝났을 수 있으니 짧게(2.5초)만 완료를 더 기다린다.
+            //     로그인 성공 시 자격증명은 창이 닫히기 전에 이미 써지므로 2.5초로 충분하고,
+            //     로그인 없이 닫은 경우엔 곧바로 취소 처리돼 "계정 추가" 버튼이 다시 반응한다.
+            if userCanceled, graceUntil == nil { graceUntil = Date().addingTimeInterval(2.5) }
             if let g = graceUntil, Date() > g { throw LoginFlowError.canceled }
         }
         throw LoginFlowError.timeout
