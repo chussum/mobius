@@ -80,6 +80,9 @@ final class AppState: ObservableObject {
     // MARK: 주기 처리
 
     func tick() {
+        // 로그인 창이 열려 있는 동안은 reconcile/자동 전환이 LoginFlow의
+        // 자격증명 변경 감지와 경합하지 않도록 전체를 건너뛴다.
+        guard loginFlow == nil else { return }
         let now = Date()
         try? switcher.reconcile()
 
@@ -163,12 +166,19 @@ final class AppState: ObservableObject {
         loginFlow = flow
         Task { @MainActor in
             do {
-                let profile = try await flow.run()
-                notify(title: "계정 추가 완료",
-                       body: "\(profile.nickname) <\(profile.emailAddress)>")
+                switch try await flow.run() {
+                case .added(let profile):
+                    notify(title: "계정 추가 완료",
+                           body: "\(profile.nickname) <\(profile.emailAddress)>")
+                case .refreshed(let profile):
+                    notify(title: "기존 계정 자격증명 갱신됨",
+                           body: "\(profile.nickname) <\(profile.emailAddress)>")
+                }
                 reload()
             } catch {
                 lastError = error.localizedDescription
+                // 팝오버가 닫혀 있어도 인지할 수 있도록 알림으로도 전달
+                notify(title: "계정 추가 실패", body: error.localizedDescription)
             }
             loginFlow = nil
         }

@@ -15,13 +15,15 @@ final class LoginFlowController: NSObject, ASWebAuthenticationPresentationContex
     private let switcher: Switcher
     private var process: Process?
     private var session: ASWebAuthenticationSession?
+    private var userCanceled = false
 
     init(io: ClaudeConfigIO, store: AccountStore, switcher: Switcher) {
         self.io = io; self.store = store; self.switcher = switcher
     }
 
-    /// 반환: 새로 등록된 프로필. 실패/취소 시 에러 throw.
-    func run() async throws -> AccountProfile {
+    /// 반환: 새로 등록(.added) 또는 같은 계정 재로그인으로 토큰 갱신(.refreshed)된 프로필.
+    /// 실패/취소 시 에러 throw.
+    func run() async throws -> LoginFlowResult {
         // ① 현재 상태 보관 (없으면 로그아웃 상태에서 시작한 것 — 복원 생략)
         try switcher.resaveLiveIntoMatchingProfile()
         let previous = try io.readLiveSnapshot()
@@ -36,30 +38,43 @@ final class LoginFlowController: NSObject, ASWebAuthenticationPresentationContex
         // ③ ephemeral 인증 창
         presentAuthWindow(url: url)
 
-        // ④ 자격증명 변경 대기 (최대 180초, 1초 폴링)
+        // ④ 자격증명 변경 대기 (최대 180초, 1초 폴링).
+        //    Keychain 블롭 변경 = 로그인 완료 신호 (다른 계정이든 같은 계정 재로그인이든).
         let deadline = Date().addingTimeInterval(180)
         while Date() < deadline {
             try await Task.sleep(for: .seconds(1))
-            guard let changed = try? io.liveEmail(), changed != baselineEmail else { continue }
+            if userCanceled { throw LoginFlowError.canceled }
+            guard let probe = try? io.readLiveSnapshot(),
+                  probe.keychainBlob != previous?.keychainBlob else { continue }
             // CLI가 ~/.claude.json과 Keychain을 순차 기록하는 사이의 부분 상태를
-            // 피하기 위해 1초 뒤 재확인하고, Keychain 블롭도 실제로 바뀌었는지 본다.
+            // 피하기 위해 1초 뒤 재확인한다.
             try await Task.sleep(for: .seconds(1))
-            if let email = try? io.liveEmail(), email != baselineEmail,
-               let snap = try? io.readLiveSnapshot(),
-               snap.keychainBlob != previous?.keychainBlob {
-                let nickname = String(email.split(separator: "@").first ?? "account")
-                let profile = try store.upsertProfile(nickname: nickname, snapshot: snap)
-                // ⑤ 원래 계정 복원 (새 계정은 fallback 목록 끝에 등록됨).
-                //    원래 계정이 없었으면(첫 계정 등록) 새 계정을 활성으로 유지.
-                if let previous, let prevID = previousActiveID {
-                    try io.writeLiveSnapshot(previous)
-                    try store.setActive(prevID)
-                } else {
-                    try store.setActive(profile.id)
-                }
+            if userCanceled { throw LoginFlowError.canceled }
+            guard let snap = try? io.readLiveSnapshot(),
+                  snap.keychainBlob != previous?.keychainBlob,
+                  let email = try? io.liveEmail() else { continue }
+
+            // 사용자가 지정한 별명은 유지한다 (upsert가 넘긴 별명으로 덮어쓰므로).
+            let nickname = store.file.accounts
+                .first { $0.emailAddress == email }?.nickname
+                ?? String(email.split(separator: "@").first ?? "account")
+            let profile = try store.upsertProfile(nickname: nickname, snapshot: snap)
+
+            // 같은 계정 재로그인: 라이브가 이미 그 계정의 최신 토큰 — 복원 불필요.
+            if email == baselineEmail {
                 MobiusNotification.postAccountsChanged()
-                return profile
+                return .refreshed(profile)
             }
+            // ⑤ 원래 계정 복원 (새 계정은 fallback 목록 끝에 등록됨).
+            //    원래 계정이 없었으면(첫 계정 등록) 새 계정을 활성으로 유지.
+            if let previous, let prevID = previousActiveID {
+                try io.writeLiveSnapshot(previous)
+                try store.setActive(prevID)
+            } else {
+                try store.setActive(profile.id)
+            }
+            MobiusNotification.postAccountsChanged()
+            return .added(profile)
         }
         throw LoginFlowError.timeout
     }
@@ -71,7 +86,9 @@ final class LoginFlowController: NSObject, ASWebAuthenticationPresentationContex
         // 실측(claude 2.1.206): `claude /login`(초기 프롬프트) 대신
         // `claude auth login` 서브커맨드가 로그인 진입점 — URL을 stdout에 출력하고
         // localhost 콜백 서버로 완료를 자동 감지한다.
-        proc.arguments = ["-lc", "script -q /dev/null claude auth login"]
+        // exec로 zsh를 script로 교체해 process가 곧 script(1)이 되게 한다
+        // (terminate 시 셸만 죽고 script/claude가 고아로 남는 것 방지).
+        proc.arguments = ["-lc", "exec script -q /dev/null claude auth login"]
         var env = ProcessInfo.processInfo.environment
         // CLI의 기본 브라우저 자동 오픈 억제 — 인증 창은 앱이 ephemeral로 띄운다.
         env["BROWSER"] = "true"
@@ -112,8 +129,13 @@ final class LoginFlowController: NSObject, ASWebAuthenticationPresentationContex
     private func presentAuthWindow(url: URL) {
         // 앱을 활성화해야 인증 창이 앞으로 온다 (메뉴바 앱은 기본 비활성)
         NSApp.activate(ignoringOtherApps: true)
-        let s = ASWebAuthenticationSession(url: url, callbackURLScheme: "mobius") { _, _ in
-            // 완료는 자격증명 파일 변경 감지로 판단하므로 콜백은 무시
+        let s = ASWebAuthenticationSession(url: url, callbackURLScheme: "mobius") {
+            [weak self] _, error in
+            // 완료는 자격증명 파일 변경 감지로 판단한다. 단, 사용자가 창을 닫으면
+            // 3분 대기 없이 즉시 취소로 종료한다.
+            if let error, (error as? ASWebAuthenticationSessionError)?.code == .canceledLogin {
+                Task { @MainActor in self?.userCanceled = true }
+            }
         }
         s.prefersEphemeralWebBrowserSession = true // 매번 쿠키 백지 → 항상 로그인창
         s.presentationContextProvider = self
@@ -123,7 +145,15 @@ final class LoginFlowController: NSObject, ASWebAuthenticationPresentationContex
 
     private func cleanup() {
         session?.cancel(); session = nil
-        process?.terminate(); process = nil
+        if let proc = process {
+            let pid = proc.processIdentifier
+            if proc.isRunning { proc.terminate() }
+            // 프로세스 그룹에도 SIGTERM 폴백 — script/claude 고아 방지.
+            // (그룹 리더가 아니면 조용히 실패하며, PTY 마스터가 닫히면
+            //  claude는 SIGHUP으로 정리된다.)
+            if pid > 0 { kill(-pid, SIGTERM) }
+        }
+        process = nil
     }
 
     nonisolated func presentationAnchor(for session: ASWebAuthenticationSession)
@@ -172,8 +202,13 @@ final class LoginOutputCollector: @unchecked Sendable {
     }
 }
 
+enum LoginFlowResult {
+    case added(AccountProfile)      // 새 계정 등록
+    case refreshed(AccountProfile)  // 같은 계정 재로그인 → 토큰 갱신
+}
+
 enum LoginFlowError: LocalizedError {
-    case urlNotFound, timeout
+    case urlNotFound, timeout, canceled
     var errorDescription: String? {
         switch self {
         case .urlNotFound:
@@ -181,6 +216,8 @@ enum LoginFlowError: LocalizedError {
                 + "`mobius capture <이름>`으로 계정을 등록하세요."
         case .timeout:
             return "로그인 대기 시간이 초과되었습니다. 다시 시도해주세요."
+        case .canceled:
+            return "로그인이 취소되었습니다."
         }
     }
 }
