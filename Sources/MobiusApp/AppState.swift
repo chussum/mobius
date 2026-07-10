@@ -153,12 +153,22 @@ final class AppState: ObservableObject {
         }
     }
 
+    /// 진행 중인 Desktop 전환 태스크 — 자동/수동 어느 경로든 하나만 허용.
+    private var desktopSwitchTask: Task<Void, Never>?
+
     /// CLI 전환 성공 후 Desktop 동반 전환. 실패해도 CLI 전환은 유지된다.
     private func switchDesktopIfPossible(from fromID: UUID?, to id: UUID) {
         guard let fromID, fromID != id,
               desktopSwitcher.hasSnapshot(for: id),
               desktopCapture == nil else { return } // 가이드 캡처 중엔 Desktop을 건드리지 않음
-        Task { @MainActor in
+        // 직렬화 게이트: 이전 Desktop 전환이 진행 중이면 이번 요청은 드롭 —
+        // 연속 전환(A→B, B→C)이 겹치며 스냅샷이 교차 오염되는 것을 방지 (코디네이터도 재차 차단).
+        guard desktopSwitchTask == nil else {
+            lastError = "Desktop 전환이 진행 중입니다 — 이번 전환에서는 Desktop을 건너뜁니다."
+            return
+        }
+        desktopSwitchTask = Task { @MainActor in
+            defer { desktopSwitchTask = nil }
             do { try await desktopCoordinator.switchDesktop(from: fromID, to: id) }
             catch { lastError = "Desktop 전환 실패(CLI는 전환됨): \(error.localizedDescription)" }
         }
@@ -196,6 +206,7 @@ final class AppState: ObservableObject {
 
     func removeAccount(_ id: UUID) {
         try? store.remove(id)
+        desktopSwitcher.deleteSnapshot(for: id) // 고아 Desktop 스냅샷 정리
         MobiusNotification.postAccountsChanged()
         reload()
     }
@@ -277,13 +288,17 @@ final class AppState: ObservableObject {
     private func runDesktopCaptureWatch(for id: UUID) async {
         let baseline = desktopSwitcher.identityLastModified()
 
-        // Desktop 실행 (이미 실행 중이면 앞으로 가져온다)
-        if let url = NSWorkspace.shared.urlForApplication(
-            withBundleIdentifier: DesktopCoordinator.bundleID) {
-            _ = try? await NSWorkspace.shared.openApplication(
-                at: url, configuration: NSWorkspace.OpenConfiguration())
-        } else {
+        // Desktop 실행 (이미 실행 중이면 앞으로 가져온다) — 실패 시 5분 침묵 없이 즉시 알림
+        guard let url = NSWorkspace.shared.urlForApplication(
+            withBundleIdentifier: DesktopCoordinator.bundleID) else {
             desktopCapture?.step = .failed("Claude Desktop 앱을 찾을 수 없습니다.")
+            return
+        }
+        do {
+            _ = try await NSWorkspace.shared.openApplication(
+                at: url, configuration: NSWorkspace.OpenConfiguration())
+        } catch {
+            desktopCapture?.step = .failed("Claude Desktop 실행 실패: \(error.localizedDescription)")
             return
         }
         guard !Task.isCancelled, desktopCapture?.accountID == id else { return }

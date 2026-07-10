@@ -8,7 +8,7 @@ public enum DesktopSwitcherError: Error, Equatable {
 /// Claude Desktop(Electron)의 신원 저장소 파일을 프로필별로 보관/복원한다.
 /// 주의: 반드시 Desktop 앱이 종료된 상태에서 호출할 것 (종료/재실행은 앱 계층 담당).
 /// Cookies는 원본부터 safeStorage(Keychain 키)로 암호화되어 있다 — 같은 머신에서만 유효.
-public final class DesktopSwitcher: @unchecked Sendable {
+public final class DesktopSwitcher: Sendable {
     let env: MobiusEnvironment
     /// 로그인 신원을 담는 항목들 (캐시류는 제외 — 클수록 스왑이 느려지고 불필요)
     static let identityItems = ["Cookies", "Cookies-journal",
@@ -28,35 +28,77 @@ public final class DesktopSwitcher: @unchecked Sendable {
         FileManager.default.fileExists(atPath: snapshotDir(for: id).path)
     }
 
-    /// 현재 Desktop 로그인 상태를 해당 프로필의 스냅샷으로 저장
+    /// desktop-profiles 상위 디렉토리를 0700으로 보장 (이미 있어도 권한 재적용)
+    private func ensureProfilesDir() throws {
+        let fm = FileManager.default
+        try fm.createDirectory(at: env.desktopProfilesDir, withIntermediateDirectories: true,
+                               attributes: [.posixPermissions: 0o700])
+        try fm.setAttributes([.posixPermissions: 0o700],
+                             ofItemAtPath: env.desktopProfilesDir.path)
+    }
+
+    /// 현재 Desktop 로그인 상태를 해당 프로필의 스냅샷으로 저장.
+    /// 같은 볼륨의 temp 디렉토리에 복사를 마친 뒤 기존 스냅샷과 교체(remove+rename) —
+    /// 복사 도중 실패해도 기존 스냅샷은 온전히 보존된다.
     public func capture(for id: UUID) throws {
         guard isDesktopInstalled else { throw DesktopSwitcherError.desktopNotInstalled }
+        let fm = FileManager.default
+        try ensureProfilesDir()
         let dir = snapshotDir(for: id)
-        try? FileManager.default.removeItem(at: dir)
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true,
-            attributes: [.posixPermissions: 0o700])
-        for item in Self.identityItems {
-            let src = env.desktopDataDir.appendingPathComponent(item)
-            guard FileManager.default.fileExists(atPath: src.path) else { continue }
-            try FileManager.default.copyItem(at: src, to: dir.appendingPathComponent(item))
+        let tmp = env.desktopProfilesDir
+            .appendingPathComponent("\(id.uuidString).tmp-\(UUID().uuidString)")
+        try fm.createDirectory(at: tmp, withIntermediateDirectories: true,
+                               attributes: [.posixPermissions: 0o700])
+        do {
+            for item in Self.identityItems {
+                let src = env.desktopDataDir.appendingPathComponent(item)
+                guard fm.fileExists(atPath: src.path) else { continue }
+                try fm.copyItem(at: src, to: tmp.appendingPathComponent(item))
+            }
+            try? fm.removeItem(at: dir)
+            try fm.moveItem(at: tmp, to: dir) // 같은 볼륨 rename — 부분 스냅샷이 남지 않음
+        } catch {
+            try? fm.removeItem(at: tmp)
+            throw error
         }
     }
 
-    /// 스냅샷을 Desktop 데이터 디렉토리로 복원 (Desktop 종료 상태 전제)
+    /// 스냅샷을 Desktop 데이터 디렉토리로 복원 (Desktop 종료 상태 전제).
+    /// 1단계: 스냅샷 전체를 스테이징으로 복사 — 여기서 실패하면 라이브 데이터 무손상.
+    /// 2단계: 항목별 remove + rename만 수행해 실패 창을 복사가 아닌 rename 수준으로 축소.
+    /// 한계: 항목 간 원자성은 없다 — 2단계 도중 실패하면 혼합 상태가 될 수 있다.
+    /// (데이터 디렉토리 전체 스왑은 Desktop의 설정 등 비신원 파일까지 바꿔버리므로 불가.)
     public func restore(for id: UUID) throws {
         guard hasSnapshot(for: id) else { throw DesktopSwitcherError.noSnapshot }
+        let fm = FileManager.default
         let dir = snapshotDir(for: id)
-        for item in Self.identityItems {
-            let dst = env.desktopDataDir.appendingPathComponent(item)
-            let src = dir.appendingPathComponent(item)
-            try? FileManager.default.removeItem(at: dst)
-            if FileManager.default.fileExists(atPath: src.path) {
-                try FileManager.default.copyItem(at: src, to: dst)
+        try ensureProfilesDir()
+        let staging = env.desktopProfilesDir
+            .appendingPathComponent(".restore-tmp-\(UUID().uuidString)")
+        try fm.createDirectory(at: staging, withIntermediateDirectories: true,
+                               attributes: [.posixPermissions: 0o700])
+        do {
+            for item in Self.identityItems {
+                let src = dir.appendingPathComponent(item)
+                guard fm.fileExists(atPath: src.path) else { continue }
+                try fm.copyItem(at: src, to: staging.appendingPathComponent(item))
             }
+            for item in Self.identityItems {
+                let dst = env.desktopDataDir.appendingPathComponent(item)
+                let src = staging.appendingPathComponent(item)
+                try? fm.removeItem(at: dst)
+                if fm.fileExists(atPath: src.path) {
+                    try fm.moveItem(at: src, to: dst)
+                }
+            }
+            try? fm.removeItem(at: staging)
+        } catch {
+            try? fm.removeItem(at: staging)
+            throw error
         }
     }
 
-    public func deleteSnapshot(for id: UUID) throws {
+    public func deleteSnapshot(for id: UUID) {
         try? FileManager.default.removeItem(at: snapshotDir(for: id))
     }
 

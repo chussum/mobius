@@ -41,8 +41,37 @@ final class DesktopSwitcherTests: XCTestCase {
     func testDeleteSnapshot() throws {
         let id = UUID()
         try sw.capture(for: id)
-        try sw.deleteSnapshot(for: id)
+        sw.deleteSnapshot(for: id)
         XCTAssertFalse(sw.hasSnapshot(for: id))
+    }
+
+    /// 재캡처는 기존 스냅샷을 통째로 교체한다 — 이전 캡처의 잔재 항목이나
+    /// temp/스테이징 디렉토리가 남지 않아야 한다 (원자적 교체 검증).
+    func testRecaptureReplacesSnapshotWholesale() throws {
+        let fm = FileManager.default
+        let id = UUID()
+        // 1차 캡처: Session Storage 포함
+        try Data("ss-old".utf8).write(
+            to: env.desktopDataDir.appendingPathComponent("Session Storage"))
+        try sw.capture(for: id)
+        let snapDir = env.desktopProfilesDir.appendingPathComponent(id.uuidString)
+        XCTAssertTrue(fm.fileExists(
+            atPath: snapDir.appendingPathComponent("Session Storage").path))
+
+        // 라이브에서 Session Storage 제거 + Cookies 갱신 후 재캡처
+        try fm.removeItem(at: env.desktopDataDir.appendingPathComponent("Session Storage"))
+        try Data("cookie-2".utf8).write(to: env.desktopDataDir.appendingPathComponent("Cookies"))
+        try sw.capture(for: id)
+
+        // 이전 스냅샷 잔재(Session Storage)가 남아 있으면 부분 병합 — 실패
+        XCTAssertFalse(fm.fileExists(
+            atPath: snapDir.appendingPathComponent("Session Storage").path))
+        XCTAssertEqual(try String(contentsOf: snapDir.appendingPathComponent("Cookies")),
+                       "cookie-2")
+        // temp/스테이징 잔재 없음
+        let leftovers = try fm.contentsOfDirectory(atPath: env.desktopProfilesDir.path)
+            .filter { $0.contains(".tmp-") || $0.hasPrefix(".restore-tmp-") }
+        XCTAssertEqual(leftovers, [])
     }
 
     /// 가이드 캡처의 변경 감지 신호: 신원 파일 mtime이 최신값으로 집계되는지
