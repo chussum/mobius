@@ -54,9 +54,12 @@ struct Switch: ParsableCommand {
             throw ValidationError("'\(name)' 계정 없음. 등록된 계정: \(names)")
         }
         try ctx.switcher.switchTo(target.id)
+        // 사용자의 의지로 전환 — 앱 onTick의 primary 자동 복귀 대상이 아니다
+        try ctx.store.setAutoSwitchedFromPrimary(false)
         MobiusNotification.postAccountsChanged()
         print("전환 완료 → \(target.nickname) <\(target.emailAddress)>")
         print("실행 중인 claude 세션에는 새 계정이 즉시 적용되지 않을 수 있습니다 — 그 경우 세션을 새로 시작하세요.")
+        print("Desktop 동시 전환은 앱에서 전환할 때만 적용됩니다.")
     }
 }
 

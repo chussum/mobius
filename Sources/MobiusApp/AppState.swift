@@ -113,11 +113,18 @@ final class AppState: ObservableObject {
         case .allExhausted:
             notify(title: "모든 계정 한도 소진",
                    body: "전환 가능한 계정이 없습니다. 리셋을 기다려주세요.")
+        case let .notifyExhaustedOnly(id):
+            let name = store.file.accounts.first { $0.id == id }?.nickname ?? "?"
+            notify(title: "한도 소진 — 자동 전환이 꺼져 있습니다",
+                   body: "\(name) 계정이 한도에 도달했습니다. 수동으로 전환하세요.")
         case let .switchTo(id, reason):
             let fromID = store.file.activeAccountID
             do {
                 try switcher.switchTo(id)
                 engine.noteSwitched(now: now)
+                // 자동 전환의 결과인지 기록 — onTick의 primary 복귀는 이 플래그가
+                // true일 때만 일어난다 (수동 전환 자동 회귀 방지)
+                try? store.setAutoSwitchedFromPrimary(reason == .activeExhausted)
                 MobiusNotification.postAccountsChanged()
                 let name = store.file.accounts.first { $0.id == id }?.nickname ?? "?"
                 let title = reason == .primaryRecovered
@@ -141,6 +148,8 @@ final class AppState: ObservableObject {
         do {
             try switcher.switchTo(id)
             engine.noteSwitched()
+            // 사용자의 의지로 전환 — 자동 복귀 대상이 아니다
+            try? store.setAutoSwitchedFromPrimary(false)
             MobiusNotification.postAccountsChanged()
             reload()
         } catch {

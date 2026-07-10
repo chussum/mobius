@@ -9,6 +9,7 @@ public enum Decision: Equatable, Sendable {
     case none
     case switchTo(UUID, reason: SwitchReason)
     case allExhausted       // 전환할 곳이 없음 → 알림만
+    case notifyExhaustedOnly(UUID) // 자동 전환 꺼짐 — 소진된 활성 계정 알림만
 }
 
 /// 순수 상태머신. 부작용 없음 — 호출자가 Decision을 실행하고 noteSwitched()로 알려준다.
@@ -41,7 +42,9 @@ public final class AutoSwitchEngine: @unchecked Sendable {
     /// 쿨다운 내 hit는 무시 — 전환 직후 구 세션이 계속 남기는 stale 로그를
     /// 새 활성 계정의 소진으로 오인해 연쇄 전환(B→C→D)되는 것을 막는다.
     public func onRateLimitHit(file: AccountsFile, hit: RateLimitHit, now: Date) -> Decision {
-        guard file.autoSwitchEnabled, let active = file.active, !inCooldown(now) else { return .none }
+        guard let active = file.active, !inCooldown(now) else { return .none }
+        // 자동 전환 꺼짐 — 스펙상 "끄면 소진 알림만": 전환 없이 알림 결정만 반환
+        guard file.autoSwitchEnabled else { return .notifyExhaustedOnly(active.id) }
         guard let next = firstAvailable(in: markedFile(file, activeID: active.id, hit: hit, now: now),
                                         excluding: active.id, now: now) else {
             return .allExhausted
@@ -61,9 +64,12 @@ public final class AutoSwitchEngine: @unchecked Sendable {
         return f
     }
 
-    /// 주기 틱: primary 복귀 판단
+    /// 주기 틱: primary 복귀 판단.
+    /// 복귀는 현재 fallback 활성이 "자동 전환"의 결과일 때만(autoSwitchedFromPrimary) —
+    /// 사용자가 수동으로 fallback에 전환한 상태를 강제로 되돌리지 않는다.
     public func onTick(file: AccountsFile, now: Date) -> Decision {
         guard file.autoSwitchEnabled,
+              file.autoSwitchedFromPrimary,
               let primary = file.primary,
               let active = file.active,
               active.id != primary.id,

@@ -60,6 +60,9 @@ public final class Switcher: @unchecked Sendable {
         }
         if store.file.activeAccountID != profile.id {
             try store.setActive(profile.id)
+            // 외부(사용자) 로그인으로 활성이 바뀐 것 — 자동 전환 상태가 아니므로
+            // 플래그를 내려 onTick의 primary 자동 복귀를 막는다 (앱·CLI 공통 경로).
+            try store.setAutoSwitchedFromPrimary(false)
         }
     }
 }

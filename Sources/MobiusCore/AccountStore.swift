@@ -118,6 +118,14 @@ public final class AccountStore: @unchecked Sendable {
         try save()
     }
 
+    /// 현재 fallback 활성이 자동 전환의 결과인지 기록 — 파일로 영속되므로
+    /// CLI 전환(별 프로세스)·앱 재시작 후에도 onTick 복귀 판단이 올바르다.
+    public func setAutoSwitchedFromPrimary(_ flagged: Bool) throws {
+        lock.lock(); defer { lock.unlock() }
+        file.autoSwitchedFromPrimary = flagged
+        try save()
+    }
+
     public func setDesktopAutoSwitch(_ enabled: Bool) throws {
         lock.lock(); defer { lock.unlock() }
         file.desktopAutoSwitchEnabled = enabled

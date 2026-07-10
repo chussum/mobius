@@ -43,13 +43,17 @@ public struct AccountsFile: Codable, Equatable, Sendable {
     public var autoSwitchEnabled: Bool        // CLI 자동 fallback (기본 켬)
     public var desktopSyncEnabled: Bool       // 수동 전환 시 Desktop 동시 전환
     public var desktopAutoSwitchEnabled: Bool // 자동 전환 시에도 Desktop 동시 전환 (기본 끔)
+    /// 현재 fallback 활성 상태가 "자동 전환"의 결과인가. 수동 전환/외부 로그인은 false —
+    /// onTick의 primary 자동 복귀는 이 플래그가 true일 때만 일어난다 (수동 전환 자동 회귀 방지).
+    public var autoSwitchedFromPrimary: Bool
 
     public init(accounts: [AccountProfile] = [], activeAccountID: UUID? = nil,
                 autoSwitchEnabled: Bool = true, desktopSyncEnabled: Bool = true,
-                desktopAutoSwitchEnabled: Bool = false) {
+                desktopAutoSwitchEnabled: Bool = false, autoSwitchedFromPrimary: Bool = false) {
         self.accounts = accounts; self.activeAccountID = activeAccountID
         self.autoSwitchEnabled = autoSwitchEnabled; self.desktopSyncEnabled = desktopSyncEnabled
         self.desktopAutoSwitchEnabled = desktopAutoSwitchEnabled
+        self.autoSwitchedFromPrimary = autoSwitchedFromPrimary
     }
 
     /// 하위호환 디코딩 — 구버전 accounts.json에 없는 필드는 기본값으로 채운다.
@@ -61,6 +65,8 @@ public struct AccountsFile: Codable, Equatable, Sendable {
         desktopSyncEnabled = try c.decodeIfPresent(Bool.self, forKey: .desktopSyncEnabled) ?? true
         desktopAutoSwitchEnabled =
             try c.decodeIfPresent(Bool.self, forKey: .desktopAutoSwitchEnabled) ?? false
+        autoSwitchedFromPrimary =
+            try c.decodeIfPresent(Bool.self, forKey: .autoSwitchedFromPrimary) ?? false
     }
 
     public var primary: AccountProfile? { accounts.first }

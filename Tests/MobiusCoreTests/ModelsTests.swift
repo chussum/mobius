@@ -33,6 +33,7 @@ final class ModelsTests: XCTestCase {
         XCTAssertFalse(file.autoSwitchEnabled)
         XCTAssertTrue(file.desktopSyncEnabled)
         XCTAssertFalse(file.desktopAutoSwitchEnabled) // 없으면 기본 끔
+        XCTAssertFalse(file.autoSwitchedFromPrimary)  // 없으면 기본 false (수동 상태로 간주)
     }
 
     func testIsLimited() {
