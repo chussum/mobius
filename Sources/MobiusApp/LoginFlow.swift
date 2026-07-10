@@ -41,15 +41,23 @@ final class LoginFlowController: NSObject, ASWebAuthenticationPresentationContex
         // ④ 자격증명 변경 대기 (최대 180초, 1초 폴링).
         //    Keychain 블롭 변경 = 로그인 완료 신호 (다른 계정이든 같은 계정 재로그인이든).
         let deadline = Date().addingTimeInterval(180)
+        // 창 닫힘(취소 신호)은 진짜 취소일 수도, "성공 페이지 확인 후 닫음"일 수도 있다.
+        // 즉시 포기하면 CLI가 방금 완료한 로그인을 놓치므로 6초 유예 후 판별한다.
+        var cancelGraceDeadline: Date?
         while Date() < deadline {
             try await Task.sleep(for: .seconds(1))
-            if userCanceled { throw LoginFlowError.canceled }
+            if userCanceled, cancelGraceDeadline == nil {
+                cancelGraceDeadline = Date().addingTimeInterval(6)
+            }
+            if let grace = cancelGraceDeadline, Date() > grace {
+                throw LoginFlowError.canceled
+            }
             guard let probe = try? io.readLiveSnapshot(),
                   probe.keychainBlob != previous?.keychainBlob else { continue }
             // CLI가 ~/.claude.json과 Keychain을 순차 기록하는 사이의 부분 상태를
-            // 피하기 위해 1초 뒤 재확인한다.
+            // 피하기 위해 1초 뒤 재확인한다. (변경이 감지된 이상 취소 신호는 무시 —
+            // 로그인은 이미 완료됐고 등록·복원을 끝까지 수행하는 것이 옳다.)
             try await Task.sleep(for: .seconds(1))
-            if userCanceled { throw LoginFlowError.canceled }
             guard let snap = try? io.readLiveSnapshot(),
                   snap.keychainBlob != previous?.keychainBlob,
                   let email = try? io.liveEmail() else { continue }
