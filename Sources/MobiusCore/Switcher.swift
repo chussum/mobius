@@ -62,10 +62,13 @@ public final class Switcher: @unchecked Sendable {
     @discardableResult
     public func adoptLiveAccountIfUnregistered() throws -> AccountProfile? {
         guard liveStable else { return nil }
+        // ★ 등록 여부를 먼저 확인한다 — 이메일은 .claude.json에서 읽어 승인창이 없다.
+        //   readLiveSnapshot()(=Keychain, 승인창 유발)은 정말 미등록일 때만 호출.
+        //   (과거: guard에서 readLiveSnapshot을 먼저 평가해 매 틱 Keychain을 읽어 15초마다 승인창이 떴음)
         guard let email = try io.liveEmail(),
-              let live = try io.readLiveSnapshot(),
               !store.file.accounts.contains(where: { $0.emailAddress == email })
         else { return nil }
+        guard let live = try io.readLiveSnapshot() else { return nil }
         let nickname = String(email.split(separator: "@").first ?? "account")
         let profile = try store.upsertProfile(nickname: nickname, snapshot: live)
         try store.setActive(profile.id)

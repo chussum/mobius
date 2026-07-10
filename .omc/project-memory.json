@@ -80,8 +80,8 @@
     },
     {
       "path": "Sources/MobiusCore/Switcher.swift",
-      "accessCount": 14,
-      "lastAccessed": 1783704080888,
+      "accessCount": 15,
+      "lastAccessed": 1783704549180,
       "type": "file"
     },
     {
@@ -226,6 +226,12 @@
       "path": "Tests/MobiusCoreTests/SwitcherTests.swift",
       "accessCount": 2,
       "lastAccessed": 1783703382823,
+      "type": "file"
+    },
+    {
+      "path": "CLAUDE.md",
+      "accessCount": 2,
+      "lastAccessed": 1783704579279,
       "type": "file"
     },
     {

@@ -77,6 +77,10 @@ Sources/MobiusApp/        SwiftUI 메뉴바 앱 + AppState + Views/ + LoginFlow 
    수정 시 저장 계열 연산(resave/adopt/reconcile) 스킵. Switcher.stabilityWindow(테스트는 0).
 3. **매 틱 Keychain 접근으로 승인창 폭탄** — reconcile이 15초마다 readLiveSnapshot(Keychain) 호출.
    → 이메일(.claude.json, 승인창 없음)로 먼저 판별하고, **활성 계정이 바뀐 경우에만** Keychain 접근.
+3b. **guard 조건 평가 순서로 매 틱 Keychain 읽기** — `adoptLiveAccountIfUnregistered`의 guard가
+   `readLiveSnapshot()`(Keychain)을 "이미 등록됐는지" 검사보다 **먼저** 평가해, 이미 등록된
+   상태에서도 15초마다 Keychain을 읽어 승인창이 떴다. → 값싼 조건(이메일·등록여부)을 먼저 통과시키고
+   Keychain 읽기는 정말 필요할 때만. **guard/&& 는 왼쪽부터 평가된다 — 비싼 부작용은 뒤로.**
 4. **`security dump-keychain` 절대 금지** — 모든 항목을 하나씩 열어 승인창이 수십 개 쏟아짐.
    특정 항목만 `find-generic-password`(메타데이터) 또는 `-w`(값, 1회 승인)로 접근.
 5. **LSUIElement 오진** — 메뉴바 아이콘 미표시를 LSUIElement 탓으로 추정했으나 실제 원인은
