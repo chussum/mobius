@@ -181,13 +181,14 @@ final class LoginFlowController: NSObject, ASWebAuthenticationPresentationContex
         session = s
     }
 
-    /// OAuth authorize URL에 `prompt=login`을 붙여 claude.ai가 기존 세션이 있어도
-    /// 로그인/계정 선택 화면을 다시 보이게 한다 (구글 등 타 사이트 세션은 건드리지 않음).
+    /// OAuth authorize URL에 `prompt=select_account`를 붙여 claude.ai가 기존 세션이 있어도
+    /// 계정 선택 화면을 보이게 한다 (구글 등 타 사이트 세션은 건드리지 않음).
+    /// claude.ai가 무시하면 "현재 계정 + 계정 전환 링크" 화면이 뜨며, 거기서 전환하면 된다.
     private func forceLoginURL(_ url: URL) -> URL {
         guard var comps = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return url }
         var items = comps.queryItems ?? []
         if !items.contains(where: { $0.name == "prompt" }) {
-            items.append(URLQueryItem(name: "prompt", value: "login"))
+            items.append(URLQueryItem(name: "prompt", value: "select_account"))
         }
         comps.queryItems = items
         return comps.url ?? url
