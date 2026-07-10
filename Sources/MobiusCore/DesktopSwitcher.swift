@@ -102,6 +102,46 @@ public final class DesktopSwitcher: Sendable {
         try? FileManager.default.removeItem(at: snapshotDir(for: id))
     }
 
+    /// 강제 로그아웃: 현재 Desktop 신원 파일들을 임시 보관소로 옮겨(=로그아웃 상태로 만들고)
+    /// 나중에 취소 시 되돌릴 수 있게 보관소 URL을 반환한다. Desktop 종료 상태에서 호출할 것.
+    /// 옮길 게 없으면(이미 로그아웃) nil.
+    @discardableResult
+    public func stashLiveIdentity() throws -> URL? {
+        guard isDesktopInstalled else { throw DesktopSwitcherError.desktopNotInstalled }
+        let fm = FileManager.default
+        try ensureProfilesDir()
+        let stash = env.desktopProfilesDir
+            .appendingPathComponent(".stash-\(UUID().uuidString)")
+        try fm.createDirectory(at: stash, withIntermediateDirectories: true,
+                               attributes: [.posixPermissions: 0o700])
+        var moved = false
+        for item in Self.identityItems {
+            let src = env.desktopDataDir.appendingPathComponent(item)
+            guard fm.fileExists(atPath: src.path) else { continue }
+            try fm.moveItem(at: src, to: stash.appendingPathComponent(item))
+            moved = true
+        }
+        if !moved { try? fm.removeItem(at: stash); return nil }
+        return stash
+    }
+
+    /// 보관해둔 신원(강제 로그아웃 전 상태)을 Desktop으로 되돌린다. Desktop 종료 상태 전제.
+    public func restoreStashedIdentity(from stash: URL) throws {
+        let fm = FileManager.default
+        for item in Self.identityItems {
+            let src = stash.appendingPathComponent(item)
+            guard fm.fileExists(atPath: src.path) else { continue }
+            let dst = env.desktopDataDir.appendingPathComponent(item)
+            try? fm.removeItem(at: dst)
+            try fm.moveItem(at: src, to: dst)
+        }
+        try? fm.removeItem(at: stash)
+    }
+
+    public func discardStash(_ stash: URL) {
+        try? FileManager.default.removeItem(at: stash)
+    }
+
     /// 신원 저장소 파일들(하위 파일 포함)의 가장 최근 수정 시각.
     /// 가이드형 자동 캡처의 로그인 완료 감지 신호로 쓴다 (없으면 nil).
     public func identityLastModified() -> Date? {

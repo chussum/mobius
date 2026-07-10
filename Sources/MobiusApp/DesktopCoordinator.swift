@@ -26,6 +26,28 @@ final class DesktopCoordinator {
         NSRunningApplication.runningApplications(withBundleIdentifier: Self.bundleID).first
     }
 
+    var isRunning: Bool { runningApp != nil }
+
+    /// Desktop을 종료하고 완전히 꺼질 때까지 대기 (파일 핸들 정리 여유 포함).
+    func terminateAndWait() async {
+        guard let app = runningApp else { return }
+        app.terminate()
+        for _ in 0..<50 {
+            try? await Task.sleep(for: .milliseconds(200))
+            if app.isTerminated { break }
+        }
+        if !app.isTerminated { app.forceTerminate() }
+        try? await Task.sleep(for: .milliseconds(500))
+    }
+
+    /// Desktop 실행(이미 실행 중이면 앞으로).
+    func launch() async {
+        guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: Self.bundleID)
+        else { return }
+        try? await NSWorkspace.shared.openApplication(
+            at: url, configuration: NSWorkspace.OpenConfiguration())
+    }
+
     /// from(현재 활성)의 상태를 백업하고 to의 스냅샷으로 교체. Desktop이 켜져 있었으면 재실행.
     func switchDesktop(from: UUID, to: UUID) async throws {
         guard switcher.isDesktopInstalled, switcher.hasSnapshot(for: to) else { return }

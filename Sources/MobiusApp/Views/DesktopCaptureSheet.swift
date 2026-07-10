@@ -27,7 +27,7 @@ struct DesktopCaptureSheet: View {
                 }
 
                 VStack(alignment: .leading, spacing: 10) {
-                    stepRow(1, "Claude Desktop이 열립니다", launchState(session.step))
+                    stepRow(1, "Claude Desktop을 로그아웃하고 다시 엽니다", launchState(session.step))
                     stepRow(2, "\(session.nickname) 계정으로 로그인하세요", loginState(session.step))
                     stepRow(3, "로그인이 감지되면 자동 저장됩니다", saveState(session.step))
                 }
@@ -108,7 +108,7 @@ struct DesktopCaptureSheet: View {
                   systemImage: "checkmark.circle.fill")
                 .font(.system(size: 10)).foregroundStyle(accent)
         case .waitingLogin:
-            Text("이미 이 계정으로 로그인돼 있다면 '지금 상태 저장'을 누르세요.")
+            Text("현재 로그인은 로그아웃되었습니다. Claude Desktop 창에서 이 계정으로 로그인하면 자동 저장됩니다.")
                 .font(.system(size: 10)).foregroundStyle(.tertiary)
                 .fixedSize(horizontal: false, vertical: true)
         default:
@@ -124,18 +124,11 @@ struct DesktopCaptureSheet: View {
                 Button("닫기") { state.endDesktopCapture() }
                     .buttonStyle(.borderedProminent).tint(accent).controlSize(.small)
             case .failed:
-                Button("취소") { state.endDesktopCapture() }
-                    .buttonStyle(.bordered).controlSize(.small)
                 Spacer()
-                Button("지금 상태 저장") { state.captureDesktopNow() }
-                    .buttonStyle(.borderedProminent).tint(accent).controlSize(.small)
-            case .waitingLogin:
-                Button("취소") { state.endDesktopCapture() }
+                Button("닫기") { state.endDesktopCapture() }
                     .buttonStyle(.bordered).controlSize(.small)
-                Spacer()
-                Button("지금 상태 저장") { state.captureDesktopNow() }
-                    .buttonStyle(.borderedProminent).tint(accent).controlSize(.small)
-            case .launching, .saving:
+            case .launching, .saving, .waitingLogin:
+                // 취소 시 강제 로그아웃했던 원래 세션을 되돌린다
                 Button("취소") { state.endDesktopCapture() }
                     .buttonStyle(.bordered).controlSize(.small)
                 Spacer()

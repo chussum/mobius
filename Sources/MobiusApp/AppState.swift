@@ -300,8 +300,12 @@ final class AppState: ObservableObject {
 
     @Published var desktopCapture: DesktopCaptureSession?
     private var desktopCaptureTask: Task<Void, Never>?
+    /// 강제 로그아웃으로 치워둔 원래 세션 — 취소 시 복원용
+    private var desktopCaptureStash: URL?
 
-    /// 카드 "Desktop 연결": 안내 시트 표시 → Desktop 실행 → 로그인 자동 감지 → 캡처.
+    /// 카드 "Desktop 연결": 현재 Desktop을 강제 로그아웃(세션 치우기)한 뒤 다시 띄워
+    /// 사용자가 **해당 계정으로 새로 로그인**하게 하고, 그 세션을 캡처한다.
+    /// 강제 로그아웃 덕에 다른 계정이 잘못 저장될 여지가 원천 차단된다.
     func beginDesktopCapture(for id: UUID) {
         guard desktopCapture == nil else { return } // 진행 중이면 중복 방지
         guard let profile = store.file.accounts.first(where: { $0.id == id }) else { return }
@@ -315,61 +319,53 @@ final class AppState: ObservableObject {
         }
     }
 
-    /// "지금 상태 저장": 이미 로그인돼 있어 mtime이 안 변할 때 즉시 캡처.
-    func captureDesktopNow() {
-        guard let session = desktopCapture else { return }
-        desktopCaptureTask?.cancel()
-        desktopCaptureTask = nil
-        finishDesktopCapture(for: session.accountID)
-    }
-
-    /// 시트 닫기/취소 — 감시 태스크 정리.
+    /// 시트 닫기/취소 — 감시 태스크 정리 + 강제 로그아웃했던 원래 세션 복원.
     func endDesktopCapture() {
         desktopCaptureTask?.cancel()
         desktopCaptureTask = nil
         desktopCapture = nil
+        guard let stash = desktopCaptureStash else { return }
+        desktopCaptureStash = nil
+        // 취소: 치워둔 원래 Desktop 로그인을 되돌린다 (종료 → 복원 → 재실행)
+        Task { @MainActor in
+            await desktopCoordinator.terminateAndWait()
+            try? desktopSwitcher.restoreStashedIdentity(from: stash)
+            await desktopCoordinator.launch()
+        }
     }
 
     private func runDesktopCaptureWatch(for id: UUID) async {
-        let baseline = desktopSwitcher.identityLastModified()
-
-        // Desktop 실행 (이미 실행 중이면 앞으로 가져온다) — 실패 시 5분 침묵 없이 즉시 알림
-        guard let url = NSWorkspace.shared.urlForApplication(
-            withBundleIdentifier: DesktopCoordinator.bundleID) else {
-            desktopCapture?.step = .failed("Claude Desktop 앱을 찾을 수 없습니다.")
-            return
-        }
+        // 1. Desktop 종료 → 현재 세션 치우기(강제 로그아웃) → 재실행(로그인 화면)
+        await desktopCoordinator.terminateAndWait()
+        guard !Task.isCancelled, desktopCapture?.accountID == id else { return }
         do {
-            _ = try await NSWorkspace.shared.openApplication(
-                at: url, configuration: NSWorkspace.OpenConfiguration())
+            desktopCaptureStash = try desktopSwitcher.stashLiveIdentity()
         } catch {
-            desktopCapture?.step = .failed("Claude Desktop 실행 실패: \(error.localizedDescription)")
+            desktopCapture?.step = .failed("Desktop 로그아웃 실패: \(error.localizedDescription)")
             return
         }
+        await desktopCoordinator.launch()
         guard !Task.isCancelled, desktopCapture?.accountID == id else { return }
         desktopCapture?.step = .waitingLogin
 
-        // 1초 폴링, 최대 5분. 신원 파일 mtime 변경 후 2초간 정지하면
-        // 쓰기가 끝난 것으로 보고 로그인 완료로 판정한다.
-        var lastSeen = baseline
-        var changedAt: Date?
+        // 2. 로그아웃 상태라 신원 파일이 없다. 새 로그인 = 파일이 생기고 2초간 안정화되면 완료.
+        var lastSeen: Date?
+        var stableSince: Date?
         let deadline = Date().addingTimeInterval(300)
         while Date() < deadline {
             do { try await Task.sleep(for: .seconds(1)) } catch { return } // 취소됨
             guard desktopCapture?.accountID == id else { return }
-            let current = desktopSwitcher.identityLastModified()
+            guard let current = desktopSwitcher.identityLastModified() else { continue } // 아직 로그아웃
             if current != lastSeen {
                 lastSeen = current
-                changedAt = Date()
-            } else if let stamp = changedAt, current != baseline,
-                      Date().timeIntervalSince(stamp) >= 2 {
+                stableSince = Date()
+            } else if let s = stableSince, Date().timeIntervalSince(s) >= 2 {
                 desktopCaptureTask = nil
                 finishDesktopCapture(for: id)
                 return
             }
         }
-        desktopCapture?.step = .failed(
-            "5분 안에 로그인 변경이 감지되지 않았습니다. 이미 로그인돼 있다면 '지금 상태 저장'을 누르세요.")
+        desktopCapture?.step = .failed("5분 안에 로그인이 감지되지 않았습니다. 다시 시도해주세요.")
     }
 
     private func finishDesktopCapture(for id: UUID) {
@@ -377,6 +373,8 @@ final class AppState: ObservableObject {
         do {
             try desktopSwitcher.capture(for: id)
             try store.update(id) { $0.hasDesktopSnapshot = true }
+            if let stash = desktopCaptureStash { desktopSwitcher.discardStash(stash) }
+            desktopCaptureStash = nil
             MobiusNotification.postAccountsChanged()
             reload()
             desktopCapture?.step = .done

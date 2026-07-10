@@ -38,6 +38,23 @@ final class DesktopSwitcherTests: XCTestCase {
         XCTAssertThrowsError(try sw.restore(for: UUID()))
     }
 
+    func testStashLogsOutAndRestoreBringsBack() throws {
+        let cookies = env.desktopDataDir.appendingPathComponent("Cookies")
+        // 강제 로그아웃: 신원 파일이 라이브에서 사라져야 함
+        let stash = try XCTUnwrap(try sw.stashLiveIdentity())
+        XCTAssertFalse(FileManager.default.fileExists(atPath: cookies.path))
+        XCTAssertNil(sw.identityLastModified()) // 로그아웃 상태 = 신원 없음
+        // 취소 복원: 원래 세션이 되돌아와야 함
+        try sw.restoreStashedIdentity(from: stash)
+        XCTAssertEqual(try String(contentsOf: cookies), "cookie-A")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: stash.path)) // 보관소 정리됨
+    }
+
+    func testStashReturnsNilWhenAlreadyLoggedOut() throws {
+        _ = try sw.stashLiveIdentity() // 한 번 치우면
+        XCTAssertNil(try sw.stashLiveIdentity()) // 더 치울 게 없음
+    }
+
     func testDeleteSnapshot() throws {
         let id = UUID()
         try sw.capture(for: id)
