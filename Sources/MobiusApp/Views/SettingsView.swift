@@ -6,6 +6,10 @@ struct SettingsView: View {
     @State private var launchAtLogin = (SMAppService.mainApp.status == .enabled)
     @State private var cliMessage = ""
     @AppStorage("showUsageGauges") private var showUsageGauges = true
+    @State private var claudeInfo: ClaudeCLI.Info?
+    @State private var claudeChecked = false
+    @State private var installingClaude = false
+    @State private var claudeInstallMessage = ""
 
     var body: some View {
         settingsForm
@@ -13,8 +17,69 @@ struct SettingsView: View {
             .onAppear {
                 NSApp.setActivationPolicy(.regular)
                 NSApp.activate(ignoringOtherApps: true)
+                checkClaude()
             }
             .onDisappear { NSApp.setActivationPolicy(.accessory) }
+    }
+
+    @ViewBuilder private var claudeCLIRow: some View {
+        if let info = claudeInfo {
+            HStack(spacing: 8) {
+                Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("설치됨\(info.version.isEmpty ? "" : " · \(info.version)")")
+                        .font(.system(size: 12))
+                    Text(info.path).font(.system(size: 9)).foregroundStyle(.tertiary).lineLimit(1)
+                }
+                Spacer()
+            }
+        } else if !claudeChecked {
+            HStack { ProgressView().controlSize(.small); Text("확인 중…").font(.caption).foregroundStyle(.secondary) }
+        } else {
+            VStack(alignment: .leading, spacing: 6) {
+                Label("Claude Code CLI가 설치되어 있지 않아요", systemImage: "exclamationmark.triangle.fill")
+                    .font(.system(size: 12, weight: .semibold)).foregroundStyle(.orange)
+                Text("Mobius는 Claude Code CLI로 계정을 로그인·전환합니다. 아래 버튼으로 공식 설치 스크립트를 실행하세요 (관리자 권한 불필요).")
+                    .font(.system(size: 11)).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                HStack {
+                    Button {
+                        installClaude()
+                    } label: {
+                        if installingClaude {
+                            HStack(spacing: 6) { ProgressView().controlSize(.small); Text("설치 중…") }
+                        } else { Text("Claude Code 설치") }
+                    }
+                    .disabled(installingClaude)
+                    Spacer()
+                }
+                if !claudeInstallMessage.isEmpty {
+                    Text(claudeInstallMessage).font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+    }
+
+    private func checkClaude() {
+        Task {
+            let info = await Task.detached { ClaudeCLI.locate() }.value
+            await MainActor.run { claudeInfo = info; claudeChecked = true }
+        }
+    }
+
+    private func installClaude() {
+        installingClaude = true
+        claudeInstallMessage = "설치 스크립트를 내려받아 실행 중입니다… (최대 1~2분)"
+        Task {
+            let err = await ClaudeCLI.install()
+            let info = ClaudeCLI.locate()
+            await MainActor.run {
+                installingClaude = false
+                claudeInfo = info
+                claudeInstallMessage = err ?? "설치 완료! 이제 계정을 추가할 수 있어요."
+            }
+        }
     }
 
     private var settingsForm: some View {
@@ -36,6 +101,9 @@ struct SettingsView: View {
                     }
                     .padding(.vertical, 2)
                 }
+            }
+            Section("Claude Code CLI") {
+                claudeCLIRow
             }
             Section("일반") {
                 Toggle("로그인 시 자동 시작", isOn: $launchAtLogin)

@@ -250,6 +250,13 @@ final class AppState: ObservableObject {
 
     func addAccount() {
         guard loginFlow == nil else { return } // 진행 중이면 중복 실행 방지
+        // 계정 추가는 `claude auth login`으로 동작 — CLI가 없으면 설정에서 설치하도록 안내
+        guard ClaudeCLI.isInstalled else {
+            lastError = "Claude Code CLI가 필요합니다 — 설정에서 설치하세요."
+            notify(title: "Claude Code CLI 필요",
+                   body: "계정을 추가하려면 먼저 Claude Code CLI를 설치하세요. 설정 → Claude Code CLI에서 설치할 수 있어요.")
+            return
+        }
         let flow = LoginFlowController(io: io, store: store, switcher: switcher)
         loginFlow = flow
         Task { @MainActor in
