@@ -41,7 +41,7 @@ struct AccountListView: View {
             Text("Mobius").font(.system(size: 14, weight: .bold, design: .rounded))
             Text("뫼비우스").font(.system(size: 10)).foregroundStyle(.tertiary)
             Spacer()
-            Toggle("CLI 자동 fallback", isOn: Binding(
+            Toggle("Claude Code CLI 자동 Fallback", isOn: Binding(
                 get: { state.file.autoSwitchEnabled },
                 set: { state.setAutoSwitch($0) }))
                 .toggleStyle(.switch).controlSize(.mini)
@@ -83,7 +83,7 @@ struct AccountListView: View {
                 }
             }
             .contextMenu {
-                Button(p.hasDesktopSnapshot ? "Desktop 다시 연결" : "Desktop 연결") {
+                Button(p.hasDesktopSnapshot ? "Claude Desktop 다시 연결" : "Claude Desktop 연결") {
                     state.beginDesktopCapture(for: p.id)
                 }
                 Button("삭제", role: .destructive) { state.removeAccount(p.id) }

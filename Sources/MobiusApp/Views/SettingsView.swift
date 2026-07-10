@@ -7,6 +7,16 @@ struct SettingsView: View {
     @State private var cliMessage = ""
 
     var body: some View {
+        settingsForm
+            // 설정창이 떠 있는 동안만 Dock에 아이콘 표시, 닫으면 메뉴바 전용으로 복귀
+            .onAppear {
+                NSApp.setActivationPolicy(.regular)
+                NSApp.activate(ignoringOtherApps: true)
+            }
+            .onDisappear { NSApp.setActivationPolicy(.accessory) }
+    }
+
+    private var settingsForm: some View {
         Form {
             Section("일반") {
                 Toggle("로그인 시 자동 시작", isOn: $launchAtLogin)
@@ -16,11 +26,11 @@ struct SettingsView: View {
                             else { try SMAppService.mainApp.unregister() }
                         } catch { cliMessage = "실패: \(error.localizedDescription)" }
                     }
-                Toggle("CLI 자동 fallback", isOn: Binding(
+                Toggle("Claude Code CLI 자동 Fallback", isOn: Binding(
                     get: { state.file.autoSwitchEnabled },
                     set: { state.setAutoSwitch($0) }))
                 VStack(alignment: .leading, spacing: 3) {
-                    Toggle("Desktop 자동 fallback", isOn: Binding(
+                    Toggle("Claude Desktop 자동 Fallback", isOn: Binding(
                         get: { state.file.desktopAutoSwitchEnabled },
                         set: { state.setDesktopAutoSwitch($0) }))
                     Text("자동 전환 시 Claude Desktop이 종료 후 재실행됩니다")
@@ -30,7 +40,7 @@ struct SettingsView: View {
                     get: { state.file.desktopSyncEnabled },
                     set: { state.setDesktopSync($0) }))
             }
-            Section("CLI") {
+            Section("mobius CLI") {
                 HStack {
                     Text("`mobius` 명령어 설치")
                     Spacer()

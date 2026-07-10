@@ -67,21 +67,21 @@
       "type": "file"
     },
     {
-      "path": "Scripts/make-app.sh",
-      "accessCount": 7,
-      "lastAccessed": 1783699740114,
+      "path": "Sources/MobiusApp/Views/SettingsView.swift",
+      "accessCount": 11,
+      "lastAccessed": 1783700628219,
       "type": "file"
     },
     {
       "path": "Sources/MobiusApp/Views/AccountListView.swift",
-      "accessCount": 7,
-      "lastAccessed": 1783700377875,
+      "accessCount": 9,
+      "lastAccessed": 1783700629869,
       "type": "file"
     },
     {
-      "path": "Sources/MobiusApp/Views/SettingsView.swift",
-      "accessCount": 6,
-      "lastAccessed": 1783694923371,
+      "path": "Scripts/make-app.sh",
+      "accessCount": 7,
+      "lastAccessed": 1783699740114,
       "type": "file"
     },
     {
@@ -148,6 +148,12 @@
       "path": "Tests/MobiusCoreTests/ModelsTests.swift",
       "accessCount": 4,
       "lastAccessed": 1783695740342,
+      "type": "file"
+    },
+    {
+      "path": "Sources/MobiusApp/Views/MenuBarLabel.swift",
+      "accessCount": 4,
+      "lastAccessed": 1783700554506,
       "type": "file"
     },
     {
@@ -232,12 +238,6 @@
       "path": "Sources/MobiusCore/KeychainClient.swift",
       "accessCount": 1,
       "lastAccessed": 1783694916573,
-      "type": "file"
-    },
-    {
-      "path": "Sources/MobiusApp/Views/MenuBarLabel.swift",
-      "accessCount": 1,
-      "lastAccessed": 1783694929338,
       "type": "file"
     }
   ],

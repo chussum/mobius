@@ -56,7 +56,7 @@ struct AccountCardView: View {
         .contentShape(Rectangle())
     }
 
-    // 리셋 카운트다운은 자동 fallback이 켜져 있을 때만 표시.
+    // 리셋 카운트다운은 자동 Fallback이 켜져 있을 때만 표시.
     // 수동 모드에서는 한도 추적이 UX에 의미가 없으므로 tier 설명으로 대체한다.
     @ViewBuilder private var statusLine: some View {
         if autoSwitchOn, let rl = profile.rateLimit, rl.resetsAt > now {

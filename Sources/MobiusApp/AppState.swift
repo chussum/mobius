@@ -134,7 +134,7 @@ final class AppState: ObservableObject {
                 lastError = "자동 전환 실패: \(error.localizedDescription)"
                 return
             }
-            // Desktop 자동 fallback: 옵션 켬 + 대상 스냅샷 존재 시에만
+            // Desktop 자동 Fallback: 옵션 켬 + 대상 스냅샷 존재 시에만
             if store.file.desktopAutoSwitchEnabled {
                 switchDesktopIfPossible(from: fromID, to: id)
             }
