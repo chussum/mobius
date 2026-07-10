@@ -56,11 +56,14 @@ public final class SystemKeychain: KeychainClient, @unchecked Sendable {
     }
 }
 
-/// 테스트용. failNextWrite로 스왑 도중 실패(롤백 경로)를 재현한다.
+/// 테스트용. failNextWrite/failWritesForService로 스왑 도중 실패(롤백 경로)를 재현한다.
 public final class InMemoryKeychain: KeychainClient, @unchecked Sendable {
     private var store: [String: Data] = [:]
     private let lock = NSLock()
     public var failNextWrite = false
+    /// 이 service로의 **첫 매칭 write 1회만** 실패시킨다 (매칭 시 소모되어 nil로 초기화).
+    /// 1회 소모형이라 같은 service로의 후속 write(예: 롤백)는 통과한다.
+    public var failWritesForService: String?
 
     public init() {}
     private func key(_ s: String, _ a: String) -> String { s + "\u{0}" + a }
@@ -73,6 +76,10 @@ public final class InMemoryKeychain: KeychainClient, @unchecked Sendable {
     public func write(service: String, account: String, data: Data) throws {
         lock.lock(); defer { lock.unlock() }
         if failNextWrite { failNextWrite = false; throw KeychainError.injectedFailure }
+        if failWritesForService == service {
+            failWritesForService = nil
+            throw KeychainError.injectedFailure
+        }
         store[key(service, account)] = data
     }
 

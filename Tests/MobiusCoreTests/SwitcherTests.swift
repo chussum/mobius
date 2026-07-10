@@ -42,11 +42,17 @@ final class SwitcherTests: XCTestCase {
     }
 
     func testRollbackOnFailure() throws {
-        // 대상 기록 중 Keychain 쓰기 실패 → 라이브는 원상 복구
-        kc.failNextWrite = true
+        // 대상 기록 단계에서만 실패 주입: 되저장은 Mobius-account-* 서비스라 통과하고,
+        // 라이브 서비스로의 첫 write(대상 기록)가 실패 → catch의 롤백 write가 실행된다.
+        // failWritesForService는 1회 소모형이라 롤백 write 자체는 통과한다.
+        kc.failWritesForService = env.claudeKeychainService
         XCTAssertThrowsError(try switcher.switchTo(work.id))
         XCTAssertEqual(try io.liveEmail(), "p@x.com") // 복구됨
         XCTAssertEqual(store.file.activeAccountID, personal.id)
+        // 롤백이 실제로 실행됨: 라이브 Keychain 항목이 원래 blob으로 되돌아옴
+        XCTAssertEqual(try kc.read(service: env.claudeKeychainService,
+                                   account: env.claudeKeychainAccount),
+                       Data(#"{"tok":"P0"}"#.utf8))
     }
 
     func testSwitchToUnknownAccountThrows() throws {
