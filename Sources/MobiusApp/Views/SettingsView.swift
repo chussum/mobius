@@ -41,9 +41,26 @@ struct SettingsView: View {
             cliMessage = "번들에서 mobius 바이너리를 찾을 수 없습니다 (개발 빌드에서는 Scripts/install-cli.sh 사용)"
             return
         }
-        let script = "do shell script \"mkdir -p /usr/local/bin && ln -sf '\(src)' /usr/local/bin/mobius\" with administrator privileges"
+        let command = "mkdir -p /usr/local/bin && ln -sf \(shellQuoted(src)) /usr/local/bin/mobius"
+        let script = "do shell script \(appleScriptQuoted(command)) with administrator privileges"
         var error: NSDictionary?
         NSAppleScript(source: script)?.executeAndReturnError(&error)
-        cliMessage = error == nil ? "설치 완료: /usr/local/bin/mobius" : "설치 실패"
+        if let error {
+            let reason = error[NSAppleScript.errorMessage] as? String ?? "\(error)"
+            cliMessage = "설치 실패: \(reason)"
+        } else {
+            cliMessage = "설치 완료: /usr/local/bin/mobius"
+        }
+    }
+
+    /// POSIX shell 단일 인용 — `'` → `'\''` 로 어떤 경로도 안전하게.
+    private func shellQuoted(_ s: String) -> String {
+        "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    }
+
+    /// AppleScript 문자열 리터럴 — `\`와 `"` 이스케이프.
+    private func appleScriptQuoted(_ s: String) -> String {
+        "\"" + s.replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"") + "\""
     }
 }

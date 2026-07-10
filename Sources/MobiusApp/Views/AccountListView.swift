@@ -66,6 +66,7 @@ struct AccountListView: View {
                         autoSwitchOn: state.file.autoSwitchEnabled, now: now)
             .matchedGeometryEffect(id: p.id, in: cardSpace)
             .onTapGesture {
+                guard p.id != state.file.activeAccountID else { return }
                 withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
                     state.manualSwitch(to: p.id)
                 }

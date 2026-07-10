@@ -23,16 +23,21 @@ final class AppState: ObservableObject {
         let env = MobiusEnvironment.live()
         let kc = SystemKeychain()
         self.env = env
-        // 초기화 실패(디스크 등)는 빈 스토어로 시작하고 에러 표시
-        let store = (try? AccountStore(env: env, keychain: kc))
-            ?? (try! AccountStore(env: MobiusEnvironment(
-                home: FileManager.default.temporaryDirectory, localUser: env.localUser),
-                keychain: InMemoryKeychain()))
+        // 초기화 실패(accounts.json 손상 등)는 빈 스토어로 시작하고 에러 표시
+        let store: AccountStore
+        var initError: String?
+        do {
+            store = try AccountStore(env: env, keychain: kc)
+        } catch {
+            store = AccountStore(env: env, keychain: kc, file: AccountsFile())
+            initError = "계정 목록 로드 실패: \(error.localizedDescription)"
+        }
         self.store = store
         self.io = ClaudeConfigIO(env: env, keychain: kc)
         self.switcher = Switcher(env: env, keychain: kc, store: store, io: io)
         self.watcher = SessionLogWatcher(env: env)
         self.file = store.file
+        self.lastError = initError
 
         UNUserNotificationCenter.current()
             .requestAuthorization(options: [.alert, .sound]) { _, _ in }
@@ -47,6 +52,13 @@ final class AppState: ObservableObject {
             Task { @MainActor in self?.tick() }
         }
         tick()
+    }
+
+    deinit {
+        timer?.invalidate()
+        if let observer {
+            DistributedNotificationCenter.default().removeObserver(observer)
+        }
     }
 
     func reload() {
@@ -71,8 +83,11 @@ final class AppState: ObservableObject {
         let now = Date()
         try? switcher.reconcile()
 
+        // 배치 내 모든 hit는 스캔 시점의 활성 계정에 귀속 —
+        // 루프 중 전환이 일어나도 남은 hit(구 세션 로그)가 새 활성 계정에 오기록되지 않도록.
+        let activeID = store.file.activeAccountID
         for hit in watcher.scan(now: now) {
-            if let activeID = store.file.activeAccountID {
+            if let activeID {
                 try? store.update(activeID) {
                     $0.rateLimit = RateLimitInfo(resetsAt: hit.effectiveResetsAt(now: now),
                                                  recordedAt: now)

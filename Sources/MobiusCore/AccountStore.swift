@@ -26,6 +26,13 @@ public final class AccountStore: @unchecked Sendable {
         }
     }
 
+    /// 디스크를 읽지 않고 주어진 상태로 시작한다 (로드 실패 시 앱의 안전 폴백용).
+    public init(env: MobiusEnvironment, keychain: KeychainClient, file: AccountsFile) {
+        self.env = env
+        self.keychain = keychain
+        self.file = file
+    }
+
     public func save() throws {
         let data = try JSONEncoder().encode(file)
         try FileManager.default.createDirectory(at: env.appSupportDir,
