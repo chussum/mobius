@@ -11,8 +11,9 @@ struct AccountCardView: View {
 
     private let accent = Color(red: 0.35, green: 0.65, blue: 1.0)
 
-    /// 게이지 포함 시 카드가 차지하는 대략 높이 — AccountListView의 List 높이 계산과 공유
-    static func estimatedHeight(hasUsage: Bool) -> CGFloat { hasUsage ? 96 : 68 }
+    /// 카드 1행이 List에서 차지하는 높이(행 인셋 6pt 포함) — 넉넉히 잡아 내부 스크롤을 없앤다.
+    /// AccountListView의 List 높이 계산과 공유. 과소추정하면 내부 스크롤이 생기므로 살짝 크게.
+    static func estimatedHeight(hasUsage: Bool) -> CGFloat { hasUsage ? 116 : 74 }
 
     var body: some View {
         HStack(spacing: 12) {
