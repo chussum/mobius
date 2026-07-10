@@ -79,19 +79,34 @@ final class LoginFlowController: NSObject, ASWebAuthenticationPresentationContex
         throw LoginFlowError.timeout
     }
 
+    private var browserHookFiles: (hook: URL, urlFile: URL)?
+
+    /// 핵심(실측, claude 2.1.206): 터미널에 "출력"되는 URL은 수동 코드 페이지용
+    /// (redirect_uri=platform.claude.com/oauth/code/callback — 코드를 CLI에 붙여넣어야 함)이고,
+    /// CLI가 "브라우저로 열려는" URL이 자동 완료용(redirect_uri=http://localhost:PORT/callback)이다.
+    /// 그래서 BROWSER 환경변수에 후킹 스크립트를 꽂아 브라우저행 URL을 가로챈다.
+    private func makeBrowserHook() throws -> (hook: URL, urlFile: URL) {
+        let dir = FileManager.default.temporaryDirectory
+        let urlFile = dir.appendingPathComponent("mobius-login-url-\(UUID().uuidString)")
+        let hook = dir.appendingPathComponent("mobius-browser-hook-\(UUID().uuidString).sh")
+        try "#!/bin/sh\nprintf '%s' \"$1\" > \"\(urlFile.path)\"\n"
+            .write(to: hook, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755],
+                                              ofItemAtPath: hook.path)
+        return (hook, urlFile)
+    }
+
     private func launchLoginAndCaptureURL() async throws -> URL {
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: "/bin/zsh")
         // login shell로 PATH 확보, script(1)로 PTY 할당.
-        // 실측(claude 2.1.206): `claude /login`(초기 프롬프트) 대신
-        // `claude auth login` 서브커맨드가 로그인 진입점 — URL을 stdout에 출력하고
-        // localhost 콜백 서버로 완료를 자동 감지한다.
         // exec로 zsh를 script로 교체해 process가 곧 script(1)이 되게 한다
         // (terminate 시 셸만 죽고 script/claude가 고아로 남는 것 방지).
         proc.arguments = ["-lc", "exec script -q /dev/null claude auth login"]
         var env = ProcessInfo.processInfo.environment
-        // CLI의 기본 브라우저 자동 오픈 억제 — 인증 창은 앱이 ephemeral로 띄운다.
-        env["BROWSER"] = "true"
+        let files = try makeBrowserHook()
+        browserHookFiles = files
+        env["BROWSER"] = files.hook.path
         if env["TERM"] == nil { env["TERM"] = "xterm-256color" }
         proc.environment = env
         let pipe = Pipe()
@@ -113,12 +128,28 @@ final class LoginFlowController: NSObject, ASWebAuthenticationPresentationContex
             collector.append(data)
         }
 
-        let deadline = Date().addingTimeInterval(20)
+        let start = Date()
+        let deadline = start.addingTimeInterval(20)
         while Date() < deadline {
             try await Task.sleep(for: .milliseconds(200))
-            if let url = collector.extractURL() { return url }
+            // 1순위: BROWSER 후킹으로 가로챈 자동 콜백 URL (localhost redirect — 완료 자동 감지)
+            if let files = browserHookFiles,
+               let text = try? String(contentsOf: files.urlFile, encoding: .utf8),
+               let url = URL(string: text.trimmingCharacters(in: .whitespacesAndNewlines)),
+               url.scheme?.hasPrefix("http") == true {
+                return url
+            }
+            // 2순위(8초 유예 후): 터미널 출력 URL — 수동 코드 페이지로 이어지는 폴백.
+            // 구버전 CLI가 BROWSER를 무시하는 경우에만 의미가 있다.
+            if Date().timeIntervalSince(start) > 8, let url = collector.extractURL() {
+                return url
+            }
             if !proc.isRunning {
-                // 프로세스가 이미 끝났으면 남은 버퍼만 마지막으로 확인
+                if let files = browserHookFiles,
+                   let text = try? String(contentsOf: files.urlFile, encoding: .utf8),
+                   let url = URL(string: text.trimmingCharacters(in: .whitespacesAndNewlines)) {
+                    return url
+                }
                 if let url = collector.extractURL() { return url }
                 break
             }
@@ -144,6 +175,11 @@ final class LoginFlowController: NSObject, ASWebAuthenticationPresentationContex
     }
 
     private func cleanup() {
+        if let files = browserHookFiles {
+            try? FileManager.default.removeItem(at: files.hook)
+            try? FileManager.default.removeItem(at: files.urlFile)
+            browserHookFiles = nil
+        }
         session?.cancel(); session = nil
         if let proc = process {
             let pid = proc.processIdentifier
