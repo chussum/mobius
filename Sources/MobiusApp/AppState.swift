@@ -10,6 +10,10 @@ enum MenuStatus { case primaryActive, fallbackActive, allExhausted, unknown }
 final class AppState: ObservableObject {
     @Published private(set) var file = AccountsFile()
     @Published var lastError: String?
+    @Published private(set) var usage: [UUID: UsageSnapshot] = [:]
+    private var usageTask: Task<Void, Never>?
+    /// 게이지 캐시 유효 시간 — 팝오버를 자주 여닫아도 이 간격보다 잦게 조회하지 않는다
+    private let usageStaleness: TimeInterval = 240
 
     let env: MobiusEnvironment
     let store: AccountStore
@@ -61,6 +65,27 @@ final class AppState: ObservableObject {
         timer?.invalidate()
         if let observer {
             DistributedNotificationCenter.default().removeObserver(observer)
+        }
+    }
+
+    /// 팝오버가 열릴 때 호출 — 캐시가 만료된 계정만 사용량 조회 (상시 폴링 없음)
+    func refreshUsageIfStale() {
+        guard UserDefaults.standard.object(forKey: "showUsageGauges") == nil
+                || UserDefaults.standard.bool(forKey: "showUsageGauges") else { return }
+        guard usageTask == nil else { return }
+        let now = Date()
+        let stale = store.file.accounts.filter {
+            (usage[$0.id]?.fetchedAt ?? .distantPast) < now.addingTimeInterval(-usageStaleness)
+        }
+        guard !stale.isEmpty else { return }
+        usageTask = Task { @MainActor in
+            defer { usageTask = nil }
+            for profile in stale {
+                guard let secret = try? store.secret(for: profile.id),
+                      let snap = try? await UsageFetcher.fetch(keychainBlob: secret.keychainBlob)
+                else { continue }
+                usage[profile.id] = snap
+            }
         }
     }
 

@@ -56,26 +56,26 @@
   "hotPaths": [
     {
       "path": "Sources/MobiusApp/AppState.swift",
-      "accessCount": 24,
-      "lastAccessed": 1783700783689,
+      "accessCount": 26,
+      "lastAccessed": 1783701166365,
       "type": "file"
     },
     {
       "path": "Sources/MobiusApp/Views/SettingsView.swift",
+      "accessCount": 17,
+      "lastAccessed": 1783701236083,
+      "type": "file"
+    },
+    {
+      "path": "Sources/MobiusApp/Views/AccountListView.swift",
       "accessCount": 15,
-      "lastAccessed": 1783700838273,
+      "lastAccessed": 1783701222828,
       "type": "file"
     },
     {
       "path": "Sources/MobiusApp/LoginFlow.swift",
       "accessCount": 13,
       "lastAccessed": 1783694916328,
-      "type": "file"
-    },
-    {
-      "path": "Sources/MobiusApp/Views/AccountListView.swift",
-      "accessCount": 10,
-      "lastAccessed": 1783700789817,
       "type": "file"
     },
     {
@@ -106,6 +106,12 @@
       "path": "Sources/MobiusCore/AutoSwitchEngine.swift",
       "accessCount": 6,
       "lastAccessed": 1783695689535,
+      "type": "file"
+    },
+    {
+      "path": "Sources/MobiusApp/Views/AccountCardView.swift",
+      "accessCount": 6,
+      "lastAccessed": 1783701198872,
       "type": "file"
     },
     {
@@ -205,12 +211,6 @@
       "type": "file"
     },
     {
-      "path": "Sources/MobiusApp/Views/AccountCardView.swift",
-      "accessCount": 2,
-      "lastAccessed": 1783694928953,
-      "type": "file"
-    },
-    {
       "path": "Sources/MobiusApp/Views/DesktopCaptureSheet.swift",
       "accessCount": 2,
       "lastAccessed": 1783695013302,
@@ -238,6 +238,18 @@
       "path": "Sources/MobiusCore/KeychainClient.swift",
       "accessCount": 1,
       "lastAccessed": 1783694916573,
+      "type": "file"
+    },
+    {
+      "path": "Sources/MobiusCore/UsageFetcher.swift",
+      "accessCount": 1,
+      "lastAccessed": 1783701134436,
+      "type": "file"
+    },
+    {
+      "path": "Tests/MobiusCoreTests/UsageFetcherTests.swift",
+      "accessCount": 1,
+      "lastAccessed": 1783701151414,
       "type": "file"
     }
   ],

@@ -6,6 +6,7 @@ import MobiusCore
 struct AccountListView: View {
     @EnvironmentObject var state: AppState
     @Environment(\.openSettings) private var openSettings
+    @AppStorage("showUsageGauges") private var showUsageGauges = true
     @State private var now = Date()
     private let clock = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
     @Namespace private var cardSpace
@@ -33,11 +34,14 @@ struct AccountListView: View {
                    value: state.desktopCapture)
         .frame(width: 380)
         .onReceive(clock) { now = $0 }
-        .onAppear { state.reload(); now = Date() }
+        .onAppear { state.reload(); state.refreshUsageIfStale(); now = Date() }
     }
 
     private var header: some View {
         HStack {
+            Image(systemName: "infinity")
+                .font(.system(size: 13, weight: .bold))
+                .foregroundStyle(Color(red: 0.35, green: 0.65, blue: 1.0))
             Text("Mobius").font(.system(size: 14, weight: .bold, design: .rounded))
             Text("뫼비우스").font(.system(size: 10)).foregroundStyle(.tertiary)
             Spacer()
@@ -67,14 +71,21 @@ struct AccountListView: View {
             }
             .listStyle(.plain)
             .scrollContentBackground(.hidden)
-            .frame(height: CGFloat(max(0, state.file.accounts.count - 1)) * 68)
+            .frame(height: state.file.accounts.dropFirst().reduce(CGFloat(0)) { sum, p in
+                sum + AccountCardView.estimatedHeight(hasUsage: usageFor(p) != nil)
+            })
         }
+    }
+
+    private func usageFor(_ p: AccountProfile) -> UsageSnapshot? {
+        showUsageGauges ? state.usage[p.id] : nil
     }
 
     private func card(_ p: AccountProfile, isPrimary: Bool) -> some View {
         AccountCardView(profile: p, isActive: p.id == state.file.activeAccountID,
                         isPrimary: isPrimary,
-                        autoSwitchOn: state.file.autoSwitchEnabled, now: now)
+                        autoSwitchOn: state.file.autoSwitchEnabled,
+                        usage: usageFor(p), now: now)
             .matchedGeometryEffect(id: p.id, in: cardSpace)
             .onTapGesture {
                 guard p.id != state.file.activeAccountID else { return }

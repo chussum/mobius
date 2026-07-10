@@ -5,6 +5,7 @@ struct SettingsView: View {
     @EnvironmentObject var state: AppState
     @State private var launchAtLogin = (SMAppService.mainApp.status == .enabled)
     @State private var cliMessage = ""
+    @AppStorage("showUsageGauges") private var showUsageGauges = true
 
     var body: some View {
         settingsForm
@@ -42,6 +43,11 @@ struct SettingsView: View {
                 Toggle("Claude Code CLI 자동 Fallback", isOn: Binding(
                     get: { state.file.autoSwitchEnabled },
                     set: { state.setAutoSwitch($0) }))
+                VStack(alignment: .leading, spacing: 3) {
+                    Toggle("사용량 게이지 표시", isOn: $showUsageGauges)
+                    Text("계정 카드에 5시간·주간 사용량과 초기화 남은 시간을 표시합니다")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
                 VStack(alignment: .leading, spacing: 3) {
                     Toggle("Claude Desktop 자동 Fallback", isOn: Binding(
                         get: { state.file.desktopAutoSwitchEnabled },

@@ -6,9 +6,13 @@ struct AccountCardView: View {
     let isActive: Bool
     let isPrimary: Bool
     let autoSwitchOn: Bool
+    let usage: UsageSnapshot?
     let now: Date
 
     private let accent = Color(red: 0.35, green: 0.65, blue: 1.0)
+
+    /// 게이지 포함 시 카드가 차지하는 대략 높이 — AccountListView의 List 높이 계산과 공유
+    static func estimatedHeight(hasUsage: Bool) -> CGFloat { hasUsage ? 96 : 68 }
 
     var body: some View {
         HStack(spacing: 12) {
@@ -40,6 +44,9 @@ struct AccountCardView: View {
                 Text(profile.emailAddress)
                     .font(.system(size: 11)).foregroundStyle(.secondary)
                 statusLine
+                if let usage {
+                    gauges(usage).padding(.top, 3)
+                }
             }
             Spacer()
             if isActive {
@@ -67,5 +74,59 @@ struct AccountCardView: View {
             Text(profile.tierDescription)
                 .font(.system(size: 10)).foregroundStyle(.tertiary)
         }
+    }
+
+    // MARK: 사용량 게이지 (5시간/주간 + 초기화 남은 시간)
+
+    private func gauges(_ u: UsageSnapshot) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            if let pct = u.fiveHourPercent {
+                gaugeRow(label: "5시간", percent: pct, resetsAt: u.fiveHourResetsAt)
+            }
+            if let pct = u.sevenDayPercent {
+                gaugeRow(label: "주간", percent: pct, resetsAt: u.sevenDayResetsAt)
+            }
+        }
+    }
+
+    private func gaugeRow(label: String, percent: Double, resetsAt: Date?) -> some View {
+        HStack(spacing: 6) {
+            Text(label)
+                .font(.system(size: 9, weight: .medium)).foregroundStyle(.tertiary)
+                .frame(width: 28, alignment: .leading)
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(Color.secondary.opacity(0.18))
+                    Capsule().fill(gaugeColor(percent))
+                        .frame(width: max(3, geo.size.width * min(percent, 100) / 100))
+                }
+            }
+            .frame(width: 90, height: 4)
+            Text("\(Int(percent))%")
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(gaugeColor(percent))
+                .frame(width: 26, alignment: .trailing)
+            if let resetsAt, resetsAt > now {
+                Text("초기화 \(remainText(until: resetsAt))")
+                    .font(.system(size: 9)).foregroundStyle(.tertiary)
+            }
+            Spacer(minLength: 0)
+        }
+    }
+
+    private func gaugeColor(_ percent: Double) -> Color {
+        switch percent {
+        case ..<60: return accent
+        case ..<85: return .orange
+        default: return .red
+        }
+    }
+
+    private func remainText(until date: Date) -> String {
+        let mins = max(0, Int(date.timeIntervalSince(now) / 60))
+        let (d, h, m) = (mins / 1440, (mins % 1440) / 60, mins % 60)
+        if d > 0 { return "\(d)일 \(h)시간 후" }
+        if h > 0 { return "\(h)시간 \(m)분 후" }
+        return "\(m)분 후"
     }
 }
