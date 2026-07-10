@@ -254,15 +254,25 @@ final class AppState: ObservableObject {
         loginFlow = flow
         Task { @MainActor in
             do {
+                var addedProfileID: UUID?
                 switch try await flow.run() {
                 case .added(let profile):
                     notify(title: "계정 추가 완료",
                            body: "\(profile.nickname) <\(profile.emailAddress)>")
+                    addedProfileID = profile.id
                 case .refreshed(let profile):
                     notify(title: "기존 계정 자격증명 갱신됨",
                            body: "\(profile.nickname) <\(profile.emailAddress)>")
                 }
                 reload()
+                loginFlow = nil
+                // Desktop이 설치돼 있고 새로 추가된 계정이면, 같은 흐름에서 Desktop 연결로 이어간다.
+                // (미설치면 아무것도 안 함 — 사용자는 Desktop을 신경 쓸 필요 없음)
+                if let id = addedProfileID, desktopSwitcher.isDesktopInstalled,
+                   store.file.accounts.first(where: { $0.id == id })?.hasDesktopSnapshot != true {
+                    beginDesktopCapture(for: id)
+                }
+                return
             } catch {
                 lastError = error.localizedDescription
                 // 팝오버가 닫혀 있어도 인지할 수 있도록 알림으로도 전달
