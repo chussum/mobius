@@ -261,24 +261,18 @@ final class AppState: ObservableObject {
         loginFlow = flow
         Task { @MainActor in
             do {
-                var addedProfileID: UUID?
                 switch try await flow.run() {
                 case .added(let profile):
                     notify(title: "계정 추가 완료",
                            body: "\(profile.nickname) <\(profile.emailAddress)>")
-                    addedProfileID = profile.id
                 case .refreshed(let profile):
                     notify(title: "기존 계정 자격증명 갱신됨",
                            body: "\(profile.nickname) <\(profile.emailAddress)>")
                 }
                 reload()
                 loginFlow = nil
-                // Desktop이 설치돼 있고 새로 추가된 계정이면, 같은 흐름에서 Desktop 연결로 이어간다.
-                // (미설치면 아무것도 안 함 — 사용자는 Desktop을 신경 쓸 필요 없음)
-                if let id = addedProfileID, desktopSwitcher.isDesktopInstalled,
-                   store.file.accounts.first(where: { $0.id == id })?.hasDesktopSnapshot != true {
-                    beginDesktopCapture(for: id)
-                }
+                // 계정 추가는 CLI 계정만 추가한다. Desktop 연결은 사용자가 카드 메뉴에서
+                // 필요할 때 직접 한다 (계정 추가 흐름에 끼워넣으면 저장 계정이 뒤섞였음).
                 return
             } catch {
                 lastError = error.localizedDescription
@@ -354,19 +348,25 @@ final class AppState: ObservableObject {
         await desktopCoordinator.launch()
         guard !Task.isCancelled, desktopCapture?.accountID == id else { return }
         desktopCapture?.step = .waitingLogin
-        // 자동 감지는 로그인 전 빈 세션을 오인 캡처할 수 있어 폐기 —
-        // 사용자가 로그인을 마친 뒤 직접 '로그인 완료 — 저장'(captureDesktopNow)을 누른다.
-        // 강제 로그아웃 상태이므로 그 시점의 세션은 반드시 방금 로그인한 그 계정이라 안전하다.
-        // (여기서는 태스크가 끝나도 desktopCapture 세션은 유지 — 버튼이 저장을 트리거)
-        desktopCaptureTask = nil
-    }
 
-    /// '로그인 완료 — 저장': 사용자가 Desktop에서 대상 계정으로 로그인한 뒤 누른다.
-    func captureDesktopNow() {
-        guard let session = desktopCapture else { return }
-        desktopCaptureTask?.cancel()
-        desktopCaptureTask = nil
-        finishDesktopCapture(for: session.accountID)
+        // 자동 감지: 완전 로그아웃(신원 파일 + config.json 토큰 제거) 상태이므로,
+        // config.json에 로그인 토큰이 '다시 생기는' 순간이 곧 사용자가 새로 로그인한 시점이다.
+        // (빈 세션 파일 생성으로 오발동하지 않도록, 파일 mtime이 아니라 로그인 토큰 존재를 신호로 쓴다.)
+        var loginSeenAt: Date?
+        let deadline = Date().addingTimeInterval(300)
+        while Date() < deadline {
+            do { try await Task.sleep(for: .seconds(1)) } catch { return } // 취소됨
+            guard desktopCapture?.accountID == id else { return }
+            guard desktopSwitcher.hasLiveLogin() else { loginSeenAt = nil; continue } // 아직 로그아웃
+            if loginSeenAt == nil { loginSeenAt = Date() }
+            // 로그인 감지 후 1.5초 안정화 대기(토큰 기록 완료) 후 저장
+            else if Date().timeIntervalSince(loginSeenAt!) >= 1.5 {
+                desktopCaptureTask = nil
+                finishDesktopCapture(for: id)
+                return
+            }
+        }
+        desktopCapture?.step = .failed("5분 안에 로그인이 감지되지 않았습니다. 다시 시도해주세요.")
     }
 
     private func finishDesktopCapture(for id: UUID) {

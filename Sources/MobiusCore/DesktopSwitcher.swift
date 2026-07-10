@@ -155,6 +155,10 @@ public final class DesktopSwitcher: Sendable {
             try fm.moveItem(at: src, to: stash.appendingPathComponent(item))
             moved = true
         }
+        // ★ config.json의 로그인 토큰도 함께 비운다 — 안 그러면 Desktop이 재실행되며
+        //    이 토큰으로 이전 계정에 자동 재로그인해서, 자동감지가 그 계정을 잡아버린다.
+        try captureConfigAuth(to: stash)  // 취소 복원용으로 저장
+        if removeLiveConfigAuth() { moved = true }
         if !moved { try? fm.removeItem(at: stash); return nil }
         return stash
     }
@@ -169,7 +173,32 @@ public final class DesktopSwitcher: Sendable {
             try? fm.removeItem(at: dst)
             try fm.moveItem(at: src, to: dst)
         }
+        try? restoreConfigAuth(from: stash)  // config.json 로그인 토큰도 되돌린다
         try? fm.removeItem(at: stash)
+    }
+
+    /// config.json에서 로그인 키(oauth:*, lastKnownAccountUuid)를 제거해 완전 로그아웃한다.
+    /// 앱 설정 키는 보존. 제거한 게 있으면 true.
+    @discardableResult
+    private func removeLiveConfigAuth() -> Bool {
+        guard let data = try? Data(contentsOf: env.desktopConfigFile),
+              var dict = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+        else { return false }
+        let toRemove = dict.keys.filter { Self.isAccountAuthKey($0) }
+        guard !toRemove.isEmpty else { return false }
+        for k in toRemove { dict.removeValue(forKey: k) }
+        guard let out = try? JSONSerialization.data(withJSONObject: dict, options: [.sortedKeys])
+        else { return false }
+        try? out.write(to: env.desktopConfigFile, options: .atomic)
+        return true
+    }
+
+    /// 현재 config.json에 로그인 토큰이 있는가 (= 로그인된 상태인가). 자동감지 신호로 사용.
+    public func hasLiveLogin() -> Bool {
+        guard let data = try? Data(contentsOf: env.desktopConfigFile),
+              let dict = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+        else { return false }
+        return dict.contains { Self.isAccountAuthKey($0.key) && !($0.value is NSNull) }
     }
 
     public func discardStash(_ stash: URL) {
