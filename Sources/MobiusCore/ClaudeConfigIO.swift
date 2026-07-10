@@ -14,16 +14,27 @@ public struct ClaudeConfigIO: Sendable {
 
     // MARK: 읽기
 
-    /// 현재 로그인 상태의 스냅샷. Keychain 항목이 없으면(로그아웃 상태) nil.
+    /// 현재 로그인 상태의 스냅샷. 로그아웃 상태(파일·Keychain 둘 다 없음)면 nil.
+    ///
+    /// 읽기는 .credentials.json 파일을 우선한다 — Claude Code가 Keychain과 파일을
+    /// 항상 동기화하므로 내용이 같고, 파일 읽기는 Keychain 승인창을 띄우지 않는다
+    /// (15초 주기 reconcile마다 승인창이 뜨는 문제 방지). Keychain 읽기는 파일이
+    /// 없는 예외 상황의 폴백일 뿐이며, 쓰기(전환)는 여전히 양쪽 모두 수행한다.
     public func readLiveSnapshot() throws -> CredentialsSnapshot? {
-        guard let blob = try keychain.read(service: env.claudeKeychainService,
-                                           account: env.claudeKeychainAccount) else { return nil }
-        let fileData = (try? Data(contentsOf: env.credentialsFile)) ?? blob
+        let blob: Data
+        if let fileData = try? Data(contentsOf: env.credentialsFile), !fileData.isEmpty {
+            blob = fileData
+        } else if let keychainBlob = try keychain.read(service: env.claudeKeychainService,
+                                                       account: env.claudeKeychainAccount) {
+            blob = keychainBlob
+        } else {
+            return nil
+        }
         var oauthJSON: Data?
         if let block = try readOAuthAccountDict() {
             oauthJSON = try JSONSerialization.data(withJSONObject: block, options: [.sortedKeys])
         }
-        return CredentialsSnapshot(keychainBlob: blob, credentialsFileData: fileData,
+        return CredentialsSnapshot(keychainBlob: blob, credentialsFileData: blob,
                                    oauthAccountJSON: oauthJSON)
     }
 

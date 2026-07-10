@@ -86,8 +86,8 @@
     },
     {
       "path": "Scripts/make-app.sh",
-      "accessCount": 7,
-      "lastAccessed": 1783699740114,
+      "accessCount": 8,
+      "lastAccessed": 1783702126547,
       "type": "file"
     },
     {
@@ -115,6 +115,12 @@
       "type": "file"
     },
     {
+      "path": "Sources/MobiusCore/ClaudeConfigIO.swift",
+      "accessCount": 6,
+      "lastAccessed": 1783702344586,
+      "type": "file"
+    },
+    {
       "path": "Sources/MobiusCore/DesktopSwitcher.swift",
       "accessCount": 5,
       "lastAccessed": 1783694908875,
@@ -130,12 +136,6 @@
       "path": "README.md",
       "accessCount": 5,
       "lastAccessed": 1783695759228,
-      "type": "file"
-    },
-    {
-      "path": "Sources/MobiusCore/ClaudeConfigIO.swift",
-      "accessCount": 4,
-      "lastAccessed": 1783694887374,
       "type": "file"
     },
     {
@@ -214,6 +214,12 @@
       "path": "Sources/MobiusApp/Views/DesktopCaptureSheet.swift",
       "accessCount": 2,
       "lastAccessed": 1783695013302,
+      "type": "file"
+    },
+    {
+      "path": "Scripts/setup-signing.sh",
+      "accessCount": 2,
+      "lastAccessed": 1783702123431,
       "type": "file"
     },
     {
