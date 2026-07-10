@@ -10,16 +10,26 @@ struct AccountListView: View {
     @Namespace private var cardSpace
 
     var body: some View {
-        VStack(spacing: 10) {
-            header
-            if state.file.accounts.isEmpty {
-                emptyView
-            } else {
-                cards
+        ZStack {
+            VStack(spacing: 10) {
+                header
+                if state.file.accounts.isEmpty {
+                    emptyView
+                } else {
+                    cards
+                }
+                footer
             }
-            footer
+            .padding(14)
+            .disabled(state.desktopCapture != nil)
+            .blur(radius: state.desktopCapture != nil ? 2 : 0)
+            // Desktop 연결 가이드 — 팝오버가 닫혔다 열려도 진행 상태가 이어진다
+            if state.desktopCapture != nil {
+                DesktopCaptureSheet()
+            }
         }
-        .padding(14)
+        .animation(.spring(response: 0.3, dampingFraction: 0.85),
+                   value: state.desktopCapture)
         .frame(width: 320)
         .onReceive(clock) { now = $0 }
         .onAppear { state.reload(); now = Date() }
@@ -72,6 +82,9 @@ struct AccountListView: View {
                 }
             }
             .contextMenu {
+                Button(p.hasDesktopSnapshot ? "Desktop 다시 연결" : "Desktop 연결") {
+                    state.beginDesktopCapture(for: p.id)
+                }
                 Button("삭제", role: .destructive) { state.removeAccount(p.id) }
             }
     }

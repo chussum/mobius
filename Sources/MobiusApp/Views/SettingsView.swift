@@ -19,6 +19,16 @@ struct SettingsView: View {
                 Toggle("CLI 자동 fallback", isOn: Binding(
                     get: { state.file.autoSwitchEnabled },
                     set: { state.setAutoSwitch($0) }))
+                VStack(alignment: .leading, spacing: 3) {
+                    Toggle("Desktop 자동 fallback", isOn: Binding(
+                        get: { state.file.desktopAutoSwitchEnabled },
+                        set: { state.setDesktopAutoSwitch($0) }))
+                    Text("자동 전환 시 Claude Desktop이 종료 후 재실행됩니다")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Toggle("계정 전환 시 Claude Desktop도 전환 (experimental)", isOn: Binding(
+                    get: { state.file.desktopSyncEnabled },
+                    set: { state.setDesktopSync($0) }))
             }
             Section("CLI") {
                 HStack {
@@ -32,7 +42,7 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .frame(width: 380, height: 260)
+        .frame(width: 380, height: 340)
     }
 
     private func installCLI() {

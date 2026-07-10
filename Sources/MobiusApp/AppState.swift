@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import Combine
 import UserNotifications
@@ -16,6 +17,8 @@ final class AppState: ObservableObject {
     let switcher: Switcher
     let watcher: SessionLogWatcher
     let engine = AutoSwitchEngine()
+    lazy var desktopSwitcher = DesktopSwitcher(env: env)
+    lazy var desktopCoordinator = DesktopCoordinator(switcher: desktopSwitcher)
     private var timer: Timer?
     private var observer: NSObjectProtocol?
 
@@ -82,7 +85,9 @@ final class AppState: ObservableObject {
     func tick() {
         // 로그인 창이 열려 있는 동안은 reconcile/자동 전환이 LoginFlow의
         // 자격증명 변경 감지와 경합하지 않도록 전체를 건너뛴다.
-        guard loginFlow == nil else { return }
+        // Desktop 가이드 캡처 중에도 동일 — 자동 전환이 Desktop을 재실행하면
+        // 사용자가 로그인 중인 창을 죽이고 감시 신호를 오염시킨다.
+        guard loginFlow == nil, desktopCapture == nil else { return }
         let now = Date()
         try? switcher.reconcile()
 
@@ -109,6 +114,7 @@ final class AppState: ObservableObject {
             notify(title: "모든 계정 한도 소진",
                    body: "전환 가능한 계정이 없습니다. 리셋을 기다려주세요.")
         case let .switchTo(id, reason):
+            let fromID = store.file.activeAccountID
             do {
                 try switcher.switchTo(id)
                 engine.noteSwitched(now: now)
@@ -119,6 +125,11 @@ final class AppState: ObservableObject {
                 notify(title: title, body: "활성 계정: \(name)")
             } catch {
                 lastError = "자동 전환 실패: \(error.localizedDescription)"
+                return
+            }
+            // Desktop 자동 fallback: 옵션 켬 + 대상 스냅샷 존재 시에만
+            if store.file.desktopAutoSwitchEnabled {
+                switchDesktopIfPossible(from: fromID, to: id)
             }
         }
     }
@@ -126,12 +137,31 @@ final class AppState: ObservableObject {
     // MARK: 사용자 액션
 
     func manualSwitch(to id: UUID) {
+        let fromID = store.file.activeAccountID
         do {
             try switcher.switchTo(id)
             engine.noteSwitched()
             MobiusNotification.postAccountsChanged()
             reload()
-        } catch { lastError = "전환 실패: \(error.localizedDescription)" }
+        } catch {
+            lastError = "전환 실패: \(error.localizedDescription)"
+            return
+        }
+        // Desktop 동시 전환 (옵션 켜짐 + 대상 스냅샷 존재 시)
+        if store.file.desktopSyncEnabled {
+            switchDesktopIfPossible(from: fromID, to: id)
+        }
+    }
+
+    /// CLI 전환 성공 후 Desktop 동반 전환. 실패해도 CLI 전환은 유지된다.
+    private func switchDesktopIfPossible(from fromID: UUID?, to id: UUID) {
+        guard let fromID, fromID != id,
+              desktopSwitcher.hasSnapshot(for: id),
+              desktopCapture == nil else { return } // 가이드 캡처 중엔 Desktop을 건드리지 않음
+        Task { @MainActor in
+            do { try await desktopCoordinator.switchDesktop(from: fromID, to: id) }
+            catch { lastError = "Desktop 전환 실패(CLI는 전환됨): \(error.localizedDescription)" }
+        }
     }
 
     func moveFallback(from source: IndexSet, to destination: Int) {
@@ -148,6 +178,18 @@ final class AppState: ObservableObject {
 
     func setAutoSwitch(_ on: Bool) {
         try? store.setAutoSwitch(on)
+        MobiusNotification.postAccountsChanged()
+        reload()
+    }
+
+    func setDesktopSync(_ on: Bool) {
+        try? store.setDesktopSync(on)
+        MobiusNotification.postAccountsChanged()
+        reload()
+    }
+
+    func setDesktopAutoSwitch(_ on: Bool) {
+        try? store.setDesktopAutoSwitch(on)
         MobiusNotification.postAccountsChanged()
         reload()
     }
@@ -181,6 +223,108 @@ final class AppState: ObservableObject {
                 notify(title: "계정 추가 실패", body: error.localizedDescription)
             }
             loginFlow = nil
+        }
+    }
+
+    // MARK: Desktop 연결 — 가이드형 자동 캡처
+
+    struct DesktopCaptureSession: Identifiable, Equatable {
+        enum Step: Equatable {
+            case launching      // Desktop 실행 중
+            case waitingLogin   // 사용자 로그인 대기 (변경 감시)
+            case saving         // 스냅샷 저장 중
+            case done
+            case failed(String)
+        }
+        let accountID: UUID
+        let nickname: String
+        var step: Step = .launching
+        var id: UUID { accountID }
+    }
+
+    @Published var desktopCapture: DesktopCaptureSession?
+    private var desktopCaptureTask: Task<Void, Never>?
+
+    /// 카드 "Desktop 연결": 안내 시트 표시 → Desktop 실행 → 로그인 자동 감지 → 캡처.
+    func beginDesktopCapture(for id: UUID) {
+        guard desktopCapture == nil else { return } // 진행 중이면 중복 방지
+        guard let profile = store.file.accounts.first(where: { $0.id == id }) else { return }
+        guard desktopSwitcher.isDesktopInstalled else {
+            lastError = "Claude Desktop이 설치되어 있지 않습니다."
+            return
+        }
+        desktopCapture = DesktopCaptureSession(accountID: id, nickname: profile.nickname)
+        desktopCaptureTask = Task { @MainActor [weak self] in
+            await self?.runDesktopCaptureWatch(for: id)
+        }
+    }
+
+    /// "지금 상태 저장": 이미 로그인돼 있어 mtime이 안 변할 때 즉시 캡처.
+    func captureDesktopNow() {
+        guard let session = desktopCapture else { return }
+        desktopCaptureTask?.cancel()
+        desktopCaptureTask = nil
+        finishDesktopCapture(for: session.accountID)
+    }
+
+    /// 시트 닫기/취소 — 감시 태스크 정리.
+    func endDesktopCapture() {
+        desktopCaptureTask?.cancel()
+        desktopCaptureTask = nil
+        desktopCapture = nil
+    }
+
+    private func runDesktopCaptureWatch(for id: UUID) async {
+        let baseline = desktopSwitcher.identityLastModified()
+
+        // Desktop 실행 (이미 실행 중이면 앞으로 가져온다)
+        if let url = NSWorkspace.shared.urlForApplication(
+            withBundleIdentifier: DesktopCoordinator.bundleID) {
+            _ = try? await NSWorkspace.shared.openApplication(
+                at: url, configuration: NSWorkspace.OpenConfiguration())
+        } else {
+            desktopCapture?.step = .failed("Claude Desktop 앱을 찾을 수 없습니다.")
+            return
+        }
+        guard !Task.isCancelled, desktopCapture?.accountID == id else { return }
+        desktopCapture?.step = .waitingLogin
+
+        // 1초 폴링, 최대 5분. 신원 파일 mtime 변경 후 2초간 정지하면
+        // 쓰기가 끝난 것으로 보고 로그인 완료로 판정한다.
+        var lastSeen = baseline
+        var changedAt: Date?
+        let deadline = Date().addingTimeInterval(300)
+        while Date() < deadline {
+            do { try await Task.sleep(for: .seconds(1)) } catch { return } // 취소됨
+            guard desktopCapture?.accountID == id else { return }
+            let current = desktopSwitcher.identityLastModified()
+            if current != lastSeen {
+                lastSeen = current
+                changedAt = Date()
+            } else if let stamp = changedAt, current != baseline,
+                      Date().timeIntervalSince(stamp) >= 2 {
+                desktopCaptureTask = nil
+                finishDesktopCapture(for: id)
+                return
+            }
+        }
+        desktopCapture?.step = .failed(
+            "5분 안에 로그인 변경이 감지되지 않았습니다. 이미 로그인돼 있다면 '지금 상태 저장'을 누르세요.")
+    }
+
+    private func finishDesktopCapture(for id: UUID) {
+        desktopCapture?.step = .saving
+        do {
+            try desktopSwitcher.capture(for: id)
+            try store.update(id) { $0.hasDesktopSnapshot = true }
+            MobiusNotification.postAccountsChanged()
+            reload()
+            desktopCapture?.step = .done
+            let name = store.file.accounts.first { $0.id == id }?.nickname ?? "?"
+            notify(title: "Desktop 스냅샷 저장",
+                   body: "\(name) 전환 시 Claude Desktop도 함께 전환됩니다.")
+        } catch {
+            desktopCapture?.step = .failed("저장 실패: \(error.localizedDescription)")
         }
     }
 
