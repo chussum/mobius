@@ -40,13 +40,27 @@ public struct AccountProfile: Codable, Equatable, Identifiable, Sendable {
 public struct AccountsFile: Codable, Equatable, Sendable {
     public var accounts: [AccountProfile]
     public var activeAccountID: UUID?
-    public var autoSwitchEnabled: Bool
-    public var desktopSyncEnabled: Bool
+    public var autoSwitchEnabled: Bool        // CLI 자동 fallback (기본 켬)
+    public var desktopSyncEnabled: Bool       // 수동 전환 시 Desktop 동시 전환
+    public var desktopAutoSwitchEnabled: Bool // 자동 전환 시에도 Desktop 동시 전환 (기본 끔)
 
     public init(accounts: [AccountProfile] = [], activeAccountID: UUID? = nil,
-                autoSwitchEnabled: Bool = true, desktopSyncEnabled: Bool = true) {
+                autoSwitchEnabled: Bool = true, desktopSyncEnabled: Bool = true,
+                desktopAutoSwitchEnabled: Bool = false) {
         self.accounts = accounts; self.activeAccountID = activeAccountID
         self.autoSwitchEnabled = autoSwitchEnabled; self.desktopSyncEnabled = desktopSyncEnabled
+        self.desktopAutoSwitchEnabled = desktopAutoSwitchEnabled
+    }
+
+    /// 하위호환 디코딩 — 구버전 accounts.json에 없는 필드는 기본값으로 채운다.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        accounts = try c.decodeIfPresent([AccountProfile].self, forKey: .accounts) ?? []
+        activeAccountID = try c.decodeIfPresent(UUID.self, forKey: .activeAccountID)
+        autoSwitchEnabled = try c.decodeIfPresent(Bool.self, forKey: .autoSwitchEnabled) ?? true
+        desktopSyncEnabled = try c.decodeIfPresent(Bool.self, forKey: .desktopSyncEnabled) ?? true
+        desktopAutoSwitchEnabled =
+            try c.decodeIfPresent(Bool.self, forKey: .desktopAutoSwitchEnabled) ?? false
     }
 
     public var primary: AccountProfile? { accounts.first }

@@ -118,6 +118,12 @@ public final class AccountStore: @unchecked Sendable {
         try save()
     }
 
+    public func setDesktopAutoSwitch(_ enabled: Bool) throws {
+        lock.lock(); defer { lock.unlock() }
+        file.desktopAutoSwitchEnabled = enabled
+        try save()
+    }
+
     /// 디스크에서 다시 읽은 상태로 교체 (CLI 등 외부 프로세스 변경 반영용)
     public func replaceFile(with newFile: AccountsFile) throws {
         lock.lock(); defer { lock.unlock() }

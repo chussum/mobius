@@ -19,6 +19,15 @@ public struct MobiusEnvironment: Sendable {
     }
     public var accountsFile: URL { appSupportDir.appendingPathComponent("accounts.json") }
 
+    /// Claude Desktop(Electron)의 데이터 디렉토리
+    public var desktopDataDir: URL {
+        home.appendingPathComponent("Library/Application Support/Claude")
+    }
+    /// 계정별 Desktop 신원 스냅샷 보관소
+    public var desktopProfilesDir: URL {
+        appSupportDir.appendingPathComponent("desktop-profiles")
+    }
+
     /// Claude Code가 쓰는 Keychain 항목 좌표
     public var claudeKeychainService: String { "Claude Code-credentials" }
     public var claudeKeychainAccount: String { localUser }

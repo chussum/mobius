@@ -23,6 +23,18 @@ final class ModelsTests: XCTestCase {
         XCTAssertNil(file.active)
     }
 
+    /// M1 시절 accounts.json(신규 필드 없음)이 그대로 디코드되는지 — Codable 하위호환
+    func testDecodesLegacyAccountsFileWithoutNewFields() throws {
+        let legacy = """
+        {"accounts": [], "activeAccountID": null,
+         "autoSwitchEnabled": false, "desktopSyncEnabled": true}
+        """
+        let file = try JSONDecoder().decode(AccountsFile.self, from: Data(legacy.utf8))
+        XCTAssertFalse(file.autoSwitchEnabled)
+        XCTAssertTrue(file.desktopSyncEnabled)
+        XCTAssertFalse(file.desktopAutoSwitchEnabled) // 없으면 기본 끔
+    }
+
     func testIsLimited() {
         let now = Date(timeIntervalSince1970: 1_000)
         var p = AccountProfile(id: UUID(), nickname: "n", emailAddress: "e",
