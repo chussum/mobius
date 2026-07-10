@@ -1,0 +1,7 @@
+{
+  "tool_name": "Bash",
+  "tool_input_preview": "{\"command\":\"SCRATCH=/private/tmp/claude-501/-Users-hyungjoo-Projects-private-cluade-account-manager/e6d1c984-6978-4641-8ac7-8ab8b1adf40b/scratchpad\\nscreencapture -x -R\\\"1300,0,1260,30\\\" \\\"$SCRATCH/me...",
+  "error": "Exit code 1\ncould not create image from rect",
+  "timestamp": "2026-07-10T16:13:36.550Z",
+  "retry_count": 1
+}

@@ -1,0 +1,245 @@
+{
+  "version": "1.0.0",
+  "lastScanned": 1783689022767,
+  "projectRoot": "/Users/hyungjoo/Projects/private/cluade-account-manager",
+  "techStack": {
+    "languages": [],
+    "frameworks": [],
+    "packageManager": null,
+    "runtime": null
+  },
+  "build": {
+    "buildCommand": null,
+    "testCommand": null,
+    "lintCommand": null,
+    "devCommand": null,
+    "scripts": {}
+  },
+  "conventions": {
+    "namingStyle": null,
+    "importStyle": null,
+    "testPattern": null,
+    "fileOrganization": null
+  },
+  "structure": {
+    "isMonorepo": false,
+    "workspaces": [],
+    "mainDirectories": [
+      "docs"
+    ],
+    "gitBranches": null
+  },
+  "customNotes": [],
+  "directoryMap": {
+    "Sources": {
+      "path": "Sources",
+      "purpose": null,
+      "fileCount": 0,
+      "lastAccessed": 1783689022754,
+      "keyFiles": []
+    },
+    "Tests": {
+      "path": "Tests",
+      "purpose": "Test files",
+      "fileCount": 0,
+      "lastAccessed": 1783689022755,
+      "keyFiles": []
+    },
+    "docs": {
+      "path": "docs",
+      "purpose": "Documentation",
+      "fileCount": 0,
+      "lastAccessed": 1783689022756,
+      "keyFiles": []
+    }
+  },
+  "hotPaths": [
+    {
+      "path": "Sources/MobiusApp/AppState.swift",
+      "accessCount": 22,
+      "lastAccessed": 1783695707943,
+      "type": "file"
+    },
+    {
+      "path": "Sources/MobiusApp/LoginFlow.swift",
+      "accessCount": 13,
+      "lastAccessed": 1783694916328,
+      "type": "file"
+    },
+    {
+      "path": "Scripts/make-app.sh",
+      "accessCount": 7,
+      "lastAccessed": 1783699740114,
+      "type": "file"
+    },
+    {
+      "path": "Sources/MobiusApp/Views/AccountListView.swift",
+      "accessCount": 7,
+      "lastAccessed": 1783700377875,
+      "type": "file"
+    },
+    {
+      "path": "Sources/MobiusApp/Views/SettingsView.swift",
+      "accessCount": 6,
+      "lastAccessed": 1783694923371,
+      "type": "file"
+    },
+    {
+      "path": "Sources/MobiusCore/Models.swift",
+      "accessCount": 6,
+      "lastAccessed": 1783695668347,
+      "type": "file"
+    },
+    {
+      "path": "Sources/MobiusCore/AccountStore.swift",
+      "accessCount": 6,
+      "lastAccessed": 1783695671328,
+      "type": "file"
+    },
+    {
+      "path": "Sources/MobiusCore/AutoSwitchEngine.swift",
+      "accessCount": 6,
+      "lastAccessed": 1783695689535,
+      "type": "file"
+    },
+    {
+      "path": "Sources/MobiusCore/DesktopSwitcher.swift",
+      "accessCount": 5,
+      "lastAccessed": 1783694908875,
+      "type": "file"
+    },
+    {
+      "path": "Sources/MobiusCore/Switcher.swift",
+      "accessCount": 5,
+      "lastAccessed": 1783695692496,
+      "type": "file"
+    },
+    {
+      "path": "Tests/MobiusCoreTests/AutoSwitchEngineTests.swift",
+      "accessCount": 5,
+      "lastAccessed": 1783695737288,
+      "type": "file"
+    },
+    {
+      "path": "README.md",
+      "accessCount": 5,
+      "lastAccessed": 1783695759228,
+      "type": "file"
+    },
+    {
+      "path": "Sources/MobiusCore/ClaudeConfigIO.swift",
+      "accessCount": 4,
+      "lastAccessed": 1783694887374,
+      "type": "file"
+    },
+    {
+      "path": "Sources/MobiusApp/DesktopCoordinator.swift",
+      "accessCount": 4,
+      "lastAccessed": 1783694909312,
+      "type": "file"
+    },
+    {
+      "path": "Sources/mobius/Mobius.swift",
+      "accessCount": 4,
+      "lastAccessed": 1783695711746,
+      "type": "file"
+    },
+    {
+      "path": "Tests/MobiusCoreTests/ModelsTests.swift",
+      "accessCount": 4,
+      "lastAccessed": 1783695740342,
+      "type": "file"
+    },
+    {
+      "path": "docs/superpowers/plans/2026-07-10-mobius.md",
+      "accessCount": 3,
+      "lastAccessed": 1783692842110,
+      "type": "file"
+    },
+    {
+      "path": "Tests/MobiusCoreTests/DesktopSwitcherTests.swift",
+      "accessCount": 3,
+      "lastAccessed": 1783693849374,
+      "type": "file"
+    },
+    {
+      "path": "Scripts/install-cli.sh",
+      "accessCount": 3,
+      "lastAccessed": 1783694599229,
+      "type": "file"
+    },
+    {
+      "path": "Sources/MobiusCore/MobiusEnvironment.swift",
+      "accessCount": 3,
+      "lastAccessed": 1783694901992,
+      "type": "file"
+    },
+    {
+      "path": "docs/superpowers/specs/2026-07-10-mobius-design.md",
+      "accessCount": 2,
+      "lastAccessed": 1783694852355,
+      "type": "file"
+    },
+    {
+      "path": "Sources/MobiusCore/SessionLogWatcher.swift",
+      "accessCount": 2,
+      "lastAccessed": 1783694900918,
+      "type": "file"
+    },
+    {
+      "path": "Sources/MobiusCore/RateLimitParser.swift",
+      "accessCount": 2,
+      "lastAccessed": 1783694901398,
+      "type": "file"
+    },
+    {
+      "path": "Sources/MobiusApp/MobiusApp.swift",
+      "accessCount": 2,
+      "lastAccessed": 1783694915344,
+      "type": "file"
+    },
+    {
+      "path": "Sources/MobiusApp/Views/AccountCardView.swift",
+      "accessCount": 2,
+      "lastAccessed": 1783694928953,
+      "type": "file"
+    },
+    {
+      "path": "Sources/MobiusApp/Views/DesktopCaptureSheet.swift",
+      "accessCount": 2,
+      "lastAccessed": 1783695013302,
+      "type": "file"
+    },
+    {
+      "path": "Package.swift",
+      "accessCount": 1,
+      "lastAccessed": 1783689383450,
+      "type": "file"
+    },
+    {
+      "path": "docs/qa/m1-checklist.md",
+      "accessCount": 1,
+      "lastAccessed": 1783691742208,
+      "type": "file"
+    },
+    {
+      "path": "Sources/MobiusCore/Notifications.swift",
+      "accessCount": 1,
+      "lastAccessed": 1783694870031,
+      "type": "file"
+    },
+    {
+      "path": "Sources/MobiusCore/KeychainClient.swift",
+      "accessCount": 1,
+      "lastAccessed": 1783694916573,
+      "type": "file"
+    },
+    {
+      "path": "Sources/MobiusApp/Views/MenuBarLabel.swift",
+      "accessCount": 1,
+      "lastAccessed": 1783694929338,
+      "type": "file"
+    }
+  ],
+  "userDirectives": []
+}

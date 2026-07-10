@@ -5,6 +5,7 @@ import MobiusCore
 
 struct AccountListView: View {
     @EnvironmentObject var state: AppState
+    @Environment(\.openSettings) private var openSettings
     @State private var now = Date()
     private let clock = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
     @Namespace private var cardSpace
@@ -106,7 +107,12 @@ struct AccountListView: View {
             if let err = state.lastError {
                 Text(err).font(.system(size: 9)).foregroundStyle(.red).lineLimit(1)
             }
-            SettingsLink { Image(systemName: "gearshape").font(.system(size: 11)) }
+            // SettingsLink는 accessory(메뉴바 전용) 앱에서 창을 활성화하지 못해 무반응 —
+            // 앱을 먼저 활성화한 뒤 openSettings 환경 액션으로 연다
+            Button {
+                NSApp.activate(ignoringOtherApps: true)
+                openSettings()
+            } label: { Image(systemName: "gearshape").font(.system(size: 11)) }
                 .buttonStyle(.plain).foregroundStyle(.secondary)
             Button { NSApp.terminate(nil) } label: {
                 Image(systemName: "power").font(.system(size: 11))
