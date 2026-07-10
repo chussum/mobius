@@ -166,10 +166,9 @@ final class LoginFlowController: NSObject, ASWebAuthenticationPresentationContex
     private func presentAuthWindow(url: URL) {
         // 앱을 활성화해야 인증 창이 앞으로 온다 (메뉴바 앱은 기본 비활성)
         NSApp.activate(ignoringOtherApps: true)
-        // 가로챈 URL(localhost 콜백 포함)을 그대로 띄운다 — selectAccount 변환은 localhost
-        // 자동 콜백을 깨서 수동 인증 코드 페이지로 빠지므로 사용하지 않는다.
-        // 기존 계정으로 보이면 페이지 하단 "계정 전환"으로 다른 계정을 고르면 된다.
-        let s = ASWebAuthenticationSession(url: url, callbackURLScheme: "mobius") {
+        // selectAccount 진입 URL로 변환해 바로 계정 선택 화면을 띄운다. returnTo에 localhost
+        // 콜백이 그대로 실려 자동 완료도 유지된다 (실측 확인됨).
+        let s = ASWebAuthenticationSession(url: selectAccountURL(url), callbackURLScheme: "mobius") {
             [weak self] _, error in
             // 완료는 자격증명 파일 변경 감지로 판단한다. 단, 사용자가 창을 닫으면
             // 3분 대기 없이 즉시 취소로 종료한다.
