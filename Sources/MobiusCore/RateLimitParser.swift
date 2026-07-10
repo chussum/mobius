@@ -7,6 +7,12 @@ public struct RateLimitHit: Equatable, Sendable {
     public var resetsAt: Date?
 
     public init(resetsAt: Date?) { self.resetsAt = resetsAt }
+
+    /// 리셋 시각이 없는 이벤트(월간 지출 한도 등)의 보수적 폴백: now + 24시간.
+    /// 엔진·호출자(AppState/CLI)가 한도 기록 시 공통으로 사용한다.
+    public func effectiveResetsAt(now: Date) -> Date {
+        resetsAt ?? now.addingTimeInterval(24 * 3600)
+    }
 }
 
 /// 세션 로그(JSONL) 한 줄에서 rate-limit 이벤트를 찾는다.
