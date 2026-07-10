@@ -188,13 +188,15 @@ final class LoginFlowController: NSObject, ASWebAuthenticationPresentationContex
     private func selectAccountURL(_ url: URL) -> URL {
         guard let comps = URLComponents(url: url, resolvingAgainstBaseURL: false),
               let query = comps.percentEncodedQuery else { return url }
-        let returnTo = "/oauth/authorize?" + query   // claude.ai 기준 authorize 경로
-        var login = URLComponents(string: "https://claude.ai/login")
-        login?.queryItems = [
-            URLQueryItem(name: "selectAccount", value: "true"),
-            URLQueryItem(name: "returnTo", value: returnTo),
-        ]
-        return login?.url ?? url
+        // returnTo 값은 authorize 경로+쿼리 전체를 하나의 값으로 완전 인코딩해야 한다
+        // (/ ? = & 까지 %2F %3F %3D %26 로). URLQueryItem은 / ? 를 인코딩하지 않아
+        // claude.ai가 returnTo를 "/oauth/authorize"까지만 읽고 파라미터를 버렸다(실측 버그).
+        var allowed = CharacterSet.alphanumerics
+        allowed.insert(charactersIn: "-._~")   // RFC 3986 unreserved만 그대로 둔다
+        let returnToRaw = "/oauth/authorize?" + query
+        guard let returnTo = returnToRaw.addingPercentEncoding(withAllowedCharacters: allowed)
+        else { return url }
+        return URL(string: "https://claude.ai/login?selectAccount=true&returnTo=\(returnTo)") ?? url
     }
 
     private func cleanup() {
