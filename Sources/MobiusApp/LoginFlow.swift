@@ -164,7 +164,7 @@ final class LoginFlowController: NSObject, ASWebAuthenticationPresentationContex
     private func presentAuthWindow(url: URL) {
         // 앱을 활성화해야 인증 창이 앞으로 온다 (메뉴바 앱은 기본 비활성)
         NSApp.activate(ignoringOtherApps: true)
-        let s = ASWebAuthenticationSession(url: url, callbackURLScheme: "mobius") {
+        let s = ASWebAuthenticationSession(url: forceLoginURL(url), callbackURLScheme: "mobius") {
             [weak self] _, error in
             // 완료는 자격증명 파일 변경 감지로 판단한다. 단, 사용자가 창을 닫으면
             // 3분 대기 없이 즉시 취소로 종료한다.
@@ -172,10 +172,25 @@ final class LoginFlowController: NSObject, ASWebAuthenticationPresentationContex
                 Task { @MainActor in self?.userCanceled = true }
             }
         }
-        s.prefersEphemeralWebBrowserSession = true // 매번 쿠키 백지 → 항상 로그인창
+        // ephemeral=false: 기본 브라우저(Safari) 쿠키를 공유 → 구글 등 다른 사이트 로그인은
+        // 유지된다. 대신 claude.ai가 기존 세션으로 자동 로그인되지 않도록 아래 prompt로
+        // 재인증을 강제해 "클로드 계정만 새로 고르는" 효과를 낸다.
+        s.prefersEphemeralWebBrowserSession = false
         s.presentationContextProvider = self
         s.start()
         session = s
+    }
+
+    /// OAuth authorize URL에 `prompt=login`을 붙여 claude.ai가 기존 세션이 있어도
+    /// 로그인/계정 선택 화면을 다시 보이게 한다 (구글 등 타 사이트 세션은 건드리지 않음).
+    private func forceLoginURL(_ url: URL) -> URL {
+        guard var comps = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return url }
+        var items = comps.queryItems ?? []
+        if !items.contains(where: { $0.name == "prompt" }) {
+            items.append(URLQueryItem(name: "prompt", value: "login"))
+        }
+        comps.queryItems = items
+        return comps.url ?? url
     }
 
     private func cleanup() {

@@ -99,7 +99,13 @@ Sources/MobiusApp/        SwiftUI 메뉴바 앱 + AppState + Views/ + LoginFlow 
    URL을 출력하고, '브라우저로 여는' URL만 자동 콜백(localhost)임. → `BROWSER` 환경변수에 후킹
    스크립트를 꽂아 자동 콜백 URL을 가로채 ephemeral 인증창에 띄운다 (LoginFlow.swift).
 8. **로그인 창 닫힘=취소 오판** — 성공 페이지 확인 후 창 닫으면 취소로 처리돼 등록 실패.
-   → 취소 신호 후 6초 유예를 두고 완료 감지를 우선.
+   → 취소 신호 후 유예를 두고 완료 감지를 우선. 프로세스 종료 시 인증창 즉시 닫기.
+9. **파일 mtime 기반 안정성 판정이 활성 claude 세션 때문에 영영 안 됨** — 로그인/전환의
+   토큰/이메일 불일치를 막으려 "`.claude.json`이 N초간 idle이면 안정"으로 판정했더니,
+   **실행 중인 claude 세션(이 대화 포함)이 `.claude.json`을 자주 써서** idle이 안 돼
+   계정 추가·reconcile이 영영 완료 안 됨(사용자 관찰로 발견). → 파일 idle 대신 **값을 두 번
+   읽어(간격 0.7s) 토큰+이메일이 일치할 때만** 인정하는 `readStableLiveSnapshot()`으로 대체.
+   교훈: `~/.claude.json`은 "바쁜 파일"이다 — mtime을 안정성/변화 신호로 쓰지 말 것.
 
 ## QA / 진행 상황
 
