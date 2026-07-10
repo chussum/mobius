@@ -83,6 +83,15 @@ Sources/MobiusApp/        SwiftUI 메뉴바 앱 + AppState + Views/ + LoginFlow 
    Keychain 읽기는 정말 필요할 때만. **guard/&& 는 왼쪽부터 평가된다 — 비싼 부작용은 뒤로.**
 4. **`security dump-keychain` 절대 금지** — 모든 항목을 하나씩 열어 승인창이 수십 개 쏟아짐.
    특정 항목만 `find-generic-password`(메타데이터) 또는 `-w`(값, 1회 승인)로 접근.
+   실제로 이걸 돌려 승인창 폭탄을 유발했고, SIGKILL한 뒤에도 SecurityAgent가 멈춘 요청을
+   계속 재표시했다. 키체인 진단은 앱 코드 로깅으로 하고 CLI로 키체인을 훑지 말 것.
+4b. **"앱이 켜지면 승인창이 뜬다"의 진짜 범인은 codesign이었음 (오귀인 주의)** — `make-app.sh`의
+   `codesign -s "Mobius Dev Signing"`이 서명용 **개인키**를 로그인 키체인에서 꺼내며 프롬프트를
+   띄운다. 빌드+실행(open)을 붙여 돌리니 "앱 실행이 원인"처럼 보였다. **검증: SystemKeychain.read에
+   추적 로깅 → 앱 45초 실행 중 호출 0회 = 앱은 키체인 무접근 확정.** 빌드/서명/security 없이
+   앱만 관찰해야 앱의 진짜 동작이 보인다. 사용자는 빌드/서명을 안 하므로 이 프롬프트를 안 겪는다.
+   교훈: 상관관계(≈타이밍)를 인과로 단정하지 말고, 단일 관문(SystemKeychain.read 등)에 계측해
+   호출 여부를 직접 확인할 것.
 5. **LSUIElement 오진** — 메뉴바 아이콘 미표시를 LSUIElement 탓으로 추정했으나 실제 원인은
    Bartender였음. 간접 증거(CGWindowList)로 단정하지 말고 실제 화면/스크린샷으로 확인.
 6. **SwiftUI SettingsLink는 accessory 앱에서 무반응** — `NSApp.activate` + `openSettings()`로 대체.
