@@ -137,7 +137,7 @@ final class LoginFlowController: NSObject, ASWebAuthenticationPresentationContex
         let start = Date()
         let deadline = start.addingTimeInterval(20)
         while Date() < deadline {
-            try await Task.sleep(for: .milliseconds(200))
+            try await Task.sleep(for: .milliseconds(50)) // 빠르게 폴링해 로그인 창을 즉시 띄운다
             // 1순위: BROWSER 후킹으로 가로챈 자동 콜백 URL (localhost redirect — 완료 자동 감지)
             if let files = browserHookFiles,
                let text = try? String(contentsOf: files.urlFile, encoding: .utf8),
@@ -166,7 +166,10 @@ final class LoginFlowController: NSObject, ASWebAuthenticationPresentationContex
     private func presentAuthWindow(url: URL) {
         // 앱을 활성화해야 인증 창이 앞으로 온다 (메뉴바 앱은 기본 비활성)
         NSApp.activate(ignoringOtherApps: true)
-        let s = ASWebAuthenticationSession(url: selectAccountURL(url), callbackURLScheme: "mobius") {
+        // 가로챈 URL(localhost 콜백 포함)을 그대로 띄운다 — selectAccount 변환은 localhost
+        // 자동 콜백을 깨서 수동 인증 코드 페이지로 빠지므로 사용하지 않는다.
+        // 기존 계정으로 보이면 페이지 하단 "계정 전환"으로 다른 계정을 고르면 된다.
+        let s = ASWebAuthenticationSession(url: url, callbackURLScheme: "mobius") {
             [weak self] _, error in
             // 완료는 자격증명 파일 변경 감지로 판단한다. 단, 사용자가 창을 닫으면
             // 3분 대기 없이 즉시 취소로 종료한다.
