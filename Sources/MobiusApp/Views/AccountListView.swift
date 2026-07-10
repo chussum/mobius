@@ -32,7 +32,7 @@ struct AccountListView: View {
         }
         .animation(.spring(response: 0.3, dampingFraction: 0.85),
                    value: state.desktopCapture)
-        .frame(width: 380)
+        .frame(width: 410)
         .onReceive(clock) { now = $0 }
         .onAppear { state.reload(); state.refreshUsageIfStale(); now = Date() }
     }

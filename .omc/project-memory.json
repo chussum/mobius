@@ -62,20 +62,26 @@
     },
     {
       "path": "Sources/MobiusApp/Views/SettingsView.swift",
-      "accessCount": 17,
-      "lastAccessed": 1783701236083,
+      "accessCount": 20,
+      "lastAccessed": 1783701398010,
       "type": "file"
     },
     {
       "path": "Sources/MobiusApp/Views/AccountListView.swift",
-      "accessCount": 15,
-      "lastAccessed": 1783701222828,
+      "accessCount": 16,
+      "lastAccessed": 1783701352865,
       "type": "file"
     },
     {
       "path": "Sources/MobiusApp/LoginFlow.swift",
       "accessCount": 13,
       "lastAccessed": 1783694916328,
+      "type": "file"
+    },
+    {
+      "path": "Sources/MobiusApp/Views/AccountCardView.swift",
+      "accessCount": 8,
+      "lastAccessed": 1783701357030,
       "type": "file"
     },
     {
@@ -106,12 +112,6 @@
       "path": "Sources/MobiusCore/AutoSwitchEngine.swift",
       "accessCount": 6,
       "lastAccessed": 1783695689535,
-      "type": "file"
-    },
-    {
-      "path": "Sources/MobiusApp/Views/AccountCardView.swift",
-      "accessCount": 6,
-      "lastAccessed": 1783701198872,
       "type": "file"
     },
     {

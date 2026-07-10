@@ -19,12 +19,17 @@ struct SettingsView: View {
 
     private var settingsForm: some View {
         Form {
-            if state.file.accounts.isEmpty {
+            if state.file.accounts.count <= 1 {
                 Section {
                     VStack(alignment: .leading, spacing: 6) {
-                        Label("아직 등록된 계정이 없어요", systemImage: "infinity")
+                        Label(state.file.accounts.isEmpty
+                              ? "아직 등록된 계정이 없어요"
+                              : "Fallback 계정을 추가해 보세요",
+                              systemImage: "infinity")
                             .font(.system(size: 13, weight: .semibold))
-                        Text("메뉴바의 ∞ 아이콘을 클릭하고 **계정 추가**를 눌러 Claude 계정을 등록하세요. 개인·회사 계정을 함께 등록해 두면, 한 계정의 사용량이 차는 순간 다음 계정으로 알아서 전환됩니다.")
+                        Text(state.file.accounts.isEmpty
+                             ? "메뉴바의 ∞ 아이콘을 클릭하고 **계정 추가**를 눌러 Claude 계정을 등록하세요. 개인·회사 계정을 함께 등록해 두면, 한 계정의 사용량이 차는 순간 다음 계정으로 알아서 전환됩니다."
+                             : "지금은 계정이 하나뿐이라 사용량이 차면 기다리는 수밖에 없어요. 메뉴바의 ∞ 아이콘 → **계정 추가**로 계정을 하나 더 등록하면, 한도가 차는 순간 자동으로 이어서 쓸 수 있습니다.")
                             .font(.system(size: 11))
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
@@ -71,7 +76,7 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .frame(width: 380, height: state.file.accounts.isEmpty ? 430 : 340)
+        .frame(width: 400, height: state.file.accounts.count <= 1 ? 560 : 470)
     }
 
     private func installCLI() {
