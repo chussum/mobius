@@ -22,7 +22,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>CFBundleIdentifier</key><string>dev.mobius.app</string>
   <key>CFBundleName</key><string>Mobius</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>0.1.3</string>
+  <key>CFBundleShortVersionString</key><string>0.1.4</string>
   <key>CFBundleVersion</key><string>1</string>
   <key>LSMinimumSystemVersion</key><string>14.0</string>
   <!-- LSUIElement 미사용: macOS 26 Tahoe에서 LSUIElement 앱의 MenuBarExtra 아이콘이
