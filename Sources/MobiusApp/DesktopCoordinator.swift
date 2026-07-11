@@ -25,26 +25,36 @@ final class DesktopCoordinator {
     private var runningApp: NSRunningApplication? {
         NSRunningApplication.runningApplications(withBundleIdentifier: Self.bundleID).first
     }
+    private var runningApps: [NSRunningApplication] {
+        NSRunningApplication.runningApplications(withBundleIdentifier: Self.bundleID)
+    }
 
     var isRunning: Bool { runningApp != nil }
 
-    /// Desktop을 종료하고 완전히 꺼질 때까지 대기 (파일 핸들 정리 여유 포함).
+    /// Desktop을 **완전히** 종료하고 모든 인스턴스가 사라질 때까지 대기한다.
+    /// (Electron은 헬퍼 프로세스가 여럿 — 하나만 isTerminated여도 다른 게 config.json/신원 파일을
+    /// 붙잡고 있으면 이후 로그아웃(파일 제거)이 반영되지 않아 이전 계정으로 되살아난다.
+    /// 그래서 bundleID로 실행 중인 게 0이 될 때까지 확인하고, 안 죽으면 forceTerminate.)
     func terminateAndWait() async {
-        guard let app = runningApp else { return }
-        app.terminate()
-        for _ in 0..<50 {
+        guard !runningApps.isEmpty else { return }
+        for app in runningApps { app.terminate() }
+        for _ in 0..<50 {                     // graceful 최대 10초
             try? await Task.sleep(for: .milliseconds(200))
-            if app.isTerminated { break }
+            if runningApps.isEmpty { break }
         }
-        if !app.isTerminated { app.forceTerminate() }
-        try? await Task.sleep(for: .milliseconds(500))
+        for app in runningApps { app.forceTerminate() }
+        for _ in 0..<25 {                     // force 최대 5초
+            try? await Task.sleep(for: .milliseconds(200))
+            if runningApps.isEmpty { break }
+        }
+        try? await Task.sleep(for: .milliseconds(900)) // 파일 핸들/leveldb 플러시 정리 여유
     }
 
     /// Desktop 실행(이미 실행 중이면 앞으로).
     func launch() async {
         guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: Self.bundleID)
         else { return }
-        try? await NSWorkspace.shared.openApplication(
+        _ = try? await NSWorkspace.shared.openApplication(
             at: url, configuration: NSWorkspace.OpenConfiguration())
     }
 
@@ -82,7 +92,7 @@ final class DesktopCoordinator {
             let url = NSWorkspace.shared.urlForApplication(
                 withBundleIdentifier: Self.bundleID)
             if let url {
-                try? await NSWorkspace.shared.openApplication(
+                _ = try? await NSWorkspace.shared.openApplication(
                     at: url, configuration: NSWorkspace.OpenConfiguration())
             }
         }

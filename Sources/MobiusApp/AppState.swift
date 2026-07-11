@@ -360,18 +360,37 @@ final class AppState: ObservableObject {
         guard !Task.isCancelled, desktopCapture?.accountID == id else { return }
         desktopCapture?.step = .waitingLogin
 
-        // 자동 감지: 완전 로그아웃(신원 파일 + config.json 토큰 제거) 상태이므로,
-        // config.json에 로그인 토큰이 '다시 생기는' 순간이 곧 사용자가 새로 로그인한 시점이다.
-        // (빈 세션 파일 생성으로 오발동하지 않도록, 파일 mtime이 아니라 로그인 토큰 존재를 신호로 쓴다.)
+        // 자동 감지 — **로그아웃 확인 → 새 로그인** 전이일 때만 저장한다.
+        //  ① 먼저 실제로 로그아웃됐는지 확인(hasLiveLogin==false). 재실행 직후에도 계속 로그인
+        //     상태면 강제 로그아웃이 실패한 것 → 이전 계정을 잘못 캡처하지 않도록 에러 처리.
+        //  ② 로그아웃 확인 후, 로그인 토큰이 새로 생기면(사용자가 로그인) 1.5초 안정화 뒤 저장.
+        var confirmedLoggedOut = false
+        let stillLoggedInSince = Date()
         var loginSeenAt: Date?
         let deadline = Date().addingTimeInterval(300)
         while Date() < deadline {
             do { try await Task.sleep(for: .seconds(1)) } catch { return } // 취소됨
             guard desktopCapture?.accountID == id else { return }
-            guard desktopSwitcher.hasLiveLogin() else { loginSeenAt = nil; continue } // 아직 로그아웃
+            let loggedIn = desktopSwitcher.hasLiveLogin()
+
+            if !confirmedLoggedOut {
+                if loggedIn {
+                    // 재실행했는데도 로그아웃이 안 됨 — 6초까지 기다려보고 계속이면 실패 판정.
+                    if Date().timeIntervalSince(stillLoggedInSince) >= 6 {
+                        desktopCapture?.step = .failed(
+                            "Claude Desktop 로그아웃에 실패했어요. 잠시 후 다시 시도하거나, Desktop을 완전히 종료한 뒤 다시 연결해주세요.")
+                        return
+                    }
+                } else {
+                    confirmedLoggedOut = true // 로그아웃 확인됨 — 이제 새 로그인을 기다린다
+                }
+                continue
+            }
+
+            // 로그아웃 확인 후 단계: 새 로그인 감지
+            guard loggedIn else { loginSeenAt = nil; continue }
             if loginSeenAt == nil { loginSeenAt = Date() }
-            // 로그인 감지 후 1.5초 안정화 대기(토큰 기록 완료) 후 저장
-            else if Date().timeIntervalSince(loginSeenAt!) >= 1.5 {
+            else if Date().timeIntervalSince(loginSeenAt!) >= 1.5 { // 토큰 기록 완료 대기
                 desktopCaptureTask = nil
                 finishDesktopCapture(for: id)
                 return
