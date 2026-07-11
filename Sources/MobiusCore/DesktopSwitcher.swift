@@ -193,6 +193,17 @@ public final class DesktopSwitcher: Sendable {
         return true
     }
 
+    /// Desktop을 로그아웃 상태로 만든다 (신원 파일 제거 + config.json 로그인 키 제거).
+    /// 미캡처 계정으로 전환할 때, Desktop이 이전 계정으로 남지 않도록 사용. Desktop 종료 상태 전제.
+    public func logout() throws {
+        guard isDesktopInstalled else { throw DesktopSwitcherError.desktopNotInstalled }
+        let fm = FileManager.default
+        for item in Self.identityItems {
+            try? fm.removeItem(at: env.desktopDataDir.appendingPathComponent(item))
+        }
+        removeLiveConfigAuth()
+    }
+
     /// 현재 config.json에 로그인 토큰이 있는가 (= 로그인된 상태인가). 자동감지 신호로 사용.
     public func hasLiveLogin() -> Bool {
         guard let data = try? Data(contentsOf: env.desktopConfigFile),

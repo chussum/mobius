@@ -55,6 +55,22 @@ final class DesktopSwitcherTests: XCTestCase {
         XCTAssertNil(try sw.stashLiveIdentity()) // 더 치울 게 없음
     }
 
+    func testLogoutClearsIdentityAndConfigAuth() throws {
+        // 로그인 상태: 신원 파일 + config.json 로그인 키 존재
+        try JSONSerialization.data(withJSONObject: ["oauth:tokenCache": "X", "locale": "ko"])
+            .write(to: env.desktopConfigFile)
+        XCTAssertTrue(sw.hasLiveLogin())
+        try sw.logout()
+        // 신원 파일 제거 + 로그인 키 제거, 앱 설정(locale)은 보존
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: env.desktopDataDir.appendingPathComponent("Cookies").path))
+        XCTAssertFalse(sw.hasLiveLogin())
+        let cfg = try JSONSerialization.jsonObject(
+            with: Data(contentsOf: env.desktopConfigFile)) as! [String: Any]
+        XCTAssertEqual(cfg["locale"] as? String, "ko")       // 앱 설정 보존
+        XCTAssertNil(cfg["oauth:tokenCache"])                // 로그인 제거
+    }
+
     private func writeConfig(_ dict: [String: Any]) throws {
         let data = try JSONSerialization.data(withJSONObject: dict)
         try data.write(to: env.desktopConfigFile)

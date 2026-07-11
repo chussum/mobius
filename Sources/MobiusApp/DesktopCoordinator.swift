@@ -60,7 +60,7 @@ final class DesktopCoordinator {
 
     /// from(현재 활성)의 상태를 백업하고 to의 스냅샷으로 교체. Desktop이 켜져 있었으면 재실행.
     func switchDesktop(from: UUID, to: UUID) async throws {
-        guard switcher.isDesktopInstalled, switcher.hasSnapshot(for: to) else { return }
+        guard switcher.isDesktopInstalled else { return }
         guard !isSwitching else { throw DesktopCoordinatorError.switchInProgress }
         isSwitching = true
         defer { isSwitching = false }
@@ -73,10 +73,15 @@ final class DesktopCoordinator {
         // 스왑이 실패해도 원래 켜져 있었으면 반드시 재실행한다 (사용자를 앱 없는 상태로 방치 금지)
         var swapError: Error?
         do {
-            // from은 '이미 연결(스냅샷)된 계정'일 때만 되저장한다 —
-            // 스냅샷 없는 계정은 사용자가 명시적으로 연결한 적이 없으므로 자동 생성하지 않는다.
+            // from은 '이미 연결(스냅샷)된 계정'일 때만 되저장한다.
             if switcher.hasSnapshot(for: from) { try switcher.capture(for: from) }
-            try switcher.restore(for: to)
+            // 대상이 캡처됐으면 그 세션으로, 미캡처면 로그아웃 상태로 —
+            // Desktop이 이전 계정으로 남지 않고 항상 활성 계정을 반영한다.
+            if switcher.hasSnapshot(for: to) {
+                try switcher.restore(for: to)
+            } else {
+                try switcher.logout()
+            }
         } catch {
             swapError = error
         }

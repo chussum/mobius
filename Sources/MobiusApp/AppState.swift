@@ -200,8 +200,10 @@ final class AppState: ObservableObject {
     /// CLI 전환 성공 후 Desktop 동반 전환. 실패해도 CLI 전환은 유지된다.
     private func switchDesktopIfPossible(from fromID: UUID?, to id: UUID) {
         guard let fromID, fromID != id,
-              desktopSwitcher.hasSnapshot(for: id),
               desktopCapture == nil else { return } // 가이드 캡처 중엔 Desktop을 건드리지 않음
+        // 대상이 캡처됐으면 복원, 미캡처지만 Desktop이 로그인돼 있으면 로그아웃한다.
+        // 둘 다 아니면(대상 미캡처 + Desktop 이미 로그아웃) 건드릴 필요 없음 — 불필요한 재실행 방지.
+        guard desktopSwitcher.hasSnapshot(for: id) || desktopSwitcher.hasLiveLogin() else { return }
         // 직렬화 게이트: 이전 Desktop 전환이 진행 중이면 이번 요청은 드롭 —
         // 연속 전환(A→B, B→C)이 겹치며 스냅샷이 교차 오염되는 것을 방지 (코디네이터도 재차 차단).
         guard desktopSwitchTask == nil else {
