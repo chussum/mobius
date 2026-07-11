@@ -70,6 +70,13 @@ Sources/MobiusApp/        SwiftUI 메뉴바 앱 + AppState + Views/ + LoginFlow 
   -s "Claude Code-credentials" -a $USER` (로그인 키체인 암호 필요. "(deprecated)" 문구는
   대화형 암호 입력 방식에 대한 경고일 뿐 — 이 명령이 파티션 수정의 유일한 수단).
 - 주의: CLI 재로그인 등으로 항목이 **재생성되면 파티션이 리셋**되어 재적용 필요.
+- ★ 더 치명적: **비-Apple 앱이 SecItemUpdate로 항목을 수정하면 macOS가 파티션 리스트를
+  그 앱의 cdhash로 도장 찍는다(re-stamp).** Mobius가 네이티브 API로 토큰을 쓰면 전환할
+  때마다 파티션이 `cdhash:MobiusApp`으로 리셋 → security 경유 읽기(CLI·Desktop)가 전부
+  암호창 유발. → `SystemKeychain.write`는 **security CLI(-i, stdin) 경유**로 쓴다 —
+  이러면 도장이 `apple-tool:`로 찍혀 자동으로 호환 상태가 유지된다 (실패 기록 12).
+- 파티션 리스트 실제 값 확인은 SecAccessCopyACLList의 `ACLAuthorizationPartitionID`
+  ACL desc(hex plist)를 디코드하면 승인창 없이 볼 수 있다.
 
 ### Claude Desktop은 Squirrel(ShipIt) 자동업데이트 — 앱 종료 순간 번들 통째 교체
 - 업데이트가 스테이징되어 있으면 **Desktop이 종료되는 순간** ShipIt이
@@ -145,6 +152,17 @@ Sources/MobiusApp/        SwiftUI 메뉴바 앱 + AppState + Views/ + LoginFlow 
     재실행하면 같은 이름 인증서가 **중복 생성**되어 codesign이 ambiguous로 실패하는데,
     make-app.sh가 이를 무시하고 linker-signed adhoc으로 통과시켰다. → 두 스크립트 모두
     가드 추가(중복 시 신뢰 등록만 재시도 / 서명 실패 시 명시적 exit 1).
+
+12. **파티션 리스트를 고쳐도 계속 리셋 — 범인은 Mobius의 SecItemUpdate** — 파티션을
+    `apple-tool:,apple:`로 고쳐도 계정 전환만 하면 Desktop 내장 Claude Code의 security
+    읽기가 다시 암호창을 띄웠다. ACL 덤프로 추적하니 파티션이 매번 `cdhash:<MobiusApp>`
+    으로 되돌아가 있었고, 이 cdhash가 실행 중인 Mobius 빌드와 정확히 일치했다.
+    **macOS는 비-Apple 앱이 항목을 수정하면 파티션을 수정자의 cdhash로 재도장한다.**
+    '항상 허용'이 안 먹히던 진짜 이유 — 다음 전환(쓰기)이 승인 상태를 도로 밀어버림.
+    → 쓰기를 security CLI 경유로 변경(KeychainClient.writeViaSecurityCLI).
+    교훈: (1) 증상 관찰이 아니라 **상태(ACL/파티션)를 직접 덤프해 전후 비교**로 추적할 것.
+    (2) 샌드박스 셸에서의 security 테스트는 GUI 세션과 판정이 달라 **착시를 만든다** —
+    반드시 사용자 터미널/실제 앱 경로로 재현할 것.
 
 ## QA / 진행 상황
 
