@@ -142,9 +142,34 @@ struct SettingsView: View {
                     Text(cliMessage).font(.caption).foregroundStyle(.secondary)
                 }
             }
+            Section("Claude Desktop 키체인 창") {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Claude Desktop을 켤 때마다 뜨는 ‘Claude Code-credentials’ 키체인 창을 없애려면, 그 항목을 ‘모든 앱 허용’으로 한 번만 바꾸면 됩니다. (Desktop 자체 동작이라 Mobius가 대신 못 바꿉니다.)")
+                        .font(.system(size: 11)).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text("① 아래 버튼으로 Keychain Access 열기\n② 로그인 키체인에서 ‘Claude Code-credentials’ 더블클릭\n③ ‘접근 제어’ 탭 → ‘모든 응용 프로그램이 접근하도록 허용’\n④ 변경 사항 저장 (로그인 암호 1회)")
+                        .font(.system(size: 10)).foregroundStyle(.tertiary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    HStack {
+                        Button("Keychain Access 열기") { openKeychainAccess() }
+                        Spacer()
+                    }
+                }
+            }
         }
         .formStyle(.grouped)
-        .frame(width: 400, height: state.file.accounts.count <= 1 ? 560 : 470)
+        .frame(width: 400, height: state.file.accounts.count <= 1 ? 680 : 590)
+    }
+
+    private func openKeychainAccess() {
+        // 번들 ID로 여는 게 macOS 버전별 경로 차이(Utilities vs CoreServices)에 견고하다.
+        if let url = NSWorkspace.shared.urlForApplication(
+            withBundleIdentifier: "com.apple.keychainaccess") {
+            NSWorkspace.shared.openApplication(at: url, configuration: .init()) { _, _ in }
+        } else {
+            NSWorkspace.shared.open(URL(fileURLWithPath:
+                "/System/Library/CoreServices/Applications/Keychain Access.app"))
+        }
     }
 
     private func installCLI() {
