@@ -158,7 +158,7 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .frame(width: 480, height: state.file.accounts.count <= 1 ? 780 : 690)
+        .frame(width: 480, height: state.file.accounts.count <= 1 ? 860 : 770)
     }
 
     private func openKeychainAccess() {
