@@ -1,117 +1,157 @@
-# Mobius (뫼비우스)
+# Mobius
 
-Claude Code(CLI)를 여러 claude.ai 구독 계정으로 쓸 때, 계정 전환을 클릭 한 번/명령 한 줄로
-만들어주는 macOS 메뉴바 앱 + CLI. 활성 계정의 사용 한도가 소진되면 우선순위에 따라
-fallback 계정으로 자동 전환하고, primary가 리셋되면 자동 복귀한다 —
-primary → fallback → primary로 끝없이 이어지는 뫼비우스 띠가 이름의 유래다.
+**Claude 계정, 이제 갈아탈 필요 없이 이어 쓰세요.**
 
-- **지원 범위**: Claude Code CLI 계정 전환 (claude.ai OAuth 구독 계정 — 개인 Max, 회사 Team/Enterprise).
-  Claude Desktop 동시 전환은 experimental로 포함.
-- **제외**: Console API 키 / Bedrock / Vertex 방식 계정.
-- 요구 사항: macOS 14+, `claude` CLI 설치.
+Claude를 여러 구독 계정으로 쓰고 계신가요? 한도가 다 차면 로그아웃하고, 다른 계정으로
+로그인하고, 리셋되면 다시 돌아오고… Mobius는 이 반복을 없애줍니다.
+
+- **클릭 한 번으로 계정 전환** — 재로그인 없이 즉시 바뀝니다.
+- **한도가 차면 자동으로 다음 계정으로** — 작업 흐름이 끊기지 않습니다.
+- **한도가 풀리면 원래 계정으로 자동 복귀** — 신경 쓸 필요가 없습니다.
+
+primary → fallback → 다시 primary. 끝없이 이어지는 뫼비우스 띠처럼, 이름도 여기서 왔습니다.
+
+<p align="center">
+  <img src="docs/images/screenshot.png" width="440" alt="Mobius 메뉴바 팝오버 — 계정 카드, 사용량 게이지, 자동 fallback 토글">
+</p>
+
+메뉴바의 ∞ 아이콘을 누르면 위 화면이 열립니다. 계정마다 **5시간/주간 사용량 게이지**와
+**리셋까지 남은 시간**이 보이고, 카드를 누르면 그 계정으로 바로 전환됩니다.
+
+## 이런 분께 맞습니다
+
+- Claude Max 개인 계정 + 회사 계정을 오가며 쓰는 분
+- 한도 소진 알림을 보고 나서야 계정을 바꾸던 분
+- 터미널(Claude Code CLI)과 Claude Desktop 앱을 함께 쓰는 분
+
+> **지원**: claude.ai 구독 계정(개인 Max, 회사 Team/Enterprise)의 Claude Code CLI 전환.
+> Claude Desktop 동시 전환은 실험 기능으로 포함.
+> **미지원**: Console API 키 / Bedrock / Vertex 방식. **요구 사항**: macOS 14 이상, `claude` CLI.
 
 ## 설치
 
-```bash
-Scripts/make-app.sh      # swift build -c release + dist/Mobius.app 조립 + ad-hoc 서명
-open dist/Mobius.app
+### 1. 다운로드
+
+[**Releases 페이지**](https://github.com/chussum/claude-mobius/releases/latest)에서
+최신 버전의 `Mobius-x.y.z.dmg`를 받으세요.
+
+### 2. 설치
+
+받은 DMG를 열고 **Mobius를 Applications 폴더로 드래그**하면 끝입니다.
+
+### 3. 처음 열 때 — "확인되지 않은 개발자" 경고가 떠도 놀라지 마세요
+
+Mobius는 Apple 공증(notarization)을 거치지 않은 오픈소스 앱이라, 처음 실행할 때
+macOS가 *"'Mobius'은(는) 확인되지 않은 개발자가 배포했기 때문에 열 수 없습니다"*
+같은 경고를 띄울 수 있습니다. **최초 1회만** 아래처럼 열어주면 됩니다:
+
+1. **시스템 설정 → 개인정보 보호 및 보안**으로 이동
+2. 아래쪽에 나타난 *"Mobius이(가) 차단되었습니다"* 옆의 **"그래도 열기"** 클릭
+3. 확인 창에서 다시 **열기**
+
+(macOS 버전에 따라 Finder에서 앱을 **우클릭 → 열기**로도 통과할 수 있습니다.)
+
+실행되면 Dock이 아니라 **메뉴바에 ∞ 아이콘**으로 상주합니다. 창을 닫아도 계속 지켜보고
+있으니 안심하세요. 설정에서 "로그인 시 자동 시작"을 켜두면 더 편합니다.
+
+> **개발자라면**: 소스에서 직접 빌드할 수 있습니다 —
+> `Scripts/make-app.sh && open dist/Mobius.app`
+> (고정 서명 인증서는 최초 1회 `Scripts/setup-signing.sh`).
+> 터미널용 `mobius` CLI는 앱 **설정 → CLI → 설치** 버튼 또는 `Scripts/install-cli.sh`.
+
+## 시작하기
+
+1. 메뉴바 ∞ 아이콘 → **계정 추가**
+2. 로그인 창이 뜨면 추가할 Claude 계정으로 로그인 — 끝!
+
+로그인 창은 매번 깨끗한 상태로 열리므로 브라우저에 남아 있던 claude.ai 세션에
+자동 승인되는 일이 없고, 쓰던 브라우저 세션도 건드리지 않습니다.
+로그인이 끝나면 자동으로 감지해 계정을 등록하고, 원래 쓰던 계정으로 되돌려 둡니다.
+같은 계정으로 다시 로그인하면 중복 등록 대신 토큰만 갱신됩니다.
+
+### 일상 사용
+
+- **전환**: 계정 카드를 클릭. 재로그인 없이 즉시 바뀌고, 실패하면 전환 전 상태로 자동 롤백됩니다.
+- **우선순위 정하기**: 맨 위가 primary(기본 계정), 아래가 fallback입니다.
+  fallback 카드는 드래그로 순서를 바꿀 수 있고, 이 순서대로 자동 전환됩니다.
+  fallback을 primary로 올리려면 카드 **우클릭(또는 ⋯ 메뉴) → "Primary 계정으로 설정"**.
+- **메뉴바 아이콘 색**: 기본(primary 사용 중) · 앰버(fallback 사용 중) · 레드(모든 계정 소진).
+  전환이 일어날 때마다 macOS 알림으로 알려줍니다.
+
+### 토글 3가지
+
+| 토글 | 기본값 | 하는 일 |
+|---|---|---|
+| CLI 자동 fallback | 켬 | 한도 소진 시 다음 계정으로 자동 전환. 끄면 알림만 오고 수동 전환은 언제나 가능 |
+| Desktop 자동 fallback | 끔 | 자동 전환 때 Claude Desktop도 함께 전환 (전환 순간 Desktop이 재시작됨) |
+| 계정 전환 시 Desktop도 전환 (실험) | 끔 | 카드 클릭 전환 때 Desktop 동시 전환. 해당 계정을 Desktop에 연결해둔 경우에만 동작 |
+
+### Claude Desktop도 함께 쓰려면 (실험 기능)
+
+계정 카드의 **⋯ → "Claude Desktop 연결"**을 누르면 안내에 따라
+① Desktop이 열리고 ② 그 계정으로 로그인하면 ③ 자동으로 저장됩니다.
+연결해두면 계정 전환 시 Desktop도 같은 계정으로 따라 바뀝니다 (재시작 2~5초).
+
+### 터미널에서 (mobius CLI)
+
 ```
-
-앱은 메뉴바에만 상주한다 (Dock 아이콘 없음, 창을 닫아도 잔류).
-설정에서 "로그인 시 자동 시작"을 켤 수 있다.
-
-`mobius` CLI 설치는 둘 중 하나:
-
-- 앱 **설정 → CLI → 설치** 버튼: 번들 내 바이너리를 `/usr/local/bin/mobius`로 심볼릭 링크 (관리자 권한 요청).
-- 개발용: `Scripts/install-cli.sh` (릴리스 빌드 산출물을 직접 링크).
-
-## 사용법
-
-### 앱
-
-- **계정 추가**: 팝오버의 "계정 추가" 버튼. 앱이 공식 `claude auth login`을 백그라운드로 실행해
-  로그인 URL을 뽑아 **ASWebAuthenticationSession(ephemeral) 창**으로 띄운다.
-  매번 쿠키가 백지 상태라 항상 로그인 폼이 뜨므로 기존 브라우저의 claude.ai 세션에
-  자동 승인되지 않고, 기본 브라우저 세션도 건드리지 않는다.
-  로그인 완료는 자격증명 변경 감시로 자동 감지되어 프로필로 저장되고,
-  원래 쓰던 계정으로 자동 복원된다 (첫 계정이면 새 계정이 활성 유지).
-  같은 계정으로 재로그인하면 신규 등록 대신 토큰 갱신으로 처리된다.
-- **전환**: 계정 카드 클릭 한 번. 재로그인 불필요, 실패 시 전환 전 상태로 자동 롤백.
-- **우선순위**: primary는 맨 위 고정, fallback 카드들만 드래그앤드롭으로 순서 재정렬.
-  이 순서가 자동 fallback의 전환 순서다.
-- **토글 3종** (설정, CLI 자동 fallback은 팝오버에도 노출):
-  - `CLI 자동 fallback` (기본 켬) — 한도 소진 시 자동 전환. 끄면 알림만 오고 수동 전환은 항상 가능.
-  - `Desktop 자동 fallback` (기본 끔) — 자동 전환 시 Claude Desktop도 종료→스왑→재실행.
-    작업 중 Desktop이 예고 없이 재시작되는 게 싫으면 끈 채로 둔다.
-  - `계정 전환 시 Claude Desktop도 전환` (experimental) — 수동 전환 시 Desktop 동시 전환.
-    대상 계정에 Desktop 스냅샷이 있을 때만 동작.
-- **Desktop 연결** (experimental): 계정 카드의 "Desktop 연결" → 안내 시트가 뜨고
-  ① Claude Desktop이 열림 ② 해당 계정으로 로그인 ③ 로그인이 감지되면 스냅샷 자동 저장.
-  이미 그 계정으로 로그인돼 있으면 "지금 상태 저장" 버튼으로 즉시 캡처.
-- **메뉴바 상태 점**: primary 활성 = 기본, fallback 활성 = 앰버, 전 계정 소진 = 레드.
-  자동/수동 전환마다 macOS 알림이 온다.
-
-### CLI
-
-```
-mobius list              # 계정 목록 (활성 ●, primary/fallback 순위, 한도/재로그인 상태)
+mobius list              # 계정 목록 (활성 ●, 우선순위, 한도 상태)
 mobius switch <name>     # 닉네임으로 전환
-mobius status            # 현재 활성 계정, 리셋까지 남은 시간, 자동 전환 상태
-mobius capture <name>    # 현재 claude 로그인 계정을 프로필로 캡처 (앱 없이 등록하는 보조 수단)
-mobius auto on|off       # CLI 자동 fallback 켜기/끄기
+mobius status            # 현재 활성 계정, 리셋까지 남은 시간
+mobius capture <name>    # 현재 claude 로그인 계정을 프로필로 등록
+mobius auto on|off       # 자동 fallback 켜기/끄기
 ```
 
-CLI 전환도 분산 알림으로 실행 중인 앱 UI에 즉시 반영된다.
-단, **Desktop 동시 전환은 앱에서 전환할 때만 적용된다** — `mobius switch`는 CLI 자격증명만 바꾼다.
+CLI로 전환해도 실행 중인 앱 화면에 즉시 반영됩니다.
+단, Desktop 동시 전환은 앱에서 전환할 때만 적용됩니다 — `mobius switch`는 CLI 자격증명만 바꿉니다.
 
-## 자동 fallback 동작 원리
+## 자동 전환은 어떻게 동작하나요
 
-**네트워크 요청 0** — 서버를 조회하지 않으므로 비정상 트래픽으로 인한 계정 리스크가 없다.
+**서버에 아무것도 묻지 않습니다 (네트워크 요청 0)** — 비정상 트래픽으로 계정이 위험해질 일이 없습니다.
 
-1. **감지**: 15초 주기로 `~/.claude/projects/**/*.jsonl` 세션 로그의 새로 추가된 라인만 스캔한다
-   (첫 스캔은 오프셋만 기록 — 과거 이벤트로 오탐하지 않음).
-   `error == "rate_limit"`인 라인의 텍스트에서 리셋 시각(`resets 7:30pm (Asia/Seoul)` 등)을 파싱한다.
-   단, **`not your usage limit`가 포함된 이벤트는 반드시 제외** — 실측상 rate-limit 이벤트의
-   69%가 계정 한도가 아닌 서버측 제한이라, 이 규칙이 없으면 오전환이 발생한다
+1. **감지**: 15초마다 `~/.claude/projects/**/*.jsonl` 세션 로그의 새 라인만 스캔해
+   rate-limit 이벤트에서 리셋 시각을 파싱합니다 (첫 스캔은 오프셋만 기록 — 과거 이벤트 오탐 없음).
+   `not your usage limit`가 포함된 이벤트는 제외합니다 — 실측상 rate-limit 이벤트의 69%가
+   계정 한도가 아닌 서버측 제한이라, 이 규칙이 없으면 오전환이 발생합니다
    (실측 기록: `docs/spike/rate-limit-format.md`).
-2. **전환**: 활성 계정 소진 감지 → 우선순위 순서상 한도에 안 걸렸고 재로그인이 필요 없는
-   다음 계정으로 전환. 전환할 곳이 없으면 "모든 계정 한도 소진" 알림만.
-3. **복귀**: primary의 리셋 시각을 기억해두고 **타이머**로 판단 — 리셋 시각 + 마진(60초)이
-   지나면 primary로 자동 복귀한다. 서버에 회복 여부를 묻지 않는다.
-4. **플래핑 방지**: 전환 직후 120초 쿨다운. 전환 후에도 구 세션이 남기는 stale 로그를
-   새 활성 계정의 소진으로 오인해 연쇄 전환(B→C→D)되는 것을 막는다.
-5. **월간 지출 한도** 등 리셋 시각이 없는 이벤트는 보수적으로 **24시간 후 리셋**으로 취급한다.
+2. **전환**: 활성 계정 소진 → 우선순위상 한도에 안 걸린 다음 계정으로.
+   갈 곳이 없으면 "모든 계정 한도 소진" 알림만 보냅니다.
+3. **복귀**: primary의 리셋 시각 + 60초가 지나면 타이머로 자동 복귀합니다. 서버 조회 없음.
+4. **플래핑 방지**: 전환 직후 120초 쿨다운 — 구 세션의 잔여 로그 때문에 연쇄 전환(B→C→D)되는 것을 막습니다.
+5. 리셋 시각이 없는 이벤트(월간 지출 한도 등)는 보수적으로 24시간 후 리셋으로 취급합니다.
 
-## 제약과 알려진 한계
+사용량 게이지는 팝오버를 열 때만 조회하며(4분 캐시), 상시 폴링하지 않습니다.
 
-- **세션 유지**: 실행 중인 `claude` 세션에는 새 계정이 즉시 적용되지 않을 수 있다 —
-  그 경우 세션을 새로 시작해야 한다. 실측은 미완 (QA 체크리스트 #3에서 검증 예정이며
-  결과를 여기에 기록한다).
-- **재로그인 필요(needsReauth) 자동 감지는 아직 미배선** (후속 예정) —
-  토큰이 죽은 프로필은 카드 삭제 후 재추가로 해결한다.
-- **전환 직후 일시적 오표시**: 구 세션이 남긴 잔여 rate-limit 로그가 새 활성 계정 카드에
-  일시적으로 오표시 카운트다운을 띄울 수 있다 (리셋 시각 도래로 자가 해소).
-- **Claude Desktop (experimental)**:
-  - 핫스왑 불가 — 전환 시 Desktop 종료→스왑→재실행이 필요하다 (Mobius가 자동화, 체감 2~5초 깜빡).
-  - 웹 세션 쿠키가 만료되면(수 주) 해당 프로필은 Desktop 재로그인 후 다시 연결해야 한다.
-  - 비공식 저장 구조에 의존하므로 Desktop 업데이트로 파손될 수 있다.
-    파손 시 CLI 전환만 수행된다 (Desktop 전환 실패는 알림으로 고지).
-- **Desktop 연결 감지**: 로그인 완료를 Desktop 데이터 디렉토리의 mtime 변경으로 감지하므로,
-  로그인 외 활동(대화 등)으로도 발화할 수 있다. 안내 시트의 지시대로
-  **로그인 직후 상태에서** 저장하는 것을 권장한다.
-- **ad-hoc 서명**: 배포 서명이 아니라 재빌드할 때마다 앱 신원이 바뀌어
-  Keychain 접근 프롬프트가 다시 뜰 수 있다.
+## 알아두면 좋은 제약
+
+- **실행 중인 `claude` 세션**: 전환한 새 계정이 즉시 적용되지 않을 수 있습니다 —
+  그 경우 세션을 새로 시작하세요. (실측 검증은 QA 체크리스트 #3에서 진행 중)
+- **재로그인 필요 자동 감지는 아직 없음** — 토큰이 만료된 계정은 카드 삭제 후 다시 추가하세요.
+- **전환 직후 일시적 오표시**: 구 세션의 잔여 로그로 새 계정 카드에 리셋 카운트다운이
+  잠깐 잘못 보일 수 있습니다 (시간이 지나면 자연 해소).
+- **Claude Desktop (실험)**:
+  - 핫스왑이 불가능해 전환 시 Desktop 재시작이 필요합니다 (자동화되어 있고 2~5초 깜빡임).
+  - 웹 세션 쿠키가 만료되면(수 주) 해당 계정은 Desktop 재로그인 후 다시 연결해야 합니다.
+  - 비공식 저장 구조에 의존하므로 Desktop 업데이트로 동작이 깨질 수 있습니다.
+    깨져도 CLI 전환은 정상 동작하며, Desktop 전환 실패는 알림으로 알려줍니다.
+- **키체인 확인 창이 뜬다면**: 과거 버전 사용 등으로 키체인 항목의 파티션이 오염된 경우입니다.
+  터미널에서 한 번만 실행하면 됩니다 (키체인 암호 필요):
+  ```bash
+  security set-generic-password-partition-list -S "apple-tool:,apple:" -s "Claude Code-credentials" -a $USER
+  ```
+  이후에는 Mobius가 호환 상태를 자동으로 유지합니다.
 
 ## 보안
 
-- Mobius가 보관하는 계정 자격증명(OAuth 토큰)은 **계정별 Keychain 항목에만** 저장된다 —
-  비밀값을 파일로 내보내지 않는다 (동기화/백업 대상에서 원천 제외).
-  전환 시에는 Claude Code가 원래 쓰는 위치(Keychain `Claude Code-credentials`,
-  `~/.claude/.credentials.json`, `~/.claude.json`의 `oauthAccount`)에 기록할 뿐이다.
-- Desktop 스냅샷은 `~/Library/Application Support/Mobius/desktop-profiles/<uuid>/`에
-  **0700 권한**으로 저장된다. Cookies는 원본부터 safeStorage(Keychain 키)로 암호화되어 있어
-  평문 토큰 유출이 아니며, 원본과 동일한 보호 수준이다 ("비밀값 파일 금지" 원칙의 명시적 예외).
-- 계정을 삭제하면 해당 Desktop 스냅샷도 함께 삭제된다.
+- **비밀값은 어디에도 업로드되지 않습니다.** 계정별 OAuth 토큰 스냅샷은
+  `~/Library/Application Support/Mobius/secrets/`에 **본인만 읽을 수 있는 권한(0600)**으로
+  저장됩니다 — Claude Code 자신이 토큰을 보관하는 방식과 동일한 보호 수준입니다.
+- 전환 시에는 Claude Code가 원래 쓰는 위치(Keychain `Claude Code-credentials`,
+  `~/.claude/.credentials.json`, `~/.claude.json`의 `oauthAccount`)에 기록할 뿐입니다.
+  키체인 읽기/쓰기는 macOS 표준 `security` 도구를 경유해 claude 생태계와 충돌하지 않습니다.
+- Desktop 스냅샷은 `~/Library/Application Support/Mobius/desktop-profiles/`에 0700 권한으로
+  저장됩니다. Cookies는 원본부터 Keychain 키로 암호화되어 있어 평문 유출이 아닙니다.
+- 계정을 삭제하면 해당 비밀 스냅샷과 Desktop 스냅샷도 함께 삭제됩니다.
 
 ## QA 체크리스트
 
