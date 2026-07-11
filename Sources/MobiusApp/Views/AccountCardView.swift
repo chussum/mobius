@@ -13,6 +13,8 @@ struct AccountCardView: View {
     var onDelete: (() -> Void)? = nil
     /// fallback 카드에만 전달 — ⋯ 메뉴/우클릭에서 primary로 승격
     var onSetPrimary: (() -> Void)? = nil
+    /// needsReauth 카드에만 전달 — 로그인 플로우 재실행 (같은 계정 로그인 = 토큰 갱신)
+    var onReauth: (() -> Void)? = nil
 
     private let accent = Color(red: 0.35, green: 0.65, blue: 1.0)
 
@@ -45,6 +47,12 @@ struct AccountCardView: View {
                             .padding(.horizontal, 5).padding(.vertical, 2)
                             .background(.red.opacity(0.15), in: Capsule())
                             .foregroundStyle(.red)
+                        if let onReauth {
+                            Button(loc("다시 로그인")) { onReauth() }
+                                .buttonStyle(.borderless)
+                                .font(.system(size: 9, weight: .semibold))
+                                .foregroundStyle(accent)
+                        }
                     }
                 }
                 Text(profile.emailAddress)
@@ -61,6 +69,9 @@ struct AccountCardView: View {
             }
             if onConnectDesktop != nil || onDelete != nil || onSetPrimary != nil {
                 Menu {
+                    if profile.needsReauth, let onReauth {
+                        Button(loc("다시 로그인"), systemImage: "arrow.clockwise") { onReauth() }
+                    }
                     if let onSetPrimary {
                         Button(loc("Primary 계정으로 설정"), systemImage: "star") { onSetPrimary() }
                     }

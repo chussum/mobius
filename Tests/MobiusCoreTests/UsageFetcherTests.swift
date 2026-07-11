@@ -32,4 +32,15 @@ final class UsageFetcherTests: XCTestCase {
         XCTAssertEqual(UsageFetcher.accessToken(from: blob), "tok-123")
         XCTAssertNil(UsageFetcher.accessToken(from: Data("{}".utf8)))
     }
+
+    func testExpiresAtParsing() {
+        // 실측: claudeAiOauth.expiresAt는 13자리 epoch 밀리초 (2026-07-11 확인)
+        let ms = Data(#"{"claudeAiOauth":{"expiresAt":1783785648000}}"#.utf8)
+        XCTAssertEqual(UsageFetcher.expiresAt(from: ms),
+                       Date(timeIntervalSince1970: 1_783_785_648))
+        let secs = Data(#"{"expiresAt":1783785648}"#.utf8) // 방어: 초 단위도 허용
+        XCTAssertEqual(UsageFetcher.expiresAt(from: secs),
+                       Date(timeIntervalSince1970: 1_783_785_648))
+        XCTAssertNil(UsageFetcher.expiresAt(from: Data("{}".utf8)))
+    }
 }

@@ -74,6 +74,19 @@ final class AccountStoreTests: XCTestCase {
         XCTAssertEqual(store2.file.accounts.map(\.nickname), ["fb1", "primary", "fb2"])
     }
 
+    func testSetNeedsReauthPersistsAndClearsOnRelogin() throws {
+        let store = try AccountStore(env: env, keychain: kc)
+        let p = try store.upsertProfile(nickname: "x", snapshot: snap(email: "p@x.com"))
+        try store.setNeedsReauth(p.id, true)
+        XCTAssertTrue(store.file.accounts[0].needsReauth)
+        // 새 인스턴스로 로드해도 유지
+        XCTAssertTrue(try AccountStore(env: env, keychain: kc).file.accounts[0].needsReauth)
+        // 같은 이메일 재로그인(upsert) → 자동 해제
+        _ = try store.upsertProfile(nickname: "x", snapshot: snap(email: "p@x.com"))
+        XCTAssertFalse(store.file.accounts[0].needsReauth)
+        XCTAssertThrowsError(try store.setNeedsReauth(UUID(), true)) // 미등록 계정
+    }
+
     func testRemoveDeletesSecret() throws {
         let store = try AccountStore(env: env, keychain: kc)
         let p = try store.upsertProfile(nickname: "x", snapshot: snap(email: "p@x.com"))

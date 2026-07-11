@@ -171,6 +171,17 @@ public final class AccountStore: @unchecked Sendable {
         try save()
     }
 
+    /// 재로그인 필요 마킹/해제. 변화 없으면 저장하지 않는다.
+    public func setNeedsReauth(_ id: UUID, _ flag: Bool) throws {
+        lock.lock(); defer { lock.unlock() }
+        guard let idx = file.accounts.firstIndex(where: { $0.id == id }) else {
+            throw AccountStoreError.unknownAccount
+        }
+        guard file.accounts[idx].needsReauth != flag else { return }
+        file.accounts[idx].needsReauth = flag
+        try save()
+    }
+
     /// 지정 계정을 primary(인덱스 0)로 승격. 기존 primary는 첫 fallback으로 내려간다.
     /// primary 기준이 바뀌므로 autoSwitchedFromPrimary는 리셋 — 옛 primary 체제에서의
     /// 자동 복귀 예약이 새 primary로 오귀속되지 않도록.

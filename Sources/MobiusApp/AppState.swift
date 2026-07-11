@@ -86,11 +86,33 @@ final class AppState: ObservableObject {
         guard !stale.isEmpty else { return }
         usageTask = Task { @MainActor in
             defer { usageTask = nil }
+            var reauthChanged = false
             for profile in stale {
-                guard let secret = try? store.secret(for: profile.id),
-                      let snap = try? await UsageFetcher.fetch(keychainBlob: secret.keychainBlob)
-                else { continue }
-                usage[profile.id] = snap
+                guard let secret = try? store.secret(for: profile.id) else { continue }
+                do {
+                    guard let snap = try await UsageFetcher.fetch(keychainBlob: secret.keychainBlob)
+                    else { continue }
+                    usage[profile.id] = snap
+                    // 조회 성공 = 토큰 살아있음 → 잘못 남은 재로그인 마킹 자가 해제
+                    if profile.needsReauth {
+                        try? store.setNeedsReauth(profile.id, false)
+                        reauthChanged = true
+                    }
+                } catch is UsageFetcherError {
+                    // 401/403: 저장된 토큰이 아직 유효해야 하는데 거부됨 = 진짜 재로그인 필요.
+                    // (만료된 옛 토큰의 401은 정상 현상이라 마킹하지 않는다 — 오탐 방지)
+                    if let exp = UsageFetcher.expiresAt(from: secret.keychainBlob), exp > Date(),
+                       !profile.needsReauth {
+                        try? store.setNeedsReauth(profile.id, true)
+                        reauthChanged = true
+                        notify(title: loc("재로그인 필요"),
+                               body: loc("%@ 계정의 인증이 만료됐어요. 카드의 '다시 로그인'을 눌러주세요.", profile.nickname))
+                    }
+                } catch { continue }
+            }
+            if reauthChanged {
+                MobiusNotification.postAccountsChanged()
+                reload()
             }
         }
     }

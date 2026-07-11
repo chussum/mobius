@@ -121,7 +121,8 @@ struct AccountListView: View {
                             withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
                                 state.setPrimary(p.id)
                             }
-                        })
+                        },
+                        onReauth: p.needsReauth ? { state.addAccount() } : nil)
             .matchedGeometryEffect(id: p.id, in: cardSpace)
             .onTapGesture {
                 guard p.id != state.file.activeAccountID else { return }
@@ -130,6 +131,9 @@ struct AccountListView: View {
                 }
             }
             .contextMenu {
+                if p.needsReauth {
+                    Button(loc("다시 로그인")) { state.addAccount() }
+                }
                 if !isPrimary {
                     Button(loc("Primary 계정으로 설정")) {
                         withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {

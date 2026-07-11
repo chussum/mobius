@@ -169,5 +169,9 @@ Sources/MobiusApp/        SwiftUI 메뉴바 앱 + AppState + Views/ + LoginFlow 
 
 - `docs/qa/m1-checklist.md` 에 수동 QA 항목. 사용자 실행 검증 진행 중.
 - 미완: 실행 중 claude 세션 유지 여부 실측(전환 시), Desktop 실동작 QA.
-- 후속 후보: needsReauth 자동 감지, accounts.json 파일 락.
+- needsReauth 자동 감지 배선됨(2026-07-11): usage 조회 401/403 + **저장된 expiresAt(13자리
+  epoch ms, 실측)이 아직 유효할 때만** 마킹(만료 토큰 401은 오탐이라 제외), 200이면 자가 해제.
+  복구는 카드 '다시 로그인' 버튼 → 기존 로그인 플로우 재사용(같은 이메일 = 토큰 갱신+해제).
+  세션 로그 기반 인증 에러 감지는 실측 포맷 확보 전이라 미구현(후속).
+- 후속 후보: accounts.json 파일 락, 세션 로그 기반 인증 에러 감지.
 - 2차 프로젝트(합의): 멀티 PC ~/.claude 세션 동기화 — 자격증명 제외, 별도 스펙.

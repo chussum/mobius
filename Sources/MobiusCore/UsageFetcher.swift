@@ -18,6 +18,12 @@ public struct UsageSnapshot: Codable, Equatable, Sendable {
     }
 }
 
+public enum UsageFetcherError: Error, Equatable {
+    /// 401/403 — 토큰이 거부됨. 저장된 expiresAt이 아직 유효한데 이 에러면
+    /// 진짜 재로그인 필요(토큰 폐기)로 판단할 수 있다 (만료 토큰의 401은 오탐).
+    case unauthorized
+}
+
 /// Claude OAuth usage 엔드포인트 조회. 사용자가 게이지 표시를 켰을 때만,
 /// 팝오버를 열 때 저빈도(캐시 만료 시)로만 호출된다 — 상시 폴링 없음.
 public enum UsageFetcher {
@@ -30,6 +36,19 @@ public enum UsageFetcher {
         if let oauth = obj["claudeAiOauth"] as? [String: Any],
            let token = oauth["accessToken"] as? String { return token }
         return obj["accessToken"] as? String
+    }
+
+    /// 자격증명 blob의 access token 만료 시각. epoch ms(실측: claudeAiOauth.expiresAt)와
+    /// s 둘 다 허용 — 1e12 초과면 ms로 해석.
+    public static func expiresAt(from keychainBlob: Data) -> Date? {
+        guard let obj = try? JSONSerialization.jsonObject(with: keychainBlob) as? [String: Any]
+        else { return nil }
+        let raw = ((obj["claudeAiOauth"] as? [String: Any])?["expiresAt"]) ?? obj["expiresAt"]
+        let n: Double
+        if let d = raw as? Double { n = d }
+        else if let i = raw as? Int { n = Double(i) }
+        else { return nil }
+        return Date(timeIntervalSince1970: n > 1e12 ? n / 1000 : n)
     }
 
     static let isoFrac: ISO8601DateFormatter = {
@@ -69,7 +88,11 @@ public enum UsageFetcher {
         req.setValue("oauth-2025-04-20", forHTTPHeaderField: "anthropic-beta")
         req.timeoutInterval = 10
         let (data, resp) = try await URLSession.shared.data(for: req)
-        guard (resp as? HTTPURLResponse)?.statusCode == 200 else { return nil }
+        guard let http = resp as? HTTPURLResponse else { return nil }
+        if http.statusCode == 401 || http.statusCode == 403 {
+            throw UsageFetcherError.unauthorized
+        }
+        guard http.statusCode == 200 else { return nil }
         return parse(data)
     }
 }

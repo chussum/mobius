@@ -86,6 +86,8 @@
 
 /* AccountCardView */
 "재로그인 필요" = "Re-login required";
+"다시 로그인" = "Sign in again";
+"%@ 계정의 인증이 만료됐어요. 카드의 '다시 로그인'을 눌러주세요." = "Authentication for %@ has expired. Press 'Sign in again' on its card.";
 "Primary 계정으로 설정" = "Set as primary account";
 "Claude Desktop 다시 연결" = "Reconnect Claude Desktop";
 "Claude Desktop 연결" = "Connect Claude Desktop";
