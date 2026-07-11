@@ -125,6 +125,13 @@ struct AccountListView: View {
                 }
             }
             .contextMenu {
+                if !isPrimary {
+                    Button("Primary 계정으로 설정") {
+                        withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+                            state.setPrimary(p.id)
+                        }
+                    }
+                }
                 Button(p.hasDesktopSnapshot ? "Claude Desktop 다시 연결" : "Claude Desktop 연결") {
                     state.beginDesktopCapture(for: p.id)
                 }

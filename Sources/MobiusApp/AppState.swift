@@ -293,6 +293,15 @@ final class AppState: ObservableObject {
         reload()
     }
 
+    func setPrimary(_ id: UUID) {
+        do { try store.setPrimary(id) } catch {
+            lastError = "Primary 변경 실패: \(error.localizedDescription)"
+            return
+        }
+        MobiusNotification.postAccountsChanged()
+        reload()
+    }
+
     func removeAccount(_ id: UUID) {
         try? store.remove(id)
         desktopSwitcher.deleteSnapshot(for: id) // 고아 Desktop 스냅샷 정리

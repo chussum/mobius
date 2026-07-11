@@ -171,6 +171,21 @@ public final class AccountStore: @unchecked Sendable {
         try save()
     }
 
+    /// 지정 계정을 primary(인덱스 0)로 승격. 기존 primary는 첫 fallback으로 내려간다.
+    /// primary 기준이 바뀌므로 autoSwitchedFromPrimary는 리셋 — 옛 primary 체제에서의
+    /// 자동 복귀 예약이 새 primary로 오귀속되지 않도록.
+    public func setPrimary(_ id: UUID) throws {
+        lock.lock(); defer { lock.unlock() }
+        guard let idx = file.accounts.firstIndex(where: { $0.id == id }) else {
+            throw AccountStoreError.unknownAccount
+        }
+        guard idx != 0 else { return } // 이미 primary — 변경 없음
+        let item = file.accounts.remove(at: idx)
+        file.accounts.insert(item, at: 0)
+        file.autoSwitchedFromPrimary = false
+        try save()
+    }
+
     public func remove(_ id: UUID) throws {
         lock.lock(); defer { lock.unlock() }
         guard file.accounts.contains(where: { $0.id == id }) else {

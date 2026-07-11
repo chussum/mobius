@@ -54,6 +54,26 @@ final class AccountStoreTests: XCTestCase {
         XCTAssertThrowsError(try store.moveFallback(fromIndex: 0, toIndex: 1)) // primary 이동 금지
     }
 
+    func testSetPrimaryPromotesAndDemotesOldPrimary() throws {
+        let store = try AccountStore(env: env, keychain: kc)
+        _ = try store.upsertProfile(nickname: "primary", snapshot: snap(email: "a@x.com"))
+        let fb1 = try store.upsertProfile(nickname: "fb1", snapshot: snap(email: "b@x.com"))
+        _ = try store.upsertProfile(nickname: "fb2", snapshot: snap(email: "c@x.com"))
+        try store.setAutoSwitchedFromPrimary(true)
+
+        try store.setPrimary(fb1.id) // fb1 승격 → 기존 primary는 첫 fallback으로
+        XCTAssertEqual(store.file.accounts.map(\.nickname), ["fb1", "primary", "fb2"])
+        XCTAssertFalse(store.file.autoSwitchedFromPrimary) // primary 기준 변경 → 복귀 예약 리셋
+
+        try store.setPrimary(fb1.id) // 이미 primary — 변경 없음
+        XCTAssertEqual(store.file.accounts.map(\.nickname), ["fb1", "primary", "fb2"])
+        XCTAssertThrowsError(try store.setPrimary(UUID())) // 미등록 계정
+
+        // 영속 확인 — 새 인스턴스로 로드해도 순서 유지
+        let store2 = try AccountStore(env: env, keychain: kc)
+        XCTAssertEqual(store2.file.accounts.map(\.nickname), ["fb1", "primary", "fb2"])
+    }
+
     func testRemoveDeletesSecret() throws {
         let store = try AccountStore(env: env, keychain: kc)
         let p = try store.upsertProfile(nickname: "x", snapshot: snap(email: "p@x.com"))
