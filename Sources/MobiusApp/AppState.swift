@@ -101,6 +101,10 @@ final class AppState: ObservableObject {
             try? store.replaceFile(with: fresh.file)
         }
         file = store.file
+        // 플래그(hasDesktopSnapshot)를 진실의 원천으로 삼아 스냅샷 디렉토리를 정리 —
+        // 실패한 캡처의 잔재 dir이 유효 스냅샷으로 오인돼 잘못 복원되는 것을 막는다.
+        let flagged = Set(store.file.accounts.filter { $0.hasDesktopSnapshot }.map { $0.id })
+        desktopSwitcher.pruneSnapshotsExcept(flagged)
     }
 
     var menuStatus: MenuStatus {

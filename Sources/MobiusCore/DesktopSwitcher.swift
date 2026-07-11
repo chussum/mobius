@@ -136,6 +136,21 @@ public final class DesktopSwitcher: Sendable {
         try? FileManager.default.removeItem(at: snapshotDir(for: id))
     }
 
+    /// keep에 없는 모든 스냅샷 디렉토리를 삭제한다(스테일/오펀 정리).
+    /// 계정 플래그(hasDesktopSnapshot=true)를 진실의 원천으로 삼아 dir을 그에 맞춘다 —
+    /// dir 존재만으로 hasSnapshot을 판단하면, 실패한 캡처 잔재를 유효 스냅샷으로 오인한다.
+    public func pruneSnapshotsExcept(_ keep: Set<UUID>) {
+        let fm = FileManager.default
+        guard let dirs = try? fm.contentsOfDirectory(
+            at: env.desktopProfilesDir, includingPropertiesForKeys: nil) else { return }
+        for d in dirs {
+            let name = d.lastPathComponent
+            if name.hasPrefix(".") { continue } // 진행 중 임시 dir(.stash-, .restore-tmp-)은 건드리지 않음
+            if let id = UUID(uuidString: name), keep.contains(id) { continue }
+            try? fm.removeItem(at: d)
+        }
+    }
+
     /// 강제 로그아웃: 현재 Desktop 신원 파일들을 임시 보관소로 옮겨(=로그아웃 상태로 만들고)
     /// 나중에 취소 시 되돌릴 수 있게 보관소 URL을 반환한다. Desktop 종료 상태에서 호출할 것.
     /// 옮길 게 없으면(이미 로그아웃) nil.
