@@ -11,6 +11,7 @@ Swift Package (SwiftUI, macOS 14+). primary 소진 → fallback 자동 전환 �
 swift test                    # 유닛 테스트 (MobiusCore)
 swift build                   # 컴파일 확인
 Scripts/make-app.sh           # dist/Mobius.app 번들 조립 + 서명
+Scripts/make-dmg.sh           # dist/Mobius-<ver>.dmg 배포 이미지 (드래그 설치)
 open dist/Mobius.app          # 실행 (메뉴바 ∞ 아이콘)
 Scripts/setup-signing.sh      # (1회) 고정 서명 인증서 생성 — 아래 '서명' 참조
 ```
