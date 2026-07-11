@@ -22,6 +22,14 @@ public final class SystemKeychain: KeychainClient, @unchecked Sendable {
     }
 
     public func read(service: String, account: String) throws -> Data? {
+        // ★ 네이티브 읽기도 파티션 리스트(apple-tool:)에 안 맞아 암호창을 띄운다 —
+        //   쓰기와 대칭으로 security CLI 경유. 값은 stdout 파이프로만 전달된다.
+        //   (Desktop이 띄운 security도 통과하는 것을 실측으로 확인 — 실패 기록 12)
+        switch readViaSecurityCLI(service: service, account: account) {
+        case .found(let data): return data
+        case .notFound: return nil
+        case .error: break // CLI 이상 시에만 네이티브 폴백 (드묾 — 암호창 가능성 감수)
+        }
         var query = baseQuery(service, account)
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
@@ -32,6 +40,29 @@ public final class SystemKeychain: KeychainClient, @unchecked Sendable {
             throw KeychainError.unexpectedStatus(status)
         }
         return data
+    }
+
+    private enum CLIReadResult { case found(Data), notFound, error }
+
+    /// `security find-generic-password -w`로 값 읽기. 종료코드 44 = 항목 없음.
+    private func readViaSecurityCLI(service: String, account: String) -> CLIReadResult {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/security")
+        p.arguments = ["find-generic-password", "-s", service, "-a", account, "-w"]
+        let stdout = Pipe()
+        p.standardOutput = stdout
+        p.standardError = FileHandle.nullDevice
+        do { try p.run() } catch { return .error }
+        let out = stdout.fileHandleForReading.readDataToEndOfFile()
+        p.waitUntilExit()
+        switch p.terminationStatus {
+        case 0:
+            var data = out
+            if data.last == UInt8(ascii: "\n") { data.removeLast() } // -w가 붙이는 개행 1개 제거
+            return .found(data)
+        case 44: return .notFound // errSecItemNotFound
+        default: return .error
+        }
     }
 
     public func write(service: String, account: String, data: Data) throws {

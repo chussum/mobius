@@ -73,8 +73,9 @@ Sources/MobiusApp/        SwiftUI 메뉴바 앱 + AppState + Views/ + LoginFlow 
 - ★ 더 치명적: **비-Apple 앱이 SecItemUpdate로 항목을 수정하면 macOS가 파티션 리스트를
   그 앱의 cdhash로 도장 찍는다(re-stamp).** Mobius가 네이티브 API로 토큰을 쓰면 전환할
   때마다 파티션이 `cdhash:MobiusApp`으로 리셋 → security 경유 읽기(CLI·Desktop)가 전부
-  암호창 유발. → `SystemKeychain.write`는 **security CLI(-i, stdin) 경유**로 쓴다 —
-  이러면 도장이 `apple-tool:`로 찍혀 자동으로 호환 상태가 유지된다 (실패 기록 12).
+  암호창 유발. → `SystemKeychain`은 **읽기·쓰기 모두 security CLI 경유**다
+  (쓰기는 -i stdin으로 비밀 전달, 읽기는 -w stdout 파싱·exit 44=없음). 이러면 도장이
+  `apple-tool:`로 찍혀 유지되고, 파티션 밖인 Mobius 자신도 창 없이 접근한다 (실패 기록 12).
 - 파티션 리스트 실제 값 확인은 SecAccessCopyACLList의 `ACLAuthorizationPartitionID`
   ACL desc(hex plist)를 디코드하면 승인창 없이 볼 수 있다.
 
