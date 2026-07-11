@@ -14,14 +14,16 @@
 
 - [ ] **5. DnD 재정렬** — fallback 2개 이상 등록 후 드래그 재정렬 → `mobius list` 순서 반영.
 
-- [ ] **6. 자동 전환 리허설** (실제 한도 소진 없이) — 활성 계정의 최근 세션 JSONL에 수동으로 한 줄 append:
+- [x] **6. 자동 전환 리허설** (실제 한도 소진 없이) — 활성 계정의 최근 세션 JSONL에 수동으로 한 줄 append:
   ```bash
   echo '{"text":"Claude AI usage limit reached|'$(date -v+2H +%s)'"}' >> ~/.claude/projects/<적당한 프로젝트>/<최근>.jsonl
   ```
   → 15초 내 fallback 전환 + 알림 확인. 이후 해당 계정 카드에 리셋 카운트다운 표시 확인.
   (테스트 후 append한 줄 제거)
 
-- [ ] **7. 복귀 리허설** — 6번 상태에서 primary의 rateLimit을 과거로 조작: `accounts.json`의 primary `rateLimit.resetsAt`을 과거 시각으로 수정 → 다음 틱에 primary 복귀 + 알림.
+- [x] **7. 복귀 리허설** — 6번 상태에서 primary의 rateLimit을 과거로 조작: `accounts.json`의 primary `rateLimit.resetsAt`을 과거 시각으로 수정 → 다음 틱에 primary 복귀 + 알림.
+
+  > **6·7 실측 기록 (2026-07-11)**: 6번 — 주입 ~5초 내 fallback(fore.st) 전환, `autoSwitchedFromPrimary=true`, 주입한 리셋 시각 그대로 기록됨. 7번 — resetsAt 과거 조작 + `com.mobius.accountsChanged` 분산 알림(수동 파일 수정은 앱이 자동 감지하지 않음 — 알림 필요) 후 ~40초에 primary 복귀(120초 쿨다운 해제 타이밍과 일치), 플래그 false 리셋. 주입 라인 제거·라이브 자격증명(flosdor)·키체인 무프롬프트 확인 완료.
 
 - [ ] **8. 메뉴바 잔류 + 자동 시작** — 창 닫기 → 메뉴바 잔류. 설정에서 "로그인 시 자동 시작" 켜기 → 재로그인 후 자동 실행.
 
