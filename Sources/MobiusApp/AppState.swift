@@ -390,7 +390,9 @@ final class AppState: ObservableObject {
         Task { @MainActor in
             await desktopCoordinator.terminateAndWait()
             try? desktopSwitcher.restoreStashedIdentity(from: stash)
-            await desktopCoordinator.launch()
+            if await !desktopCoordinator.launch() {
+                lastError = "Claude Desktop 재실행 실패 — 업데이트 적용 중일 수 있어요. 잠시 후 수동으로 실행해주세요."
+            }
         }
     }
 
@@ -404,7 +406,11 @@ final class AppState: ObservableObject {
             desktopCapture?.step = .failed("Desktop 로그아웃 실패: \(error.localizedDescription)")
             return
         }
-        await desktopCoordinator.launch()
+        if await !desktopCoordinator.launch() {
+            desktopCapture?.step = .failed(
+                "Claude Desktop 재실행 실패 — 업데이트 적용 중일 수 있어요. 잠시 후 다시 시도해주세요.")
+            return
+        }
         guard !Task.isCancelled, desktopCapture?.accountID == id else { return }
         desktopCapture?.step = .waitingLogin
 

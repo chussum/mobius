@@ -60,6 +60,13 @@ Sources/MobiusApp/        SwiftUI 메뉴바 앱 + AppState + Views/ + LoginFlow 
 - `Scripts/setup-signing.sh`로 고정 인증서 `Mobius Dev Signing` 생성 → make-app.sh가 자동 사용.
 - 고정 서명 + 아래 '비밀은 파일' 조합으로 승인창이 사실상 사라짐.
 
+### Claude Desktop은 Squirrel(ShipIt) 자동업데이트 — 앱 종료 순간 번들 통째 교체
+- 업데이트가 스테이징되어 있으면 **Desktop이 종료되는 순간** ShipIt이
+  `/Applications/Claude.app`을 temp로 이동시키고 새 번들로 교체한다
+  (`~/Library/Caches/com.anthropic.claudefordesktop.ShipIt/ShipIt_stderr.log`).
+- 그래서 Desktop을 종료→재실행할 때는 반드시 ShipIt이 끝나길 기다려야 한다 —
+  `DesktopCoordinator.launch()`의 `waitForUpdaterQuiescence()`가 담당 (실패 기록 10 참조).
+
 ### 비밀 스냅샷은 Keychain이 아니라 0600 파일
 - 계정별 스냅샷은 `~/Library/Application Support/Mobius/secrets/<uuid>.json` (0600).
 - Claude Code 자신도 토큰을 파일(.credentials.json 0600)에 두므로 동일 보안 수준이고,
@@ -107,6 +114,16 @@ Sources/MobiusApp/        SwiftUI 메뉴바 앱 + AppState + Views/ + LoginFlow 
    계정 추가·reconcile이 영영 완료 안 됨(사용자 관찰로 발견). → 파일 idle 대신 **값을 두 번
    읽어(간격 0.7s) 토큰+이메일이 일치할 때만** 인정하는 `readStableLiveSnapshot()`으로 대체.
    교훈: `~/.claude.json`은 "바쁜 파일"이다 — mtime을 안정성/변화 신호로 쓰지 말 것.
+
+10. **Desktop 재실행이 ShipIt 업데이트와 레이스 → 키체인 승인창 폭풍** — Desktop 전환의
+    `종료 → 스왑 → 즉시 재실행`이 종료 순간 시작되는 ShipIt 업데이트 적용과 겹치면,
+    실행 중인 Desktop 프로세스의 번들이 디스크에서 이동/교체된다. 이 프로세스는 코드서명
+    동적 검증이 깨져 **키체인 접근마다 승인창이 뜨고 '항상 허용'도 ACL에 저장되지 않는다**
+    (사용자 실측: 항상 허용 눌러도 재발, 토글 꺼도 지속). 실측 근거: ShipIt 로그의
+    `App Still Running Error`(우리가 재실행한 인스턴스가 업데이트를 막은 기록).
+    → `launch()` 전에 ShipIt 대기 + `/Applications` 밖 번들 실행 금지. **회복은 재설치가
+    아니라 Desktop 완전 종료 후 재실행이면 충분** — 승인창 원인을 키체인 항목/ACL 오염으로
+    오귀인하지 말 것 (Mobius는 `Claude Safe Storage`를 아예 안 건드린다).
 
 ## QA / 진행 상황
 

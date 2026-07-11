@@ -26,3 +26,5 @@
 - [ ] **8. 메뉴바 잔류 + 자동 시작** — 창 닫기 → 메뉴바 잔류. 설정에서 "로그인 시 자동 시작" 켜기 → 재로그인 후 자동 실행.
 
 - [ ] **9. Keychain 권한 프롬프트 (리뷰 이월)** — 15초 주기 reconcile의 Keychain 접근이 ad-hoc 재서명 후 권한 프롬프트를 반복시키지 않는지 확인.
+
+- [ ] **10. Desktop 업데이트 스테이징 중 전환 (ShipIt 레이스)** — Claude Desktop에 업데이트가 대기 중일 때 Desktop 전환 토글을 켜고 계정 전환 → `tail -f ~/Library/Caches/com.anthropic.claudefordesktop.ShipIt/ShipIt_stderr.log`에 `App Still Running Error`가 **안 찍히고**, 재실행된 Desktop이 키체인 승인창을 띄우지 않는지 확인. (CLAUDE.md 실패 기록 10)
