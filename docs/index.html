@@ -130,6 +130,8 @@ h2{font-family:var(--display);font-weight:700;letter-spacing:-.02em;
 .tag{font-family:var(--mono);font-size:9.5px;letter-spacing:.1em;color:var(--amber);
   border:1px solid rgba(245,166,35,.35);border-radius:5px;padding:2px 6px;
   vertical-align:2px;margin-left:7px}
+h2 .tag{font-size:12px;vertical-align:middle;position:relative;top:-4px;
+  padding:3px 8px;border-radius:6px}
 
 /* terminal */
 .term{background:#080b11;border:1px solid var(--line);border-radius:14px;
@@ -290,8 +292,8 @@ footer{border-top:1px solid var(--line);padding:34px 0;color:var(--faint);font-s
       </div>
       <div class="card rv">
         <div class="ic"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#59a6ff" stroke-width="1.8" stroke-linecap="round"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></svg></div>
-        <h3><span data-i18n="f4_h">Claude Desktop too</span><span class="tag">EXP</span></h3>
-        <p data-i18n="f4_p">Connect an account once, and Desktop follows every switch with a 2–5 second restart.</p>
+        <h3 data-i18n="f4_h">Claude Desktop too</h3>
+        <p data-i18n="f4_p">Connect an account once, and Claude Desktop switches right along with it — a quick 2–5 second restart.</p>
       </div>
       <div class="card rv">
         <div class="ic"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#59a6ff" stroke-width="1.8" stroke-linecap="round"><path d="M21 12a9 9 0 1 1-2.6-6.3M21 3v6h-6"/></svg></div>
@@ -310,8 +312,8 @@ footer{border-top:1px solid var(--line);padding:34px 0;color:var(--faint);font-s
 <section id="labs">
   <div class="wrap">
     <p class="eyebrow rv" data-i18n="lab_eb">Labs</p>
-    <h2 class="rv" data-i18n="lab_h2">Every Mac, one memory.</h2>
-    <p class="lead rv" data-i18n="lab_lead">Turn on sync in Settings → Labs and your conversations, plans, skills — and what Claude has learned — travel between Macs through your own iCloud Drive or Google Drive.</p>
+    <h2 class="rv"><span data-i18n="lab_h2">Every Mac, one memory.</span> <span class="tag">EXP</span></h2>
+    <p class="lead rv" data-i18n="lab_lead">Switch on sync in Settings → Labs, and your conversations, plans, skills — and everything Claude has learned — move between your Macs through your own iCloud Drive or Google Drive.</p>
     <div class="grid">
       <div class="card rv">
         <div class="ic"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#59a6ff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M17 18a4 4 0 0 0 0-8 6 6 0 0 0-11.3-1A5 5 0 0 0 6 18h11z"/></svg></div>
@@ -329,7 +331,7 @@ footer{border-top:1px solid var(--line);padding:34px 0;color:var(--faint);font-s
         <p data-i18n="lab3_p">Sync only what you choose, per machine. Deletions never spread unless you ask — and even then they sit in a 30-day trash first.</p>
       </div>
     </div>
-    <p class="loop-note rv"><span data-i18n="lab_note">Experimental · off by default · works with iCloud Drive, Google Drive, or any folder you pick</span></p>
+    <p class="loop-note rv"><span data-i18n="lab_note">Off by default · works with iCloud Drive, Google Drive, or any folder you pick · continuing a chat needs the same project path on both Macs</span></p>
   </div>
 </section>
 
@@ -423,15 +425,15 @@ const ko = {
   f1_h:"클릭 한 번 전환", f1_p:"카드를 누르면 바로 그 계정입니다. 전환이 실패하면 이전 상태로 되돌립니다 — 어중간한 상태는 없습니다.",
   f2_h:"사용량 게이지", f2_p:"계정마다 5시간·주간 사용량과 리셋까지 남은 시간을 보여줍니다. 팝오버를 열 때만 조회합니다(4분 캐시).",
   f3_h:"백그라운드 폴링 없음", f3_p:"한도 감지는 로컬 로그만 씁니다 — 네트워크 0. 서버 호출은 팝오버를 열 때의 사용량 게이지와 하루 한 번의 업데이트 확인뿐이고, 둘 다 끌 수 있습니다.",
-  f4_h:"Claude Desktop까지", f4_p:"계정을 한 번 연결해두면 전환할 때마다 Desktop도 2~5초 재시작으로 따라옵니다.",
+  f4_h:"Claude Desktop까지", f4_p:"계정을 한 번 연결해두면 전환할 때마다 Claude Desktop도 따라 바뀌어요 — 2~5초 재시작이면 끝.",
   f5_h:"만료된 로그인 감지", f5_p:"로그인이 만료된 계정은 카드에 '다시 로그인' 버튼이 나타나고, 다시 로그인할 때까지 자동 전환에서 제외됩니다.",
   f6_h:"당신의 언어로", f6_p:"한국어, English, 日本語 — 시스템 언어를 따르거나 설정에서 고정할 수 있습니다.",
   lab_eb:"실험실", lab_h2:"모든 Mac이, 하나의 기억을.",
-  lab_lead:"설정 → 실험실에서 동기화를 켜면 대화·플랜·스킬, 그리고 Claude가 배운 내용이 내 iCloud Drive나 Google Drive를 타고 Mac 사이를 오갑니다.",
+  lab_lead:"설정 → 실험실에서 동기화를 켜면 대화·플랜·스킬, 그리고 Claude가 배워 둔 것까지 내 iCloud Drive나 Google Drive를 타고 Mac 사이를 오갑니다.",
   lab1_h:"어떤 대화든 이어서", lab1_p:"세션 기록이 Mac 사이를 따라다녀요. 사용자명이 달라도 괜찮아요 — 홈 경로를 자동으로 맞춰줍니다.",
   lab2_h:"로그인 정보는 집에", lab2_p:"자격증명·계정 목록·토큰은 절대 동기화되지 않아요 — 코드에서 차단되고 테스트로 보증됩니다. 옮겨지는 건 작업 데이터뿐.",
   lab3_h:"Mac마다 선택", lab3_p:"머신별로 원하는 항목만 동기화해요. 삭제는 기본적으로 퍼지지 않고, 원할 때만 30일 휴지통을 거칩니다.",
-  lab_note:"실험실 기능 · 기본 꺼짐 · iCloud Drive, Google Drive, 직접 고른 폴더 모두 지원",
+  lab_note:"기본 꺼짐 · iCloud Drive · Google Drive · 직접 고른 폴더 모두 지원 · 대화 이어 쓰기는 두 Mac의 프로젝트 경로가 같을 때",
   cli_eb:"터미널이 편한 분들께", cli_h2:"앱은 선택, 루프는 필수.",
   cli_lead:"모든 기능은 메뉴바로 충분하지만, 터미널에서 산다면 mobius CLI가 같은 엔진을 움직입니다.",
   in_eb:"설치", in_h2:"90초면 첫 전환까지 끝납니다.",
