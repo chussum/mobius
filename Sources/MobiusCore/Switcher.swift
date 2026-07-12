@@ -71,10 +71,7 @@ public final class Switcher: @unchecked Sendable {
 
     /// 외부(앱 밖) 재로그인 감지 시 상태 대사: 라이브 email이 아는 프로필이면
     /// 그 프로필을 활성으로 표시하고 최신 토큰을 흡수한다. 모르는 계정이면 손대지 않는다.
-    /// - Parameter adoptLiveActive: 라이브(실행 중 세션)의 계정을 active로 채택할지.
-    ///   false면 비밀 스냅샷만 갱신하고 active는 바꾸지 않는다 — 수동 전환 직후 유예 동안,
-    ///   실행 중 세션이 다른 계정을 붙잡고 있어도 사용자의 선택을 되돌리지 않기 위함.
-    public func reconcile(adoptLiveActive: Bool = true) async throws {
+    public func reconcile() async throws {
         // 이메일은 .claude.json에서 읽어 승인창이 없다. 활성 계정이 그대로면
         // Keychain(토큰) 읽기를 아예 하지 않아 15초 주기 승인창 폭탄을 막는다.
         guard let email = try io.liveEmail(),
@@ -83,13 +80,12 @@ public final class Switcher: @unchecked Sendable {
         let activeUnchanged = store.file.activeAccountID == profile.id
         let alreadyHasSecret = (try? store.secret(for: profile.id)) != nil
         if activeUnchanged && alreadyHasSecret { return } // 정상 상태 — Keychain 접근 없음
-        if !activeUnchanged && !adoptLiveActive && alreadyHasSecret { return } // 유예 중 — 유지
 
         // 실제 변화가 있을 때만(드묾) 토큰+이메일 두 번 읽어 일치 확인 후 Keychain 접근.
         guard let (live, stableEmail) = await io.readStableLiveSnapshot(),
               stableEmail == email else { return }
         try store.setSecret(live, for: profile.id)
-        if !activeUnchanged && adoptLiveActive {
+        if !activeUnchanged {
             try store.setActive(profile.id)
             // 외부(사용자) 로그인으로 활성이 바뀐 것 — 자동 전환 상태가 아니므로
             // 플래그를 내려 onTick의 primary 자동 복귀를 막는다 (앱·CLI 공통 경로).

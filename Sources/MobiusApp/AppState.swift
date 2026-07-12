@@ -48,11 +48,10 @@ final class AppState: ObservableObject {
     private var timer: Timer?
     private var observer: NSObjectProtocol?
     private var lastReconcileAt = Date.distantPast
-    /// 사용자가 직접 전환/승격한 시각 — 이 직후 reconcile의 라이브 추종·자가복구가
-    /// 수동 선택을 되돌리지 않도록 유예(grace)를 준다.
+    /// 사용자가 직접 전환한 시각 — 자가복구(onTick)가 "소진을 알고도 고른 계정"을
+    /// 밀어내지 않도록 판단 기준으로 쓴다. (reconcile은 항상 라이브를 따른다.)
     private var lastManualSwitchAt = Date.distantPast
     static let reconcileInterval: TimeInterval = 15
-    static let manualSwitchGrace: TimeInterval = 45
 
     init() {
         let env = MobiusEnvironment.live()
@@ -311,13 +310,13 @@ final class AppState: ObservableObject {
         // 사용자가 로그인 중인 창을 죽이고 감시 신호를 오염시킨다.
         guard loginFlow == nil, desktopCapture == nil else { return }
         let now = Date()
-        // reconcile/adopt는 15초마다만 — 그리고 수동 전환 직후 유예 동안엔 라이브 추종으로
-        // active를 되돌리지 않는다(수동 선택이 실행 중 세션 때문에 15초 뒤 튕기던 문제 방지).
+        // reconcile/adopt는 15초마다만 — 3초 틱에 매번 돌리면 Keychain 접근이 잦아진다.
+        // reconcile은 항상 라이브(실제 자격증명)를 진실로 삼아 active를 맞춘다 — active 마커가
+        // 라이브와 어긋나면 UI가 /status와 달라지는 더 나쁜 버그가 된다(유예는 넣지 않는다).
         if now.timeIntervalSince(lastReconcileAt) >= Self.reconcileInterval {
             lastReconcileAt = now
             try? await switcher.adoptLiveAccountIfUnregistered()
-            let respectManual = now.timeIntervalSince(lastManualSwitchAt) < Self.manualSwitchGrace
-            try? await switcher.reconcile(adoptLiveActive: !respectManual)
+            try? await switcher.reconcile()
         }
 
         // 배치 내 모든 hit는 스캔 시점의 활성 계정에 귀속 —
