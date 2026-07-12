@@ -14,6 +14,8 @@ cp .build/release/mobius "$APP/Contents/MacOS/mobius"
 # 다국어 리소스 번들 (Bundle.module이 Contents/Resources에서 찾는다)
 mkdir -p "$APP/Contents/Resources"
 cp -R .build/release/Mobius_MobiusApp.bundle "$APP/Contents/Resources/"
+# 앱 아이콘 (설정창을 열 때 독에 표시됨)
+cp Assets/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 cat > "$APP/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -22,6 +24,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>CFBundleIdentifier</key><string>dev.mobius.app</string>
   <key>CFBundleName</key><string>Mobius</string>
   <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>CFBundleShortVersionString</key><string>0.1.4</string>
   <key>CFBundleVersion</key><string>1</string>
   <key>LSMinimumSystemVersion</key><string>14.0</string>
