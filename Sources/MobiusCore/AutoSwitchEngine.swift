@@ -66,13 +66,21 @@ public final class AutoSwitchEngine: @unchecked Sendable {
 
     /// 주기 틱: (A) 활성 계정이 소진 상태면 여유 있는 계정으로 자가 전환,
     ///          (B) fallback 활성이 자동 전환의 결과라면 primary 리셋 시 복귀.
-    public func onTick(file: AccountsFile, now: Date) -> Decision {
+    /// - Parameter manualSwitchAt: 사용자가 마지막으로 직접 전환/승격한 시각.
+    ///   활성 계정의 소진이 이 시각보다 **이전**이면(= 사용자가 소진을 알고도 그 계정을
+    ///   골랐으면) 자가복구로 밀어내지 않는다. 이후 새로 소진되면(더 최신) 정상 전환.
+    public func onTick(file: AccountsFile, now: Date,
+                       manualSwitchAt: Date = .distantPast) -> Decision {
         guard file.autoSwitchEnabled, !inCooldown(now), let active = file.active else { return .none }
 
         // (A) 자가복구: 활성 계정이 소진됐거나(rate-limit) 로그인이 만료됐는데(needsReauth)
         //     여전히 활성이면, 여유 있는 계정으로 전환한다. 로그 hit 순간의 전환을 쿨다운·
         //     일시적 사유·throw로 놓쳤어도 다음 틱에 자가 복구된다.
-        if active.isLimited(now: now) || active.needsReauth,
+        //     단, 사용자가 소진을 알고도 직접 이 계정을 골랐다면(소진 시각이 수동 선택보다
+        //     이전) 존중한다 — 밀어내지 않는다. 이후 새로 소진되면(더 최신) 정상 전환.
+        let limitPredatesManualChoice = manualSwitchAt > .distantPast
+            && (active.rateLimit?.recordedAt ?? .distantPast) <= manualSwitchAt
+        if (active.isLimited(now: now) || active.needsReauth), !limitPredatesManualChoice,
            let next = firstAvailable(in: file, excluding: active.id, now: now) {
             return .switchTo(next, reason: .activeExhausted)
         }

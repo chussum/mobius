@@ -9,6 +9,10 @@
 "Primary 계정으로 복귀" = "Back to primary account";
 "Fallback 계정으로 전환" = "Switched to fallback account";
 "활성 계정: %@" = "Active account: %@";
+"✅ %@ 계정으로 복귀했어요" = "✅ Back on %@";
+"한도가 초기화돼 주 계정으로 돌아왔어요." = "Your limit reset, so you're back on your primary account.";
+"🔄 %@ 계정으로 전환했어요" = "🔄 Switched to %@";
+"%@ 한도 소진 → %@. 새로 시작하는 claude 세션부터 적용돼요." = "%@ hit its limit → %@. Applies to newly started claude sessions.";
 "자동 전환 실패: %@" = "Auto-switch failed: %@";
 "전환 실패: %@" = "Switch failed: %@";
 "Desktop 전환이 진행 중입니다 — 이번 전환에서는 Desktop을 건너뜁니다." = "A Desktop switch is already in progress — skipping Desktop this time.";

@@ -47,6 +47,12 @@ final class AppState: ObservableObject {
     lazy var desktopCoordinator = DesktopCoordinator(switcher: desktopSwitcher)
     private var timer: Timer?
     private var observer: NSObjectProtocol?
+    private var lastReconcileAt = Date.distantPast
+    /// 사용자가 직접 전환/승격한 시각 — 이 직후 reconcile의 라이브 추종·자가복구가
+    /// 수동 선택을 되돌리지 않도록 유예(grace)를 준다.
+    private var lastManualSwitchAt = Date.distantPast
+    static let reconcileInterval: TimeInterval = 15
+    static let manualSwitchGrace: TimeInterval = 45
 
     init() {
         let env = MobiusEnvironment.live()
@@ -82,8 +88,9 @@ final class AppState: ObservableObject {
         let ioForWarmup = io
         Task.detached(priority: .utility) { _ = try? ioForWarmup.readLiveSnapshot() }
 
-        // 15초 주기: 로그 스캔 → 자동 전환 판단 → reconcile
-        timer = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { [weak self] _ in
+        // 3초 주기: 로그 스캔 → 자동 전환 판단 (빠른 fallback). reconcile/adopt는 내부에서
+        // 15초로 게이팅해 Keychain 접근·라이브 추종 바운스를 늘리지 않는다.
+        timer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
             Task { @MainActor in await self?.tick() }
         }
         Task { @MainActor in await tick() }
@@ -304,8 +311,14 @@ final class AppState: ObservableObject {
         // 사용자가 로그인 중인 창을 죽이고 감시 신호를 오염시킨다.
         guard loginFlow == nil, desktopCapture == nil else { return }
         let now = Date()
-        try? await switcher.adoptLiveAccountIfUnregistered()
-        try? await switcher.reconcile()
+        // reconcile/adopt는 15초마다만 — 그리고 수동 전환 직후 유예 동안엔 라이브 추종으로
+        // active를 되돌리지 않는다(수동 선택이 실행 중 세션 때문에 15초 뒤 튕기던 문제 방지).
+        if now.timeIntervalSince(lastReconcileAt) >= Self.reconcileInterval {
+            lastReconcileAt = now
+            try? await switcher.adoptLiveAccountIfUnregistered()
+            let respectManual = now.timeIntervalSince(lastManualSwitchAt) < Self.manualSwitchGrace
+            try? await switcher.reconcile(adoptLiveActive: !respectManual)
+        }
 
         // 배치 내 모든 hit는 스캔 시점의 활성 계정에 귀속 —
         // 루프 중 전환이 일어나도 남은 hit(구 세션 로그)가 새 활성 계정에 오기록되지 않도록.
@@ -324,7 +337,7 @@ final class AppState: ObservableObject {
             }
             apply(engine.onRateLimitHit(file: store.file, hit: hit, now: now), now: now)
         }
-        apply(engine.onTick(file: store.file, now: now), now: now)
+        apply(engine.onTick(file: store.file, now: now, manualSwitchAt: lastManualSwitchAt), now: now)
         file = store.file
     }
 
@@ -348,9 +361,15 @@ final class AppState: ObservableObject {
                 try? store.setAutoSwitchedFromPrimary(reason == .activeExhausted)
                 MobiusNotification.postAccountsChanged()
                 let name = store.file.accounts.first { $0.id == id }?.nickname ?? "?"
-                let title = reason == .primaryRecovered
-                    ? loc("Primary 계정으로 복귀") : loc("Fallback 계정으로 전환")
-                notify(title: title, body: loc("활성 계정: %@", name))
+                let fromName = store.file.accounts.first { $0.id == fromID }?.nickname
+                if reason == .primaryRecovered {
+                    notify(title: loc("✅ %@ 계정으로 복귀했어요", name),
+                           body: loc("한도가 초기화돼 주 계정으로 돌아왔어요."))
+                } else {
+                    notify(title: loc("🔄 %@ 계정으로 전환했어요", name),
+                           body: loc("%@ 한도 소진 → %@. 새로 시작하는 claude 세션부터 적용돼요.",
+                                     fromName ?? "?", name))
+                }
             } catch {
                 lastError = loc("자동 전환 실패: %@", error.localizedDescription)
                 return
@@ -369,6 +388,7 @@ final class AppState: ObservableObject {
         do {
             try switcher.switchTo(id)
             engine.noteSwitched()
+            lastManualSwitchAt = Date() // 유예: reconcile/자가복구가 이 선택을 되돌리지 않게
             // 사용자의 의지로 전환 — 자동 복귀 대상이 아니다
             try? store.setAutoSwitchedFromPrimary(false)
             MobiusNotification.postAccountsChanged()

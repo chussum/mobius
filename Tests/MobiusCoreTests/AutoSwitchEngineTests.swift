@@ -51,6 +51,21 @@ final class AutoSwitchEngineTests: XCTestCase {
                        .switchTo(fb1.id, reason: .activeExhausted))
     }
 
+    func testSelfHealRespectsManualChoiceOfLimitedAccount() {
+        // primary가 t0-10분에 소진됨. 사용자가 t0에 직접 primary를 골랐다 → 밀어내지 않는다.
+        file.accounts[0].rateLimit = RateLimitInfo(
+            resetsAt: t0.addingTimeInterval(3600), recordedAt: t0.addingTimeInterval(-600))
+        XCTAssertEqual(
+            AutoSwitchEngine().onTick(file: file, now: t0, manualSwitchAt: t0),
+            .none)
+        // 하지만 수동 선택 이후 새로 소진되면(더 최신) 정상적으로 전환한다.
+        file.accounts[0].rateLimit = RateLimitInfo(
+            resetsAt: t0.addingTimeInterval(3600), recordedAt: t0.addingTimeInterval(60))
+        XCTAssertEqual(
+            AutoSwitchEngine().onTick(file: file, now: t0.addingTimeInterval(60), manualSwitchAt: t0),
+            .switchTo(fb1.id, reason: .activeExhausted))
+    }
+
     func testTickSelfHealRespectsCooldown() {
         file.accounts[0].rateLimit = RateLimitInfo(resetsAt: t0.addingTimeInterval(3600), recordedAt: t0)
         let engine = AutoSwitchEngine()
