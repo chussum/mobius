@@ -178,6 +178,19 @@ Sources/MobiusApp/        SwiftUI 메뉴바 앱 + AppState + Views/ + LoginFlow 
     (2) 샌드박스 셸에서의 security 테스트는 GUI 세션과 판정이 달라 **착시를 만든다** —
     반드시 사용자 터미널/실제 앱 경로로 재현할 것.
 
+13. **Codable 저장 구조에 필드 추가 → 구버전 accounts.json 디코드 실패 → 계정 유실** —
+    `RateLimitInfo.modelScoped`·`AccountProfile.userPinned`를 추가했더니, 그 키가 없는
+    기존 accounts.json이 **`keyNotFound`로 디코드 실패**했다. AppState는 이때 빈 스토어로
+    폴백하는데, 이후 reconcile이 라이브 계정만 저장하며 **파일을 덮어써 fore.st가 영구
+    유실**됐다(secret 파일이 남아 수동 복구). 합성 Codable은 non-optional 필드의 키가
+    없으면 실패한다. → **저장되는 struct에 필드를 추가할 땐 반드시 관대한 `init(from:)`을
+    함께 넣어** `decodeIfPresent(...) ?? 기본값`으로 구버전 파일을 읽는다(Models.swift).
+    추가 방어: AccountStore.init은 디코드 실패 시 원본을 `accounts.corrupt.json`으로
+    백업한 뒤 throw(빈 스토어가 덮어써도 복구 가능). 교훈: (1) 지속화 구조 변경은 항상
+    하위호환 디코딩 + 마이그레이션 테스트를 동반한다. (2) "빈 폴백 후 저장"은 조용한
+    데이터 파괴 경로다 — 로드 실패 시 원본을 먼저 지켜라. (3) 개발자는 잦은 빌드로 이 경로를
+    바로 밟지만, **업데이트만 하는 사용자에게 그대로 터진다** — 릴리스 전 구파일 로드 필수 확인.
+
 ## QA / 진행 상황
 
 - `docs/qa/m1-checklist.md` 수동 QA: 2·3·6·7·9·10 완료(2026-07-11). 남은 항목: 1·4·5·8.
