@@ -48,9 +48,6 @@ final class AppState: ObservableObject {
     private var timer: Timer?
     private var observer: NSObjectProtocol?
     private var lastReconcileAt = Date.distantPast
-    /// 사용자가 직접 전환한 시각 — 자가복구(onTick)가 "소진을 알고도 고른 계정"을
-    /// 밀어내지 않도록 판단 기준으로 쓴다. (reconcile은 항상 라이브를 따른다.)
-    private var lastManualSwitchAt = Date.distantPast
     static let reconcileInterval: TimeInterval = 15
 
     init() {
@@ -137,7 +134,8 @@ final class AppState: ObservableObject {
                        let cur = store.file.accounts.first(where: { $0.id == profile.id })?.rateLimit,
                        abs(cur.resetsAt.timeIntervalSince(real)) > 60 {
                         try? store.update(profile.id) {
-                            $0.rateLimit = RateLimitInfo(resetsAt: real, recordedAt: cur.recordedAt)
+                            $0.rateLimit = RateLimitInfo(resetsAt: real, recordedAt: cur.recordedAt,
+                                                         modelScoped: cur.modelScoped)
                         }
                         reauthChanged = true // reload 유발용 (상태 변경 반영)
                     }
@@ -331,12 +329,12 @@ final class AppState: ObservableObject {
             if let activeID {
                 try? store.update(activeID) {
                     $0.rateLimit = RateLimitInfo(resetsAt: hit.effectiveResetsAt(now: now),
-                                                 recordedAt: now)
+                                                 recordedAt: now, modelScoped: hit.modelScoped)
                 }
             }
             apply(engine.onRateLimitHit(file: store.file, hit: hit, now: now), now: now)
         }
-        apply(engine.onTick(file: store.file, now: now, manualSwitchAt: lastManualSwitchAt), now: now)
+        apply(engine.onTick(file: store.file, now: now), now: now)
         file = store.file
     }
 
@@ -387,7 +385,8 @@ final class AppState: ObservableObject {
         do {
             try switcher.switchTo(id)
             engine.noteSwitched()
-            lastManualSwitchAt = Date() // 유예: reconcile/자가복구가 이 선택을 되돌리지 않게
+            // 사용자가 직접 고른 계정 — 모델 전용 한도(Fable 등)로 자동으로 밀어내지 않는다.
+            try? store.setUserPinned(id)
             // 사용자의 의지로 전환 — 자동 복귀 대상이 아니다
             try? store.setAutoSwitchedFromPrimary(false)
             MobiusNotification.postAccountsChanged()

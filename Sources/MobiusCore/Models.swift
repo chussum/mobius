@@ -3,9 +3,13 @@ import Foundation
 public struct RateLimitInfo: Codable, Equatable, Sendable {
     public var resetsAt: Date
     public var recordedAt: Date
-    public init(resetsAt: Date, recordedAt: Date) {
+    /// 모델 전용 한도(예: Fable 주간)인가 — 계정 자체(5시간/주간)는 여유가 있을 수 있다.
+    /// 이 경우 자동 전환은 "사용자가 그 계정을 직접 고르지 않았을 때"만 일어난다(pin 존중).
+    public var modelScoped: Bool
+    public init(resetsAt: Date, recordedAt: Date, modelScoped: Bool = false) {
         self.resetsAt = resetsAt
         self.recordedAt = recordedAt
+        self.modelScoped = modelScoped
     }
 }
 
@@ -18,21 +22,33 @@ public struct AccountProfile: Codable, Equatable, Identifiable, Sendable {
     public var needsReauth: Bool
     public var rateLimit: RateLimitInfo?
     public var hasDesktopSnapshot: Bool     // 마일스톤 2에서 사용
+    /// 사용자가 이 계정을 직접(수동) 골랐는가. true면 모델 전용 한도(Fable 등)로는
+    /// 자동 전환해 밀어내지 않는다 — "1회 자동 전환 후 내가 되돌리면 머문다"는 규칙.
+    /// 계정 자체 한도(5시간/주간)가 차면 이 핀은 무시된다(진짜 사용 불가이므로).
+    public var userPinned: Bool
 
     public init(id: UUID, nickname: String, emailAddress: String,
                 organizationName: String, tierDescription: String,
                 needsReauth: Bool = false, rateLimit: RateLimitInfo? = nil,
-                hasDesktopSnapshot: Bool = false) {
+                hasDesktopSnapshot: Bool = false, userPinned: Bool = false) {
         self.id = id; self.nickname = nickname; self.emailAddress = emailAddress
         self.organizationName = organizationName; self.tierDescription = tierDescription
         self.needsReauth = needsReauth; self.rateLimit = rateLimit
-        self.hasDesktopSnapshot = hasDesktopSnapshot
+        self.hasDesktopSnapshot = hasDesktopSnapshot; self.userPinned = userPinned
     }
 
     /// 지금 한도에 걸려 있는가 (리셋 시각 전인가)
     public func isLimited(now: Date) -> Bool {
         guard let rl = rateLimit else { return false }
         return now < rl.resetsAt
+    }
+
+    /// 자동 전환이 이 계정을 밀어내도 되는가. 모델 전용 한도 + 사용자 핀이면 밀어내지 않는다.
+    /// (계정 자체 한도로 걸린 경우엔 modelScoped=false라 핀과 무관하게 밀어낼 수 있다.)
+    public func autoSwitchMayLeave(now: Date) -> Bool {
+        guard isLimited(now: now) || needsReauth else { return false }
+        if let rl = rateLimit, rl.modelScoped, userPinned { return false }
+        return true
     }
 }
 

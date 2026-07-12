@@ -53,6 +53,12 @@ final class RateLimitParserTests: XCTestCase {
         let hit = RateLimitParser.parse(line: line)
         XCTAssertNotNil(hit)
         XCTAssertNil(hit?.resetsAt) // 리셋 시각 없음 → 호출측 폴백
+        XCTAssertEqual(hit?.modelScoped, true) // 모델 전용(프리미엄) 한도 표식
+    }
+
+    func testSessionLimitIsNotModelScoped() {
+        let line = eventLine(text: "You've hit your session limit · resets 2:30pm (Asia/Seoul)")
+        XCTAssertEqual(RateLimitParser.parse(line: line)?.modelScoped, false)
     }
 
     func testSessionLimitResetsSameDay() {

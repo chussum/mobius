@@ -182,6 +182,18 @@ public final class AccountStore: @unchecked Sendable {
         try save()
     }
 
+    /// 지정 계정에만 사용자 핀을 세운다(나머지는 해제). 수동 전환 시 호출 —
+    /// 모델 전용 한도(Fable 등)로 이 계정을 자동으로 밀어내지 않게 한다.
+    public func setUserPinned(_ id: UUID) throws {
+        lock.lock(); defer { lock.unlock() }
+        var changed = false
+        for i in file.accounts.indices {
+            let want = file.accounts[i].id == id
+            if file.accounts[i].userPinned != want { file.accounts[i].userPinned = want; changed = true }
+        }
+        if changed { try save() }
+    }
+
     /// 지정 계정을 primary(인덱스 0)로 승격. 기존 primary는 첫 fallback으로 내려간다.
     /// primary 기준이 바뀌므로 autoSwitchedFromPrimary는 리셋 — 옛 primary 체제에서의
     /// 자동 복귀 예약이 새 primary로 오귀속되지 않도록.

@@ -51,19 +51,33 @@ final class AutoSwitchEngineTests: XCTestCase {
                        .switchTo(fb1.id, reason: .activeExhausted))
     }
 
-    func testSelfHealRespectsManualChoiceOfLimitedAccount() {
-        // primary가 t0-10분에 소진됨. 사용자가 t0에 직접 primary를 골랐다 → 밀어내지 않는다.
+    func testModelScopedLimitDoesNotSwitchPinnedAccount() {
+        // 사용자가 직접 고른(pin) primary가 Fable(모델 전용) 한도 소진 → 밀어내지 않는다.
+        file.accounts[0].userPinned = true
         file.accounts[0].rateLimit = RateLimitInfo(
-            resetsAt: t0.addingTimeInterval(3600), recordedAt: t0.addingTimeInterval(-600))
+            resetsAt: t0.addingTimeInterval(3600), recordedAt: t0, modelScoped: true)
+        XCTAssertEqual(AutoSwitchEngine().onTick(file: file, now: t0), .none)
+        // hit 경로도 동일 — 모델 전용 + pin이면 전환 안 함
         XCTAssertEqual(
-            AutoSwitchEngine().onTick(file: file, now: t0, manualSwitchAt: t0),
+            AutoSwitchEngine().onRateLimitHit(file: file, hit: RateLimitHit(resetsAt: nil, modelScoped: true), now: t0),
             .none)
-        // 하지만 수동 선택 이후 새로 소진되면(더 최신) 정상적으로 전환한다.
-        file.accounts[0].rateLimit = RateLimitInfo(
-            resetsAt: t0.addingTimeInterval(3600), recordedAt: t0.addingTimeInterval(60))
+    }
+
+    func testModelScopedLimitSwitchesUnpinnedAccount() {
+        // pin 안 된 계정이 Fable 소진 → 1회 자동 전환은 정상 동작
+        file.accounts[0].userPinned = false
         XCTAssertEqual(
-            AutoSwitchEngine().onTick(file: file, now: t0.addingTimeInterval(60), manualSwitchAt: t0),
+            AutoSwitchEngine().onRateLimitHit(file: file, hit: RateLimitHit(resetsAt: nil, modelScoped: true), now: t0),
             .switchTo(fb1.id, reason: .activeExhausted))
+    }
+
+    func testAccountWideLimitSwitchesEvenPinned() {
+        // pin됐어도 계정 자체 한도(modelScoped=false)면 밀어낸다 — 진짜 사용 불가.
+        file.accounts[0].userPinned = true
+        file.accounts[0].rateLimit = RateLimitInfo(
+            resetsAt: t0.addingTimeInterval(3600), recordedAt: t0, modelScoped: false)
+        XCTAssertEqual(AutoSwitchEngine().onTick(file: file, now: t0),
+                       .switchTo(fb1.id, reason: .activeExhausted))
     }
 
     func testTickSelfHealRespectsCooldown() {

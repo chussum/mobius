@@ -5,8 +5,13 @@ public struct RateLimitHit: Equatable, Sendable {
     /// 리셋 시각. 월간 지출 한도처럼 리셋 시각이 없는 이벤트는 nil —
     /// 호출측(AppState/CLI)이 보수적 폴백(예: now+24h)을 적용한다.
     public var resetsAt: Date?
+    /// 모델 전용 한도(월간 지출 = 프리미엄 모델 한도)인가. 계정 자체 한도(세션/주간)와 구분.
+    public var modelScoped: Bool
 
-    public init(resetsAt: Date?) { self.resetsAt = resetsAt }
+    public init(resetsAt: Date?, modelScoped: Bool = false) {
+        self.resetsAt = resetsAt
+        self.modelScoped = modelScoped
+    }
 
     /// 리셋 시각이 없는 이벤트(월간 지출 한도 등)의 보수적 폴백: now + 24시간.
     /// 엔진·호출자(AppState/CLI)가 한도 기록 시 공통으로 사용한다.
@@ -82,7 +87,11 @@ public enum RateLimitParser {
         }
 
         // P3: 월간 지출 한도 — 리셋 시각 없음
-        if firstMatch(monthlySpend, in: text) != nil { return RateLimitHit(resetsAt: nil) }
+        // 월간 지출 한도 = 프리미엄 모델(Fable 등) 전용 한도. 계정 자체는 여유가 있을 수 있으므로
+        // modelScoped 표식을 달아, 사용자가 그 계정을 직접 고른 경우 자동 전환을 막는다.
+        if firstMatch(monthlySpend, in: text) != nil {
+            return RateLimitHit(resetsAt: nil, modelScoped: true)
+        }
         // P2: 날짜 + 시각 (주간 한도)
         if let m = firstMatch(dateAndTime, in: text),
            let date = resolve(monthAbbr: capture(m, 1, in: text), day: capture(m, 2, in: text),
