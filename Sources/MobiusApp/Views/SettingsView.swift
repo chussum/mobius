@@ -123,14 +123,14 @@ struct SettingsView: View {
                             else { try SMAppService.mainApp.unregister() }
                         } catch { cliMessage = loc("실패: %@", error.localizedDescription) }
                     }
-                Toggle(loc("Claude Code CLI 자동 Fallback"), isOn: Binding(
-                    get: { state.file.autoSwitchEnabled },
-                    set: { state.setAutoSwitch($0) }))
                 VStack(alignment: .leading, spacing: 3) {
                     Toggle(loc("사용량 게이지 표시"), isOn: $showUsageGauges)
                     Text(loc("계정 카드에 5시간·주간 사용량과 초기화 남은 시간을 표시합니다"))
                         .font(.caption).foregroundStyle(.secondary)
                 }
+                Toggle(loc("Claude Code CLI 자동 Fallback"), isOn: Binding(
+                    get: { state.file.autoSwitchEnabled },
+                    set: { state.setAutoSwitch($0) }))
                 VStack(alignment: .leading, spacing: 3) {
                     Toggle(loc("Claude Desktop 자동 Fallback"), isOn: Binding(
                         get: { state.file.desktopAutoSwitchEnabled },

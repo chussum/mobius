@@ -17,21 +17,27 @@ enum SyncSupport {
         guard let mounts = try? fm.contentsOfDirectory(at: cs, includingPropertiesForKeys: nil),
               let mount = mounts.first(where: { $0.lastPathComponent.hasPrefix("GoogleDrive-") })
         else { return nil }
-        // "My Drive"는 시스템 언어에 따라 "내 드라이브" 등으로 현지화됨 —
-        // 이름 매칭 우선, 실패 시 숨김 아닌 첫 디렉토리, 그것도 없으면 마운트 루트.
+        // "My Drive"는 시스템 언어에 따라 "내 드라이브" 등으로 현지화됨.
+        // ★ 마운트 루트 폴백 금지: 루트에 쓴 파일은 Google Drive가 클라우드로 올리지
+        //   않아 "로컬엔 있는데 웹엔 안 보이는" 무음 실패가 된다 — 못 찾으면 실패가 낫다.
         if let children = try? fm.contentsOfDirectory(at: mount,
                                                       includingPropertiesForKeys: [.isDirectoryKey]) {
             let dirs = children.filter {
                 (try? $0.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true
                     && !$0.lastPathComponent.hasPrefix(".")
             }
-            let myDrive = dirs.first {
-                let n = $0.lastPathComponent.lowercased()
-                return n.contains("my drive") || n.contains("내 드라이브")
+            let known = ["my drive", "내 드라이브", "マイドライブ"]
+            if let myDrive = dirs.first(where: { known.contains($0.lastPathComponent.lowercased()) }) {
+                return myDrive
             }
-            if let pick = myDrive ?? dirs.first { return pick }
+            // 이름 매칭 실패 시: 공유 드라이브류만 배제하고 남은 유일한 후보일 때만 사용
+            let candidates = dirs.filter {
+                let n = $0.lastPathComponent.lowercased()
+                return !n.contains("shared") && !n.contains("공유") && !n.contains("共有")
+            }
+            if candidates.count == 1 { return candidates[0] }
         }
-        return mount
+        return nil
     }
 
     /// UserDefaults의 설정으로 실제 동기화 루트(<보관 위치>/MobiusSync/claude)를 해석.
