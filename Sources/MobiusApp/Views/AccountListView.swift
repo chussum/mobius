@@ -100,7 +100,9 @@ struct AccountListView: View {
             .listStyle(.plain)
             .scrollContentBackground(.hidden)
             .frame(height: state.file.accounts.dropFirst().reduce(CGFloat(0)) { sum, p in
-                sum + AccountCardView.estimatedHeight(hasUsage: usageFor(p) != nil)
+                sum + AccountCardView.estimatedHeight(
+                    hasUsage: usageFor(p) != nil,
+                    scopedCount: usageFor(p)?.scopedLimits?.count ?? 0)
             })
         }
     }

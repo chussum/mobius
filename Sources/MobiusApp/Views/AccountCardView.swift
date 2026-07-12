@@ -20,7 +20,11 @@ struct AccountCardView: View {
 
     /// 카드 1행이 List에서 차지하는 높이(행 인셋 6pt 포함) — 넉넉히 잡아 내부 스크롤을 없앤다.
     /// AccountListView의 List 높이 계산과 공유. 과소추정하면 내부 스크롤이 생기므로 살짝 크게.
-    static func estimatedHeight(hasUsage: Bool) -> CGFloat { hasUsage ? 116 : 74 }
+    /// 게이지 없으면 74. 있으면 기본 5시간+주간 2줄(116)에 모델 스코프 한도(Fable 등)
+    /// 줄당 +15를 더한다 — 리스트 높이 계산이 실제 카드 높이를 따라가야 스크롤이 안 생긴다.
+    static func estimatedHeight(hasUsage: Bool, scopedCount: Int = 0) -> CGFloat {
+        hasUsage ? 122 + CGFloat(scopedCount) * 17 : 74
+    }
 
     var body: some View {
         HStack(spacing: 12) {
@@ -139,11 +143,11 @@ struct AccountCardView: View {
     }
 
     private func gaugeRow(label: String, percent: Double, resetsAt: Date?) -> some View {
-        HStack(spacing: 5) {
+        HStack(spacing: 6) {
             Text(label)
-                .font(.system(size: 9, weight: .medium)).foregroundStyle(.tertiary)
+                .font(.system(size: 10.5, weight: .medium)).foregroundStyle(.secondary)
                 .lineLimit(1).minimumScaleFactor(0.7)
-                .frame(width: 30, alignment: .leading)
+                .frame(width: 34, alignment: .leading)
             GeometryReader { geo in
                 ZStack(alignment: .leading) {
                     Capsule().fill(Color.secondary.opacity(0.18))
@@ -153,15 +157,15 @@ struct AccountCardView: View {
             }
             // 바가 남는 가로 공간을 모두 채운다 (오른쪽 텍스트는 fixedSize라 자리를 먼저 확보)
             .frame(minWidth: 40, maxWidth: .infinity)
-            .frame(height: 4)
+            .frame(height: 5)
             Text("\(Int(percent))%")
-                .font(.system(size: 9, weight: .semibold))
+                .font(.system(size: 10.5, weight: .semibold))
                 .foregroundStyle(gaugeColor(percent))
                 .lineLimit(1).fixedSize()
-                .frame(width: 32, alignment: .trailing)
+                .frame(width: 36, alignment: .trailing)
             if let resetsAt, resetsAt > now {
                 Text(loc("초기화 %@", remainText(until: resetsAt)))
-                    .font(.system(size: 9)).foregroundStyle(.tertiary)
+                    .font(.system(size: 10)).foregroundStyle(.tertiary)
                     .lineLimit(1).fixedSize()
             }
         }
