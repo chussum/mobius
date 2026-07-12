@@ -48,7 +48,9 @@ final class AppState: ObservableObject {
     private var timer: Timer?
     private var observer: NSObjectProtocol?
     private var lastReconcileAt = Date.distantPast
+    private var lastActiveSnapshotSyncAt = Date.distantPast
     static let reconcileInterval: TimeInterval = 15
+    static let activeSnapshotSyncInterval: TimeInterval = 5 * 60 // 활성 계정 토큰 스냅샷 동기화
 
     init() {
         let env = MobiusEnvironment.live()
@@ -117,9 +119,16 @@ final class AppState: ObservableObject {
             defer { usageTask = nil }
             var reauthChanged = false
             for profile in stale {
-                guard let secret = try? store.secret(for: profile.id) else { continue }
+                let isActive = store.file.activeAccountID == profile.id
+                // 활성 계정은 저장 스냅샷 대신 **라이브 토큰**으로 조회한다 — claude CLI가
+                // 라이브 토큰을 갱신하므로 저장본이 낡으면 401 오탐(잘 쓰는데 "재로그인 필요")이
+                // 난다. 비활성 계정은 라이브가 그 계정이 아니므로 저장 스냅샷을 쓴다.
+                let blob: Data?
+                if isActive, let live = try? io.readLiveSnapshot() { blob = live.keychainBlob }
+                else { blob = (try? store.secret(for: profile.id))?.keychainBlob }
+                guard let blob else { continue }
                 do {
-                    guard let snap = try await UsageFetcher.fetch(keychainBlob: secret.keychainBlob)
+                    guard let snap = try await UsageFetcher.fetch(keychainBlob: blob)
                     else { continue }
                     usage[profile.id] = snap
                     // 조회 성공 = 토큰 살아있음 → 잘못 남은 재로그인 마킹 자가 해제
@@ -141,11 +150,10 @@ final class AppState: ObservableObject {
                     }
                 } catch is UsageFetcherError {
                     // 401/403 = 이 계정의 토큰이 거부됨. 계정별 토큰으로 조회하므로 오귀인 불가.
-                    // - 활성 계정: 토큰이 신선해야 정상인데 거부됨 = 진짜 재로그인 필요.
+                    // - 활성 계정: 라이브 토큰으로 조회했는데도 거부 = 진짜 재로그인 필요.
                     // - 비활성 계정: 저장 토큰이 자연 만료(expiresAt 지남)면 정상 휴면이라 마킹 안 함
                     //   (전환하면 Claude Code가 갱신). 아직 유효기간인데 거부면 폐기된 것 → 마킹.
-                    let isActive = store.file.activeAccountID == profile.id
-                    let stillValid = (UsageFetcher.expiresAt(from: secret.keychainBlob) ?? .distantPast) > Date()
+                    let stillValid = (UsageFetcher.expiresAt(from: blob) ?? .distantPast) > Date()
                     if (isActive || stillValid), !profile.needsReauth {
                         try? store.setNeedsReauth(profile.id, true)
                         reauthChanged = true
@@ -315,6 +323,12 @@ final class AppState: ObservableObject {
             lastReconcileAt = now
             try? await switcher.adoptLiveAccountIfUnregistered()
             try? await switcher.reconcile()
+        }
+        // 활성 계정 스냅샷을 5분마다 라이브(갱신된 토큰)와 동기화 — 오래 쓰다 크래시해도
+        // 스냅샷이 낡지 않게. reconcile은 활성 불변 시 되저장을 건너뛰므로 이 보강이 그 틈을 메운다.
+        if now.timeIntervalSince(lastActiveSnapshotSyncAt) >= Self.activeSnapshotSyncInterval {
+            lastActiveSnapshotSyncAt = now
+            await switcher.refreshActiveSnapshotIfStable()
         }
 
         // 배치 내 모든 hit는 스캔 시점의 활성 계정에 귀속 —

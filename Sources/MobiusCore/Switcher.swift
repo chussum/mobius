@@ -30,6 +30,19 @@ public final class Switcher: @unchecked Sendable {
         return profile.id
     }
 
+    /// 활성 계정의 스냅샷을 라이브(claude가 갱신하는 최신 토큰)와 동기화한다.
+    /// "떠날 때만 되저장" 방식의 틈을 메운다 — 한 계정을 오래 쓰다 크래시해도 스냅샷이
+    /// 낡지 않게. 안정 읽기(값 2회 일치)로 토큰/이메일 불일치 레이스를 피한다(실패 기록 2·9).
+    /// OAuth 갱신이 아니라 이미 갱신된 라이브 사본을 저장할 뿐이라 안전하다.
+    public func refreshActiveSnapshotIfStable() async {
+        guard let email = try? io.liveEmail(),
+              let profile = store.file.accounts.first(where: { $0.emailAddress == email }),
+              profile.id == store.file.activeAccountID else { return }
+        guard let (live, stableEmail) = await io.readStableLiveSnapshot(),
+              stableEmail == email else { return }
+        try? store.setSecret(live, for: profile.id)
+    }
+
     public func switchTo(_ id: UUID) throws {
         guard store.file.accounts.contains(where: { $0.id == id }) else {
             throw SwitcherError.unknownAccount

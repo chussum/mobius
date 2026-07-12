@@ -150,10 +150,12 @@ struct AccountCardView: View {
 
     private func gaugeRow(label: String, percent: Double, resetsAt: Date?) -> some View {
         HStack(spacing: 6) {
+            // fixedSize로 라벨을 항상 같은 크기로 렌더한다 — minimumScaleFactor를 쓰면
+            // 활성 카드(체크마크로 폭이 좁음)에서만 글자가 줄어 카드마다 크기가 달라졌다(실측).
             Text(label)
                 .font(.system(size: 10.5, weight: .medium)).foregroundStyle(.secondary)
-                .lineLimit(1).minimumScaleFactor(0.7)
-                .frame(width: 34, alignment: .leading)
+                .lineLimit(1).fixedSize()
+                .frame(width: 38, alignment: .leading)
             GeometryReader { geo in
                 ZStack(alignment: .leading) {
                     Capsule().fill(Color.secondary.opacity(0.18))
