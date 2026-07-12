@@ -169,7 +169,7 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .frame(width: 480, height: state.file.accounts.count <= 1 ? 700 : 560)
+        .frame(width: 580, height: state.file.accounts.count <= 1 ? 800 : 660)
     }
 
     // MARK: 실험실 — 여러 Mac 동기화
