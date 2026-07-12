@@ -21,7 +21,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
   <key>CFBundleExecutable</key><string>MobiusApp</string>
-  <key>CFBundleIdentifier</key><string>dev.mobius.app</string>
+  <key>CFBundleIdentifier</key><string>dev.chussum.mobius</string>
   <key>CFBundleName</key><string>Mobius</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
@@ -33,9 +33,18 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>NSHighResolutionCapable</key><true/>
 </dict></plist>
 PLIST
-# 고정 인증서가 있으면 그걸로 서명 (Keychain "항상 허용"이 리빌드 후에도 유지됨).
-# 없으면 ad-hoc 폴백 — Scripts/setup-signing.sh 로 인증서를 만들 수 있다.
-if security find-identity -v -p codesigning | grep -q "Mobius Dev Signing"; then
+# 서명 우선순위: Developer ID Application(공증 가능) > Mobius Dev Signing(자체서명) > ad-hoc.
+# Developer ID가 있으면 하드닝 런타임 + 보안 타임스탬프로 서명 → Scripts/make-dmg.sh가 공증까지 한다.
+# 없으면 기존 자체서명/ad-hoc 폴백(로컬 개발 빌드는 공증 없이 빠르게).
+DEVID=$(security find-identity -v -p codesigning | grep "Developer ID Application" | head -1 | awk '{print $2}')
+if [ -n "$DEVID" ]; then
+  # 공증 필수 조건: --options runtime(하드닝 런타임) + --timestamp(Apple TSA, 네트워크 필요).
+  # 중첩 Mach-O(mobius CLI)를 먼저 서명한 뒤 앱 번들을 서명한다 — --deep는 Apple 비권장이라
+  # 개별 서명. 메인 실행파일 MobiusApp은 앱 번들 서명 시 함께 봉인된다.
+  echo "🔏 Developer ID 서명 ($DEVID) + 하드닝 런타임"
+  codesign --force --options runtime --timestamp -s "$DEVID" "$APP/Contents/MacOS/mobius"
+  codesign --force --options runtime --timestamp -s "$DEVID" "$APP"
+elif security find-identity -v -p codesigning | grep -q "Mobius Dev Signing"; then
   # 서명 실패(중복 인증서로 ambiguous 등)를 조용히 지나치면 linker-signed adhoc으로
   # 남아 전환마다 승인창이 뜬다 — 명시적으로 실패시킨다.
   codesign --force -s "Mobius Dev Signing" "$APP" || {

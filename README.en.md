@@ -42,23 +42,25 @@ Grab the latest `Mobius-x.y.z.dmg` from the
 
 Open the DMG and **drag Mobius into the Applications folder**. Done.
 
-### 3. First launch — don't worry about the "unidentified developer" warning
+### 3. First launch
 
-Mobius is an open-source app that isn't notarized by Apple, so the first launch may
-show a warning like *"'Mobius' can't be opened because it is from an unidentified
-developer."* You only need to do this **once**:
+Just **double-click Mobius** in Applications and it opens right away. Release builds are
+signed with an Apple **Developer ID** and **notarized**, so there's no "unidentified
+developer" warning.
 
-1. Open **System Settings → Privacy & Security**
-2. Near the bottom, next to *"Mobius was blocked…"*, click **"Open Anyway"**
-3. Confirm with **Open** in the dialog
+<details>
+<summary>If you built from source and see a warning</summary>
+
+<br>
+
+Unsigned/self-signed builds (not notarized) may show *"'Mobius' can't be opened because it
+is from an unidentified developer"* on first launch. Just do this **once**: right-click the
+app → **Open**, or go to **System Settings → Privacy & Security** and click **"Open Anyway"**.
 
 <p align="center">
-  <img src="docs/images/gatekeeper-ko.png" width="480" alt="System Settings → Privacy & Security — the 'Open Anyway' button next to the block message">
+  <img src="docs/images/gatekeeper-ko.png" width="440" alt="System Settings → Privacy & Security — the 'Open Anyway' button next to the block message (screenshot in Korean)">
 </p>
-
-> Scroll down in System Settings → Privacy & Security and the **"Open Anyway"** button appears, as shown above (screenshot in Korean).
-
-(On some macOS versions, right-clicking the app in Finder → **Open** also works.)
+</details>
 
 Once running, Mobius lives in the **menu bar as an ∞ icon** — no Dock icon. Closing
 the window doesn't quit it; it keeps watching. Enable "Launch at login" in Settings
@@ -68,6 +70,7 @@ for extra convenience.
 > `Scripts/make-app.sh && open dist/Mobius.app`
 > (run `Scripts/setup-signing.sh` once for a stable signing certificate).
 > Install the `mobius` CLI via app **Settings → mobius CLI → Install** or `Scripts/install-cli.sh`.
+> For release signing, notarization & distribution, see [docs/RELEASING.md](docs/RELEASING.md).
 
 ## Getting started
 

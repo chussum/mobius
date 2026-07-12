@@ -41,23 +41,24 @@ primary → fallback → 다시 primary. 끝없이 이어지는 뫼비우스 띠
 
 받은 DMG를 열고 **Mobius를 Applications 폴더로 드래그**하면 끝입니다.
 
-### 3. 처음 열 때 — "확인되지 않은 개발자" 경고가 떠도 놀라지 마세요
+### 3. 처음 열기
 
-Mobius는 Apple 공증(notarization)을 거치지 않은 오픈소스 앱이라, 처음 실행할 때
-macOS가 *"'Mobius'은(는) 확인되지 않은 개발자가 배포했기 때문에 열 수 없습니다"*
-같은 경고를 띄울 수 있습니다. **최초 1회만** 아래처럼 열어주면 됩니다:
+Applications의 **Mobius를 더블클릭**하면 바로 실행됩니다. 릴리스 버전은 Apple의
+**Developer ID 서명 + 공증(notarization)** 을 거치므로 "확인되지 않은 개발자" 경고 없이 열립니다.
 
-1. **시스템 설정 → 개인정보 보호 및 보안**으로 이동
-2. 아래쪽에 나타난 *"Mobius이(가) 차단되었습니다"* 옆의 **"그래도 열기"** 클릭
-3. 확인 창에서 다시 **열기**
+<details>
+<summary>소스에서 직접 빌드한 경우 경고가 뜬다면</summary>
+
+<br>
+
+공증되지 않은 자체빌드(자체서명/ad-hoc)는 처음 실행할 때 *"'Mobius'은(는) 확인되지 않은
+개발자가 배포했기 때문에 열 수 없습니다"* 경고가 뜰 수 있습니다. **최초 1회만** 앱을
+**우클릭 → 열기**, 또는 **시스템 설정 → 개인정보 보호 및 보안**에서 **"그래도 열기"** 를 눌러주세요.
 
 <p align="center">
-  <img src="docs/images/gatekeeper-ko.png" width="480" alt="시스템 설정 → 개인정보 보호 및 보안 — 차단 안내 옆의 '그래도 열기' 버튼">
+  <img src="docs/images/gatekeeper-ko.png" width="440" alt="시스템 설정 → 개인정보 보호 및 보안 — 차단 안내 옆의 '그래도 열기' 버튼">
 </p>
-
-> 시스템 설정 → 개인정보 보호 및 보안 화면을 아래로 내리면 위처럼 **"그래도 열기"** 버튼이 보입니다.
-
-(macOS 버전에 따라 Finder에서 앱을 **우클릭 → 열기**로도 통과할 수 있습니다.)
+</details>
 
 실행되면 Dock이 아니라 **메뉴바에 ∞ 아이콘**으로 상주합니다. 창을 닫아도 계속 지켜보고
 있으니 안심하세요. 설정에서 "로그인 시 자동 시작"을 켜두면 더 편합니다.
@@ -66,6 +67,7 @@ macOS가 *"'Mobius'은(는) 확인되지 않은 개발자가 배포했기 때문
 > `Scripts/make-app.sh && open dist/Mobius.app`
 > (고정 서명 인증서는 최초 1회 `Scripts/setup-signing.sh`).
 > 터미널용 `mobius` CLI는 앱 **설정 → CLI → 설치** 버튼 또는 `Scripts/install-cli.sh`.
+> 릴리스 서명·공증·배포는 [docs/RELEASING.md](docs/RELEASING.md) 참고.
 
 ## 시작하기
 
