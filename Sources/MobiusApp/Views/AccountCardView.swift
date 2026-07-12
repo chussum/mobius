@@ -112,10 +112,16 @@ struct AccountCardView: View {
         .contentShape(Rectangle())
     }
 
-    // 리셋 카운트다운은 자동 Fallback이 켜져 있을 때만 표시.
-    // 수동 모드에서는 한도 추적이 UX에 의미가 없으므로 tier 설명으로 대체한다.
+    // 상단 "리셋까지" 카운트다운은 계정이 **전반적으로** 소진일 때만 — 자동 Fallback 켬 + 한도 기록.
+    // 단, usage로 볼 때 5시간·주간엔 여유가 있고 모델 스코프(Fable 등)만 100%면, 계정은 다른
+    // 모델로 쓸 수 있으므로 상단 알람을 숨긴다 (그 한도는 아래 모델별 게이지가 이미 보여준다).
+    private var generallyLimited: Bool {
+        guard let u = usage else { return true } // usage 모르면 보수적으로 표시
+        let five = u.fiveHourPercent ?? 0, week = u.sevenDayPercent ?? 0
+        return five >= 100 || week >= 100
+    }
     @ViewBuilder private var statusLine: some View {
-        if autoSwitchOn, let rl = profile.rateLimit, rl.resetsAt > now {
+        if autoSwitchOn, let rl = profile.rateLimit, rl.resetsAt > now, generallyLimited {
             let mins = max(0, Int(rl.resetsAt.timeIntervalSince(now) / 60))
             Label(loc("리셋까지 %d시간 %d분", mins / 60, mins % 60), systemImage: "hourglass")
                 .font(.system(size: 10)).foregroundStyle(.orange)
