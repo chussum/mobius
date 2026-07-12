@@ -56,6 +56,12 @@ final class AppState: ObservableObject {
     private var lastActiveSnapshotSyncAt = Date.distantPast
     static let reconcileInterval: TimeInterval = 15
     static let activeSnapshotSyncInterval: TimeInterval = 5 * 60 // 활성 계정 토큰 스냅샷 동기화
+    // 만료 임박 폴백 자동 refresh: 1시간마다 스윕, 만료 3일 전부터, 계정당 최소 6시간 간격.
+    private var lastProactiveRefreshSweepAt = Date.distantPast
+    private var lastProactiveRefreshAt: [UUID: Date] = [:]
+    static let proactiveRefreshSweepInterval: TimeInterval = 3600
+    static let proactiveRefreshRenewWindow: TimeInterval = 3 * 24 * 3600
+    static let proactiveRefreshPerAccountGate: TimeInterval = 6 * 3600
 
     init() {
         let env = MobiusEnvironment.live()
@@ -217,6 +223,37 @@ final class AppState: ObservableObject {
         }
     }
 
+    /// 만료 임박한 폴백의 refresh 토큰을 미리 갱신한다 — refresh가 새 refresh 토큰(연장된
+    /// 만료)을 주므로, 안 쓰던 폴백이 몇 주 뒤 조용히 죽는 것을 막는다. 폴백만(활성 제외),
+    /// **만료 3일 이내**일 때만, 계정당 **6시간 이상 간격**으로만 호출(→ 블락 위험 미미).
+    /// 성공하면 만료일이 멀어져 다음 스윕엔 대상에서 빠진다. 이미 만료/토큰없음이면
+    /// checker가 네트워크 0으로 needsReauth 마킹.
+    private func proactiveRefreshExpiringFallbacks(now: Date) async {
+        let active = store.file.activeAccountID
+        var changed = false
+        for p in store.file.accounts where p.id != active && !p.needsReauth {
+            guard let snap = try? store.secret(for: p.id),
+                  let exp = CredentialBlob.refreshTokenExpiresAt(from: snap.keychainBlob),
+                  exp.timeIntervalSince(now) < Self.proactiveRefreshRenewWindow,
+                  (lastProactiveRefreshAt[p.id] ?? .distantPast)
+                      < now.addingTimeInterval(-Self.proactiveRefreshPerAccountGate)
+            else { continue }
+            lastProactiveRefreshAt[p.id] = now
+            let r = await fallbackChecker.check(p.id, activeAccountID: active, now: now, allowNetwork: true)
+            switch r {
+            case .refreshedAlive:
+                changed = true
+            case .dead, .locallyDead, .noRefreshToken, .storeFailed:
+                changed = true
+                notify(title: loc("재로그인 필요"),
+                       body: loc("%@ 계정의 로그인이 만료됐어요. 카드의 '다시 로그인'을 눌러주세요.", p.nickname))
+            default:
+                break
+            }
+        }
+        if changed { MobiusNotification.postAccountsChanged(); reload() }
+    }
+
     /// 스냅샷에서 소진된(≥100%) 한도들의 가장 이른 실제 리셋 시각. 없으면 nil.
     private func earliestExhaustedReset(_ s: UsageSnapshot) -> Date? {
         var dates: [Date] = []
@@ -376,6 +413,11 @@ final class AppState: ObservableObject {
         if now.timeIntervalSince(lastActiveSnapshotSyncAt) >= Self.activeSnapshotSyncInterval {
             lastActiveSnapshotSyncAt = now
             await switcher.refreshActiveSnapshotIfStable()
+        }
+        // 만료 임박 폴백 자동 refresh (저빈도 스윕) — 안 쓰던 폴백이 조용히 죽는 것 방지.
+        if now.timeIntervalSince(lastProactiveRefreshSweepAt) >= Self.proactiveRefreshSweepInterval {
+            lastProactiveRefreshSweepAt = now
+            await proactiveRefreshExpiringFallbacks(now: now)
         }
 
         // 배치 내 모든 hit는 스캔 시점의 활성 계정에 귀속 —

@@ -67,9 +67,12 @@ Sources/MobiusApp/        SwiftUI 메뉴바 앱 + AppState + Views/ + LoginFlow 
   빈 토큰을 그대로 보내면 서버가 `invalid_request_error`(← invalid_grant 아님, 만료가 아니라 형식).
 - **활성 계정은 절대 refresh 안 함**(claude가 라이브 관리 → 동시 로테이션=세션 파괴).
   refresh는 **폴백 전용** + 회전 토큰 **원자 저장**(실패 시 needsReauth로 복구 유도).
-- **트리거**: 팝오버는 **네트워크 0 로컬 검사만**(빈/시간만료 refresh 토큰 즉시 플래그).
-  실제 네트워크 refresh는 **자동 폴백 전환 직전에만**(onTick(A)가 매 틱 재시도하므로 죽은 폴백은
-  스킵→다음 폴백 자동 선택). → 매 팝오버 호출 없음 = 블락 위험 최소화.
+- **트리거**: (1) 팝오버 = **네트워크 0 로컬 검사만**(빈/시간만료 refresh 토큰 즉시 플래그),
+  (2) **자동 폴백 전환 직전** = 실제 refresh(onTick(A)가 매 틱 재시도 → 죽은 폴백 스킵→다음 자동),
+  (3) **수동 전환(계정 클릭)** = 대상 계정 refresh 1회(살았는지+신선한 토큰), (4) **만료 임박
+  자동 갱신** = 폴백의 refreshTokenExpiresAt가 3일 이내면 1시간 스윕·계정당 6시간 간격으로 미리
+  refresh(안 쓰던 폴백이 몇 주 뒤 조용히 죽는 것 방지). refresh는 access·refresh 토큰과 두 만료를
+  모두 갱신. → 매 팝오버 호출 없음 = 블락 위험 최소화.
 
 ### macOS 26 (Tahoe) 환경
 - 메뉴바 아이콘은 Control Center가 호스팅 — CGWindowList의 layer/owner로 존재 확인이 어려움.
