@@ -96,7 +96,7 @@
 "글로벌 메모리 (CLAUDE.md)" = "Global memory (CLAUDE.md)";
 "Claude가 배워 둔 내용을 함께 써서, 어느 Mac에서든 똑같이 똑똑해져요." = "Share what Claude has learned, so it's equally smart on every Mac.";
 "플러그인 목록" = "Plugin list";
-"설치한 플러그인 구성을 맞춰요. 플러그인 본체는 각 Mac이 다시 받아요." = "Keeps your installed plugin list in step. Each Mac re-downloads the plugins themselves.";
+"어떤 플러그인을 쓰는지 목록만 맞춰요. 실제 파일은 각 Mac이 알아서 다시 내려받아요." = "Only the list of plugins you use is synced. Each Mac re-downloads the actual files on its own.";
 "한쪽 Mac에서 지우면" = "When one Mac deletes a file";
 "다른 Mac에는 남겨두기" = "Keep it on other Macs";
 "다른 Mac에서도 지우기" = "Delete it on other Macs too";

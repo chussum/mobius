@@ -248,7 +248,7 @@ struct SettingsView: View {
                 categoryRow(SyncCategory.globalMemory.rawValue, loc("글로벌 메모리 (CLAUDE.md)"),
                             loc("Claude가 배워 둔 내용을 함께 써서, 어느 Mac에서든 똑같이 똑똑해져요."))
                 categoryRow(SyncCategory.pluginConfig.rawValue, loc("플러그인 목록"),
-                            loc("설치한 플러그인 구성을 맞춰요. 플러그인 본체는 각 Mac이 다시 받아요."))
+                            loc("어떤 플러그인을 쓰는지 목록만 맞춰요. 실제 파일은 각 Mac이 알아서 다시 내려받아요."))
 
                 VStack(alignment: .leading, spacing: 3) {
                     Picker(loc("한쪽 Mac에서 지우면"), selection: $syncPropagateDeletes) {
