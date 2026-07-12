@@ -155,6 +155,10 @@ h2 .tag{font-size:12px;vertical-align:middle;position:relative;top:-4px;
 .callout{margin-top:8px;background:var(--accent-dim);border:1px solid rgba(89,166,255,.25);
   border-radius:12px;padding:16px 18px;font-size:13.5px;color:var(--muted)}
 .callout b{color:var(--ink)}
+.step-shot{margin-top:14px;max-width:420px}
+.step-shot img{display:block;width:100%;border-radius:10px;border:1px solid var(--line)}
+.step-shot figcaption{margin-top:8px;font-size:12.5px;color:var(--faint)}
+.step-shot figcaption b{color:var(--muted);font-weight:600}
 
 /* outro */
 .outro{text-align:center;padding:130px 0 120px}
@@ -400,6 +404,10 @@ footer{border-top:1px solid var(--line);padding:34px 0;color:var(--faint);font-s
         <div>
           <h3 data-i18n="st2_h">Open it (once, the long way)</h3>
           <p data-i18n="st2_p">Mobius isn't notarized by Apple, so the first launch is blocked. Go to <b>System Settings → Privacy &amp; Security</b> and click <b>"Open Anyway"</b>. Only needed once.</p>
+          <figure class="step-shot">
+            <img src="images/gatekeeper-ko.png" width="497" alt="System Settings → Privacy & Security showing the Open Anyway button next to the Mobius block message">
+            <figcaption data-i18n-html="st2_cap">In <b>System Settings → Privacy &amp; Security</b>, the <b>"Open Anyway"</b> button appears next to the message.</figcaption>
+          </figure>
         </div>
       </div>
       <div class="step rv">
@@ -474,6 +482,7 @@ const ko = {
   in_eb:"설치", in_h2:"90초면 첫 전환까지 끝납니다.",
   st1_h:"다운로드 & 드래그", st1_p:"Releases에서 DMG를 받아 열고, Mobius를 Applications 폴더로 드래그하세요.",
   st2_h:"첫 실행 (한 번만 우회)", st2_p:"Apple 공증을 받지 않아 첫 실행이 차단됩니다. <b>시스템 설정 → 개인정보 보호 및 보안</b>에서 <b>\"그래도 열기\"</b>를 눌러주세요. 딱 한 번입니다.",
+  st2_cap:"<b>시스템 설정 → 개인정보 보호 및 보안</b>으로 내려가면 차단 안내 옆에 <b>\"그래도 열기\"</b> 버튼이 나타납니다.",
   st3_h:"계정 추가", st3_p:"메뉴바 ∞ 아이콘 → <b>계정 추가</b>. 각 Claude 계정에 한 번씩 로그인하면 이후는 Mobius가 알아서 합니다.",
   in_note:"<b>왜 경고가 뜨나요?</b> Mobius는 Apple 공증 대신 오픈소스를 선택했습니다. 실행되는 모든 코드를 직접 읽을 수 있고, <code style=\"font-family:var(--mono);font-size:12px\">Scripts/make-app.sh</code>로 직접 빌드할 수도 있습니다.",
   out_h2:"한도 눈치보기는 이제 그만.", out_sub:"계정들을 루프에 올려두고, 여러 개라는 사실을 잊어버리세요.",

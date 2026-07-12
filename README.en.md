@@ -52,6 +52,12 @@ developer."* You only need to do this **once**:
 2. Near the bottom, next to *"Mobius was blocked…"*, click **"Open Anyway"**
 3. Confirm with **Open** in the dialog
 
+<p align="center">
+  <img src="docs/images/gatekeeper-ko.png" width="480" alt="System Settings → Privacy & Security — the 'Open Anyway' button next to the block message">
+</p>
+
+> Scroll down in System Settings → Privacy & Security and the **"Open Anyway"** button appears, as shown above (screenshot in Korean).
+
 (On some macOS versions, right-clicking the app in Finder → **Open** also works.)
 
 Once running, Mobius lives in the **menu bar as an ∞ icon** — no Dock icon. Closing
