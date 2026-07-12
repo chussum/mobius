@@ -241,6 +241,35 @@ footer{border-top:1px solid var(--line);padding:34px 0;color:var(--faint);font-s
   </div>
 </div>
 
+<section id="who">
+  <div class="wrap">
+    <p class="eyebrow rv" data-i18n="who_eb">Who it's for</p>
+    <h2 class="rv" data-i18n="who_h2">You already have more than one account.</h2>
+    <p class="lead rv" data-i18n="who_lead">Mobius is for people who keep separate Claude accounts for separate parts of their life — and just want to move between them cleanly.</p>
+    <div class="grid">
+      <div class="card rv">
+        <div class="ic"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#59a6ff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 21V7a2 2 0 0 1 2-2h5V3a1 1 0 0 1 1-1h0M11 21V5M11 9h9a1 1 0 0 1 1 1v11M3 21h18"/></svg></div>
+        <h3 data-i18n="who1_h">Work ⇄ personal</h3>
+        <p data-i18n="who1_p">Company Claude for the day job, your own account for side projects. Move to whichever the moment calls for — no logging out and back in each time.</p>
+      </div>
+      <div class="card rv">
+        <div class="ic"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#59a6ff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM22 21v-2a4 4 0 0 0-3-3.9M16 3.1a4 4 0 0 1 0 7.8"/></svg></div>
+        <h3 data-i18n="who2_h">Team seat + personal plan</h3>
+        <p data-i18n="who2_p">A team seat from work and the Pro or Max plan you pay for yourself, tidied into one menu bar. You can always see which one is active.</p>
+      </div>
+      <div class="card rv">
+        <div class="ic"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#59a6ff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="12" rx="2"/><path d="M8 20h8M12 16v4M6 8l2.5 2L6 12"/></svg></div>
+        <h3 data-i18n="who3_h">CLI and Desktop, in step</h3>
+        <p data-i18n="who3_p">Keep Claude Code in the terminal and Claude Desktop on the same account, so wherever you pick up, your login never drifts apart.</p>
+      </div>
+    </div>
+    <p class="loop-note rv">
+      <svg width="15" height="15" viewBox="0 0 16 16" fill="none"><path d="M4 7V5a4 4 0 0 1 8 0v2M3.5 7h9a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1V8a1 1 0 0 1 1-1z" stroke="#565e6b" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <span data-i18n="who_note">Mobius moves you between accounts you already have — it isn't a way to spread one workload across accounts to get around limits. Each account keeps working within its own terms and limits.</span>
+    </p>
+  </div>
+</section>
+
 <section id="loop">
   <div class="wrap">
     <p class="eyebrow rv" data-i18n="loop_eb">The loop</p>
@@ -415,6 +444,12 @@ const ko = {
   h1sub:"한도가 차면 다음 계정으로 넘어가고, 리셋되면 원래 계정으로 돌아옵니다. 당신은 계속 일만 하세요 — 루프는 알아서 돌아갑니다.",
   cta_dl:"macOS용 다운로드", cta_how:"루프 동작 보기",
   meta:"macOS 14+ · 무료 오픈소스 · Claude Code CLI + Claude Desktop",
+  who_eb:"이런 분께", who_h2:"이미 계정이 하나가 아니잖아요.",
+  who_lead:"Mobius는 삶의 영역마다 Claude 계정을 따로 두는 분들을 위한 앱이에요 — 그 사이를 깔끔하게 오가고 싶을 뿐인 분들.",
+  who1_h:"회사 ⇄ 개인", who1_p:"업무는 회사 Claude로, 사이드 프로젝트는 내 계정으로. 매번 로그아웃하고 다시 로그인할 필요 없이 그때그때 맞는 계정으로 넘어가세요.",
+  who2_h:"팀 좌석 + 개인 요금제", who2_p:"회사에서 받은 팀 좌석과 직접 결제한 Pro·Max 요금제를 한 메뉴바에 정리하세요. 지금 어느 계정이 활성인지 늘 한눈에 보입니다.",
+  who3_h:"CLI와 Desktop을 나란히", who3_p:"터미널의 Claude Code와 Claude Desktop이 같은 계정을 보도록 유지해요. 어디서 이어가든 로그인이 어긋나지 않습니다.",
+  who_note:"Mobius는 이미 가지고 있는 여러 계정을 상황에 맞게 오가게 해줄 뿐, 한 작업을 여러 계정에 쪼개 한도를 늘리는 도구가 아니에요. 각 계정은 각자의 약관과 한도 안에서 그대로 동작합니다.",
   loop_eb:"루프", loop_h2:"소진. 전환. 회복. 반복.",
   loop_lead:"메뉴바 아이콘 하나로 전체 상황이 읽힙니다 — primary가 일할 땐 파랑, fallback이 대신 뛰는 동안엔 앰버, 루프가 닫히면 다시 파랑.",
   s1_h:"Primary가 일하는 중", s1_p:"메인 계정으로 작업하는 동안 Mobius는 로컬 세션 로그만 조용히 읽습니다. 한도 감지는 네트워크를 전혀 쓰지 않습니다.",
