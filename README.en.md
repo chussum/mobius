@@ -97,6 +97,20 @@ Press **⋯ → "Connect Claude Desktop"** on an account card, then follow the g
 ① Desktop opens ② sign in with that account ③ it's saved automatically.
 Once connected, switching accounts also switches Desktop (2–5s restart).
 
+### Continue on any Mac (Labs)
+
+Turn on **Settings → Labs → Sync with other Macs** to share conversation history, plans,
+skills, global memory (CLAUDE.md), and your plugin list across Macs via iCloud Drive,
+Google Drive, or any folder you pick. Continue conversations anywhere — and what Claude
+learns on one Mac, it knows on all of them.
+
+- **Your logins never move** — credentials, the account list, and secret tokens are never
+  synced (blocked at the code level, guaranteed by tests).
+- Only items you turn on on a given Mac take part; a Mac with sync off is untouched.
+- Deletion is your choice: "keep on other Macs" (default) or "delete on other Macs too"
+  (moved to a trash folder and kept 30 days — never wiped instantly).
+- Continuing conversations requires the same project folder path on both Macs.
+
 ## Terminal usage (optional)
 
 The app covers everything, but if you prefer the terminal, the `mobius` command is

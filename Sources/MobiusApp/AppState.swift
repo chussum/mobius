@@ -117,6 +117,64 @@ final class AppState: ObservableObject {
         }
     }
 
+    // MARK: 여러 Mac 동기화 (실험)
+
+    enum SyncUIStatus: Equatable {
+        case idle, running
+        case done(SyncReport, Date)
+        case failed(String, Date)
+    }
+    @Published var syncStatus: SyncUIStatus = .idle
+    static let syncInterval: TimeInterval = 15 * 60
+
+    private var syncMachineID: String {
+        let d = UserDefaults.standard
+        if let id = d.string(forKey: "syncMachineID") { return id }
+        let id = UUID().uuidString
+        d.set(id, forKey: "syncMachineID")
+        return id
+    }
+
+    /// manual=false(자동)는 15분 게이트. 파일 IO는 백그라운드, 결과만 메인 반영.
+    func syncNow(manual: Bool = false) {
+        let d = UserDefaults.standard
+        guard d.bool(forKey: "syncEnabled") else { return }
+        if !manual {
+            let last = d.double(forKey: "lastSyncAt")
+            guard Date().timeIntervalSince1970 - last >= Self.syncInterval else { return }
+        }
+        guard syncStatus != .running else { return }
+        let cats = (d.stringArray(forKey: "syncCategories") ?? [])
+            .compactMap(SyncCategory.init(rawValue:))
+        guard !cats.isEmpty else {
+            if manual { syncStatus = .failed(loc("동기화할 항목을 하나 이상 켜주세요"), Date()) }
+            return
+        }
+        guard let root = SyncSupport.resolvedSyncRoot() else {
+            if manual { syncStatus = .failed(loc("보관 위치에 접근할 수 없어요"), Date()) }
+            return
+        }
+        syncStatus = .running
+        d.set(Date().timeIntervalSince1970, forKey: "lastSyncAt")
+        let claudeDir = env.claudeDir
+        let machineID = syncMachineID
+        let propagate = d.bool(forKey: "syncPropagateDeletes")
+        Task { @MainActor in
+            let report = await Task.detached(priority: .utility) {
+                let engine = SyncEngine(
+                    machineID: machineID,
+                    localTrashDir: claudeDir.appendingPathComponent(".mobius-trash"))
+                return engine.sync(categories: cats, claudeDir: claudeDir,
+                                   syncRoot: root, propagateDeletes: propagate)
+            }.value
+            if let first = report.errors.first, report.uploaded + report.downloaded == 0 {
+                syncStatus = .failed(first, Date())
+            } else {
+                syncStatus = .done(report, Date())
+            }
+        }
+    }
+
     // MARK: 업데이트 확인
 
     enum UpdateStatus: Equatable { case idle, checking, upToDate, available(ReleaseInfo), failed }
@@ -183,6 +241,7 @@ final class AppState: ObservableObject {
 
     func tick() async {
         checkForUpdates() // 내부에서 24시간 게이트 — 실제 조회는 하루 1회
+        syncNow()         // 내부에서 15분 게이트 — 켜져 있을 때만 동작
         // 로그인 창이 열려 있는 동안은 reconcile/자동 전환이 LoginFlow의
         // 자격증명 변경 감지와 경합하지 않도록 전체를 건너뛴다.
         // Desktop 가이드 캡처 중에도 동일 — 자동 전환이 Desktop을 재실행하면

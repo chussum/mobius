@@ -1,5 +1,6 @@
 import SwiftUI
 import ServiceManagement
+import MobiusCore
 
 struct SettingsView: View {
     @EnvironmentObject var state: AppState
@@ -137,10 +138,11 @@ struct SettingsView: View {
                     Text(loc("자동 전환 시 Claude Desktop이 종료 후 재실행됩니다"))
                         .font(.caption).foregroundStyle(.secondary)
                 }
-                Toggle(loc("계정 전환 시 Claude Desktop도 전환 (experimental)"), isOn: Binding(
+                Toggle(loc("계정 전환 시 Claude Desktop도 전환"), isOn: Binding(
                     get: { state.file.desktopSyncEnabled },
                     set: { state.setDesktopSync($0) }))
             }
+            labsSection
             Section(loc("업데이트")) {
                 HStack {
                     Text(loc("현재 버전"))
@@ -168,6 +170,144 @@ struct SettingsView: View {
         }
         .formStyle(.grouped)
         .frame(width: 480, height: state.file.accounts.count <= 1 ? 700 : 560)
+    }
+
+    // MARK: 실험실 — 여러 Mac 동기화
+
+    @AppStorage("syncEnabled") private var syncEnabled = false
+    @AppStorage("syncProvider") private var syncProvider = "icloud"
+    @AppStorage("syncCustomPath") private var syncCustomPath = ""
+    @AppStorage("syncPropagateDeletes") private var syncPropagateDeletes = false
+    @State private var syncCategories =
+        Set(UserDefaults.standard.stringArray(forKey: "syncCategories") ?? [])
+    @State private var sessionsSizeText = ""
+
+    private func categoryBinding(_ raw: String) -> Binding<Bool> {
+        Binding(
+            get: { syncCategories.contains(raw) },
+            set: { on in
+                if on { syncCategories.insert(raw) } else { syncCategories.remove(raw) }
+                UserDefaults.standard.set(Array(syncCategories), forKey: "syncCategories")
+            })
+    }
+
+    private func categoryRow(_ raw: String, _ title: String, _ desc: String) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Toggle(title, isOn: categoryBinding(raw))
+            Text(desc).font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private var labsSection: some View {
+        Section(loc("실험실")) {
+            VStack(alignment: .leading, spacing: 3) {
+                Toggle(loc("다른 Mac과 동기화"), isOn: $syncEnabled)
+                Text(loc("이 Mac에서 켠 항목만 동기화에 참여해요. 끄면 이 Mac은 아무 영향도 받지 않아요."))
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if syncEnabled {
+                Text(.init(loc("🔒 **로그인 정보는 옮기지 않아요** — 계정 자격증명, 계정 목록, 비밀 토큰은 어떤 경우에도 동기화되지 않습니다. 옮겨지는 건 대화 기록·플랜·스킬 같은 작업 데이터뿐이에요.")))
+                    .font(.system(size: 11)).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(10)
+                    .background(RoundedRectangle(cornerRadius: 8)
+                        .fill(Color(red: 0.35, green: 0.65, blue: 1).opacity(0.10)))
+
+                Picker(loc("보관 위치"), selection: $syncProvider) {
+                    if SyncSupport.icloudRoot() != nil { Text("iCloud Drive").tag("icloud") }
+                    if SyncSupport.gdriveRoot() != nil { Text("Google Drive").tag("gdrive") }
+                    Text(loc("직접 선택한 폴더")).tag("custom")
+                }
+                if syncProvider == "custom" {
+                    HStack {
+                        Text(syncCustomPath.isEmpty ? loc("폴더가 선택되지 않았어요") : syncCustomPath)
+                            .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                            .truncationMode(.middle)
+                        Spacer()
+                        Button(loc("다른 폴더 선택…")) { pickSyncFolder() }
+                    }
+                }
+
+                categoryRow(SyncCategory.sessions.rawValue,
+                            loc("대화 기록") + (sessionsSizeText.isEmpty ? "" : " · \(sessionsSizeText)"),
+                            loc("다른 Mac에서 대화를 이어서 할 수 있어요. 처음 한 번은 오래 걸려요."))
+                    .onAppear {
+                        guard sessionsSizeText.isEmpty else { return }
+                        let dir = state.env.projectsDir
+                        Task.detached(priority: .utility) {
+                            let size = SyncSupport.formatSize(SyncSupport.directorySize(dir))
+                            await MainActor.run { sessionsSizeText = size }
+                        }
+                    }
+                categoryRow(SyncCategory.plans.rawValue, loc("플랜 문서"),
+                            loc("작성해 둔 계획 파일을 함께 봐요."))
+                categoryRow(SyncCategory.skills.rawValue, loc("스킬"),
+                            loc("직접 만든 스킬을 모든 Mac에서 써요."))
+                categoryRow(SyncCategory.globalMemory.rawValue, loc("글로벌 메모리 (CLAUDE.md)"),
+                            loc("Claude가 배워 둔 내용을 함께 써서, 어느 Mac에서든 똑같이 똑똑해져요."))
+                categoryRow(SyncCategory.pluginConfig.rawValue, loc("플러그인 목록"),
+                            loc("설치한 플러그인 구성을 맞춰요. 플러그인 본체는 각 Mac이 다시 받아요."))
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Picker(loc("한쪽 Mac에서 지우면"), selection: $syncPropagateDeletes) {
+                        Text(loc("다른 Mac에는 남겨두기")).tag(false)
+                        Text(loc("다른 Mac에서도 지우기")).tag(true)
+                    }
+                    Text(syncPropagateDeletes
+                         ? loc("다른 Mac에서는 바로 지워지지 않고 휴지통 폴더로 옮겨져 30일간 보관돼요.")
+                         : loc("지운 파일이 다른 Mac에서는 그대로 유지돼요. 가장 안전한 선택이에요."))
+                        .font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                HStack {
+                    Button(loc("지금 동기화")) { state.syncNow(manual: true) }
+                        .disabled(state.syncStatus == .running)
+                    Spacer()
+                    syncStatusRow
+                }
+                Text(loc("대화 이어 쓰기는 두 Mac의 프로젝트 폴더 경로가 같을 때 동작해요."))
+                    .font(.caption).foregroundStyle(.tertiary)
+            }
+        }
+    }
+
+    private func pickSyncFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = true
+        panel.prompt = loc("이 폴더 사용")
+        if panel.runModal() == .OK, let url = panel.url {
+            syncCustomPath = url.path
+            syncProvider = "custom"
+        }
+    }
+
+    @ViewBuilder private var syncStatusRow: some View {
+        switch state.syncStatus {
+        case .idle:
+            EmptyView()
+        case .running:
+            HStack(spacing: 6) { ProgressView().controlSize(.small); Text(loc("동기화하는 중…")) }
+                .font(.caption).foregroundStyle(.secondary)
+        case .done(let report, let at):
+            Text(loc("동기화됨 · 올림 %d · 받음 %d", report.uploaded, report.downloaded)
+                 + " · " + relative(at))
+                .font(.caption).foregroundStyle(.secondary)
+        case .failed(let reason, let at):
+            Text(loc("동기화하지 못했어요 — %@", reason) + " · " + relative(at))
+                .font(.caption).foregroundStyle(.orange)
+                .lineLimit(2).fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private func relative(_ date: Date) -> String {
+        let f = RelativeDateTimeFormatter()
+        f.unitsStyle = .short
+        return f.localizedString(for: date, relativeTo: Date())
     }
 
     @ViewBuilder private var updateStatusRow: some View {
