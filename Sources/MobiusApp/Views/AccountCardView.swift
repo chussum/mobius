@@ -139,11 +139,11 @@ struct AccountCardView: View {
     }
 
     private func gaugeRow(label: String, percent: Double, resetsAt: Date?) -> some View {
-        HStack(spacing: 6) {
+        HStack(spacing: 5) {
             Text(label)
                 .font(.system(size: 9, weight: .medium)).foregroundStyle(.tertiary)
                 .lineLimit(1).minimumScaleFactor(0.7)
-                .frame(width: 34, alignment: .leading)
+                .frame(width: 30, alignment: .leading)
             GeometryReader { geo in
                 ZStack(alignment: .leading) {
                     Capsule().fill(Color.secondary.opacity(0.18))
@@ -151,20 +151,19 @@ struct AccountCardView: View {
                         .frame(width: max(3, geo.size.width * min(percent, 100) / 100))
                 }
             }
-            // 바는 유연하게 — 공간이 부족하면 텍스트 대신 바가 줄어든다
-            .frame(minWidth: 36, maxWidth: 78)
+            // 바가 남는 가로 공간을 모두 채운다 (오른쪽 텍스트는 fixedSize라 자리를 먼저 확보)
+            .frame(minWidth: 40, maxWidth: .infinity)
             .frame(height: 4)
             Text("\(Int(percent))%")
                 .font(.system(size: 9, weight: .semibold))
                 .foregroundStyle(gaugeColor(percent))
                 .lineLimit(1).fixedSize()
-                .frame(width: 34, alignment: .trailing)
+                .frame(width: 32, alignment: .trailing)
             if let resetsAt, resetsAt > now {
                 Text(loc("초기화 %@", remainText(until: resetsAt)))
                     .font(.system(size: 9)).foregroundStyle(.tertiary)
-                    .lineLimit(1).fixedSize().layoutPriority(1) // 절대 잘리지 않게 — 바가 대신 줄어든다
+                    .lineLimit(1).fixedSize()
             }
-            Spacer(minLength: 0)
         }
     }
 
