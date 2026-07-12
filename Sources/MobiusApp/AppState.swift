@@ -15,6 +15,11 @@ final class AppState: ObservableObject {
     private var usageCacheLoaded = false
     private static let usageCacheKey = "usageCacheV1"
 
+    // 폴백 로그인 검증. 네트워크 refresh는 **자동 폴백 전환 직전에만**(호출 빈도 최소 → 블락 위험↓).
+    // 팝오버에서는 네트워크 0 로컬 검사(빈/만료 refresh 토큰 즉시 플래그)만 한다.
+    private var fallbackLocalTask: Task<Void, Never>?
+    lazy var fallbackChecker = FallbackAuthChecker(store: store)
+
     /// 마지막 성공 스냅샷 복원 — 비활성 계정은 저장 토큰이 만료되어(수 시간) 조회가 401로
     /// 실패할 수 있는데, 그때 빈 게이지 대신 마지막 값을 보여준다. 초기화 시각은 절대
     /// 시각이라 지나면 표기가 자연히 사라지고, 계정이 다시 활성화되면 값도 갱신된다.
@@ -167,6 +172,48 @@ final class AppState: ObservableObject {
                 reload()
             }
             saveUsageCache()
+        }
+    }
+
+    /// 팝오버 열 때 폴백 계정을 **네트워크 0 로컬 검사**만 한다 — 빈/시간만료 refresh 토큰을
+    /// 즉시 needsReauth로 플래그(fore.st 같은 손상 스냅샷 대응). 실제 네트워크 refresh는 하지
+    /// 않는다(계정 리스크 최소화 — 매 팝오버마다 서버 호출 안 함). 진짜 refresh 검증은
+    /// 자동 폴백 전환 직전에만 한다(preflightFallback).
+    func validateFallbacksLocally() {
+        guard fallbackLocalTask == nil else { return }
+        let active = store.file.activeAccountID
+        let now = Date()
+        let targets = store.file.accounts.filter { $0.id != active && !$0.needsReauth }
+        guard !targets.isEmpty else { return }
+        fallbackLocalTask = Task { @MainActor in
+            defer { fallbackLocalTask = nil }
+            var changed = false
+            for p in targets {
+                let r = await fallbackChecker.check(p.id, activeAccountID: active, now: now, allowNetwork: false)
+                if r == .noRefreshToken || r == .locallyDead {
+                    changed = true   // targets는 !needsReauth만 → 새 전이 → 1회 알림
+                    notify(title: loc("재로그인 필요"),
+                           body: loc("%@ 계정의 로그인이 만료됐어요. 카드의 '다시 로그인'을 눌러주세요.", p.nickname))
+                }
+            }
+            if changed { MobiusNotification.postAccountsChanged(); reload() }
+        }
+    }
+
+    /// 자동 폴백이 이 계정으로 넘어가기 **직전** 실제 refresh로 검증한다. 죽었으면(마킹됨)
+    /// false를 반환해 전환을 취소 — 다음 틱에 엔진(onTick)이 needsReauth를 제외하고 다음 폴백을
+    /// 고른다. 살아있거나(refresh 성공) 판단 불가(네트워크 오류)면 true(전환 진행).
+    private func preflightFallback(_ id: UUID, now: Date) async -> Bool {
+        let r = await fallbackChecker.check(id, activeAccountID: store.file.activeAccountID,
+                                            now: now, allowNetwork: true)
+        switch r {
+        case .dead, .locallyDead, .noRefreshToken, .storeFailed:
+            let name = store.file.accounts.first { $0.id == id }?.nickname ?? "?"
+            notify(title: loc("재로그인 필요"),
+                   body: loc("%@ 계정의 로그인이 만료돼 전환을 건너뛰었어요. '다시 로그인'을 눌러주세요.", name))
+            return false
+        default:
+            return true   // refreshedAlive / transient / notFallback → 전환 진행
         }
     }
 
@@ -346,13 +393,13 @@ final class AppState: ObservableObject {
                                                  recordedAt: now, modelScoped: hit.modelScoped)
                 }
             }
-            apply(engine.onRateLimitHit(file: store.file, hit: hit, now: now), now: now)
+            await apply(engine.onRateLimitHit(file: store.file, hit: hit, now: now), now: now)
         }
-        apply(engine.onTick(file: store.file, now: now), now: now)
+        await apply(engine.onTick(file: store.file, now: now), now: now)
         file = store.file
     }
 
-    private func apply(_ decision: Decision, now: Date) {
+    private func apply(_ decision: Decision, now: Date) async {
         switch decision {
         case .none: break
         case .allExhausted:
@@ -363,6 +410,11 @@ final class AppState: ObservableObject {
             notify(title: loc("한도 소진 — 자동 전환이 꺼져 있습니다"),
                    body: loc("%@ 계정이 한도에 도달했습니다. 수동으로 전환하세요.", name))
         case let .switchTo(id, reason):
+            // 전환 직전 검증: 자동 폴백(activeExhausted)으로 넘어가기 전에 대상 계정을 실제
+            // refresh로 확인한다. 죽었으면 취소(마킹됨) → 다음 틱에 엔진이 다음 폴백을 고른다.
+            if reason == .activeExhausted {
+                guard await preflightFallback(id, now: now) else { file = store.file; return }
+            }
             let fromID = store.file.activeAccountID
             do {
                 try switcher.switchTo(id)
@@ -395,6 +447,17 @@ final class AppState: ObservableObject {
     // MARK: 사용자 액션
 
     func manualSwitch(to id: UUID) {
+        // 재로그인 필요로 이미 마킹된 계정은 그대로 전환(이미 죽은 걸 앎). 아니면 클릭한 계정을
+        // **한 번 refresh** 해 살았는지 확인 + 신선한 토큰 확보 후 전환한다(전환 직전 검증과 동일).
+        let alreadyFlagged = store.file.accounts.first { $0.id == id }?.needsReauth ?? false
+        guard !alreadyFlagged else { performSwitch(to: id); return }
+        Task { @MainActor in
+            guard await preflightFallback(id, now: Date()) else { reload(); return } // 죽음 → 취소(마킹됨)
+            performSwitch(to: id)
+        }
+    }
+
+    private func performSwitch(to id: UUID) {
         let fromID = store.file.activeAccountID
         do {
             try switcher.switchTo(id)

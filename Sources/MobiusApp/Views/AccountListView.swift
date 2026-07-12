@@ -34,7 +34,7 @@ struct AccountListView: View {
                    value: state.desktopCapture)
         .frame(width: 410)
         .onReceive(clock) { now = $0 }
-        .onAppear { state.reload(); state.refreshUsageIfStale(); now = Date() }
+        .onAppear { state.reload(); state.refreshUsageIfStale(); state.validateFallbacksLocally(); now = Date() }
     }
 
     @State private var showFallbackInfo = false

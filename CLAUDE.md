@@ -52,6 +52,25 @@ Sources/MobiusApp/        SwiftUI 메뉴바 앱 + AppState + Views/ + LoginFlow 
   `seven_day.{...}` (utilization=백분율, resets_at=ISO8601 마이크로초).
 - 게이지는 **팝오버 열 때만** 조회(캐시 4분). 상시 폴링 없음 → 계정 리스크 최소화.
 
+### ★ OAuth 토큰 refresh (폴백 로그인 생사 판정 — claude 2.1.207 바이너리 실측)
+- `POST https://platform.claude.com/v1/oauth/token`, `Content-Type: application/json`,
+  body `{grant_type:"refresh_token", refresh_token, client_id:"9d1c250a-e61b-44d9-88ed-5944d1962f5e",
+  scope:"<blob.scopes 공백조인>"}`. 200 → `{access_token, refresh_token(회전), expires_in,
+  refresh_token_expires_in?, scope?}`.
+- **★ User-Agent 필수**: URLSession 기본 UA면 서버가 **400 `invalid_request_error`
+  "Invalid request format"** 로 거부하고, UA가 아예 없으면 **Cloudflare 403 code 1010**.
+  claude와 동일 UA(`claude-cli/<ver> (external, cli)`)를 **세션 `httpAdditionalHeaders`로** 실어야
+  통과한다(요청 setValue만으론 CFNetwork가 무시). UA 값 자체는 무관 — 있기만 하면 형식 통과.
+- **판정 신호는 refresh 결과뿐**(모호한 usage 401 아님): 성공=살아있음(+토큰 회전 저장),
+  `invalid_grant`=폐기(재로그인), 그 외 4xx/5xx/네트워크=transient(마킹 안 함, 오탐 방지).
+- **빈 refresh 토큰**(`refreshToken:""`, 실측 fore.st 손상 스냅샷)은 nil로 취급 → 재로그인 유도.
+  빈 토큰을 그대로 보내면 서버가 `invalid_request_error`(← invalid_grant 아님, 만료가 아니라 형식).
+- **활성 계정은 절대 refresh 안 함**(claude가 라이브 관리 → 동시 로테이션=세션 파괴).
+  refresh는 **폴백 전용** + 회전 토큰 **원자 저장**(실패 시 needsReauth로 복구 유도).
+- **트리거**: 팝오버는 **네트워크 0 로컬 검사만**(빈/시간만료 refresh 토큰 즉시 플래그).
+  실제 네트워크 refresh는 **자동 폴백 전환 직전에만**(onTick(A)가 매 틱 재시도하므로 죽은 폴백은
+  스킵→다음 폴백 자동 선택). → 매 팝오버 호출 없음 = 블락 위험 최소화.
+
 ### macOS 26 (Tahoe) 환경
 - 메뉴바 아이콘은 Control Center가 호스팅 — CGWindowList의 layer/owner로 존재 확인이 어려움.
 - **Bartender 같은 메뉴바 관리 앱이 새 앱 아이콘을 자동 숨김** → 안 보이면 Bartender 설정에서 표시.
@@ -190,6 +209,18 @@ Sources/MobiusApp/        SwiftUI 메뉴바 앱 + AppState + Views/ + LoginFlow 
     하위호환 디코딩 + 마이그레이션 테스트를 동반한다. (2) "빈 폴백 후 저장"은 조용한
     데이터 파괴 경로다 — 로드 실패 시 원본을 먼저 지켜라. (3) 개발자는 잦은 빌드로 이 경로를
     바로 밟지만, **업데이트만 하는 사용자에게 그대로 터진다** — 릴리스 전 구파일 로드 필수 확인.
+
+14. **폴백 refresh 400을 "토큰 만료"로 오귀인할 뻔 — 범인은 URLSession UA와 빈 토큰** —
+    폴백 로그인 검증용 OAuth refresh가 계속 **400 `invalid_request_error` "Invalid request
+    format"** 을 받았다. "토큰 만료 아니냐"는 추측이 자연스러웠지만 만료면 `invalid_grant`다
+    (형식 거부 ≠ 폐기). 실측 계측(파일 로그 + **더미 토큰 python 요청**으로 헤더 조합 격리)으로
+    두 원인을 밝혔다: (a) **URLSession 기본 UA를 서버가 형식 거부** — claude UA를 요청 setValue만
+    하면 CFNetwork가 무시하므로 **세션 `httpAdditionalHeaders`로** 실어야 한다(UA 없으면 Cloudflare
+    403 1010, 있으면 값 무관하게 통과). (b) **fore.st 스냅샷의 refreshToken이 빈 문자열** — 빈
+    토큰을 보내 형식 거부됐다. 교훈: (1) 4xx는 **본문의 error type을 봐라**(invalid_request vs
+    invalid_grant는 원인이 딴판). (2) URLSession vs 참조 클라이언트(python/curl)를 **더미 자격으로**
+    비교하면 형식/헤더 문제를 계정 위험 없이 격리할 수 있다. (3) 저장 스냅샷은 **빈 필드**로도 손상될
+    수 있으니 `!isEmpty` 가드로 nil 취급해 재로그인 유도.
 
 ## QA / 진행 상황
 
