@@ -6,6 +6,9 @@ import MobiusCore
 /// Mobius는 그 폴더에 파일을 읽고 쓸 뿐 별도 API·로그인이 필요 없다.
 enum SyncSupport {
     static func icloudRoot() -> URL? {
+        // 폴더 존재만으로는 부족 — 로그아웃 후에도 잔존할 수 있다.
+        // ubiquityIdentityToken == nil 이면 iCloud 계정 미로그인 (실측: 무서명 앱에서도 동작).
+        guard FileManager.default.ubiquityIdentityToken != nil else { return nil }
         let url = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Mobile Documents/com~apple~CloudDocs")
         return FileManager.default.fileExists(atPath: url.path) ? url : nil
