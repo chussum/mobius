@@ -328,8 +328,37 @@ final class AppState: ObservableObject {
 
     // MARK: 업데이트 확인
 
-    enum UpdateStatus: Equatable { case idle, checking, upToDate, available(ReleaseInfo), failed }
+    enum UpdateStatus: Equatable { case idle, checking, upToDate, available(ReleaseInfo), downloading, failed }
     @Published var updateStatus: UpdateStatus = .idle
+
+    /// 최신 DMG를 앱에서 직접 내려받아 마운트한다(브라우저 의존 없이). 드래그 한 번으로 교체.
+    /// 실패하면 릴리즈 페이지를 연다. (실행 중 앱을 프로그램으로 바꿔치는 자동 교체는 위험해서
+    /// 하지 않는다 — 안전하게 마운트까지만.)
+    func downloadUpdate(_ info: ReleaseInfo) {
+        guard let dmg = URL(string:
+            "https://github.com/chussum/mobius/releases/download/v\(info.version)/Mobius-\(info.version).dmg")
+        else { openReleasePage(info); return }
+        updateStatus = .downloading
+        Task { @MainActor in
+            defer { updateStatus = .available(info) }
+            do {
+                let (tmp, resp) = try await URLSession.shared.download(from: dmg)
+                guard (resp as? HTTPURLResponse)?.statusCode == 200 else { throw URLError(.badServerResponse) }
+                let dir = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
+                    ?? FileManager.default.temporaryDirectory
+                let dest = dir.appendingPathComponent("Mobius-\(info.version).dmg")
+                try? FileManager.default.removeItem(at: dest)
+                try FileManager.default.moveItem(at: tmp, to: dest)
+                NSWorkspace.shared.open(dest)   // DMG 마운트 → 설치 창(드래그)
+            } catch {
+                openReleasePage(info)           // 실패 시 릴리즈 페이지로 폴백
+            }
+        }
+    }
+
+    private func openReleasePage(_ info: ReleaseInfo) {
+        if let u = URL(string: info.url) { NSWorkspace.shared.open(u) }
+    }
     static let updateCheckInterval: TimeInterval = 24 * 3600 // 하루 1회
 
     var currentVersion: String {

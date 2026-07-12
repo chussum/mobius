@@ -369,11 +369,14 @@ struct SettingsView: View {
                 .font(.caption).foregroundStyle(.green)
         case .available(let info):
             Button {
-                if let url = URL(string: info.url) { NSWorkspace.shared.open(url) }
+                state.downloadUpdate(info)
             } label: {
                 Label(loc("새 버전 v%@ 받기", info.version), systemImage: "arrow.down.circle.fill")
             }
             .buttonStyle(.borderedProminent).controlSize(.small)
+        case .downloading:
+            HStack(spacing: 6) { ProgressView().controlSize(.small); Text(loc("다운로드 중…")) }
+                .font(.caption).foregroundStyle(.secondary)
         case .failed:
             Text(loc("확인 실패 — 네트워크를 확인해주세요"))
                 .font(.caption).foregroundStyle(.orange)
