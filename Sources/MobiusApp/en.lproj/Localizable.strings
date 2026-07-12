@@ -77,6 +77,13 @@
 "자동 전환 시 Claude Desktop이 종료 후 재실행됩니다" = "Claude Desktop restarts when an auto-switch happens";
 "계정 전환 시 Claude Desktop도 전환 (experimental)" = "Also switch Claude Desktop on account switch (experimental)";
 "계정 전환 시 Claude Desktop도 전환" = "Also switch Claude Desktop on account switch";
+"언제" = "When";
+"하는 일" = "What it does";
+"한도가 차서 Mobius가 알아서 계정을 바꿀 때" = "When Mobius switches accounts by itself after a limit is hit";
+"카드를 눌러 직접 계정을 바꿀 때" = "When you switch accounts yourself by clicking a card";
+"Claude Desktop도 같은 계정으로 재시작해요 (2~5초)" = "Claude Desktop restarts on the same account too (2–5s)";
+"카드를 눌러 직접 바꿀 때는 '계정 전환 시 Claude Desktop도 전환'이 담당해요." = "Manual switches are covered by 'Also switch Claude Desktop on account switch'.";
+"자동 전환일 때는 'Claude Desktop 자동 Fallback'이 담당해요. Desktop에 연결해 둔 계정에서만 동작해요." = "Automatic switches are covered by 'Auto fallback for Claude Desktop'. Works only for accounts connected to Desktop.";
 
 /* 실험실 — 여러 Mac 동기화 */
 "실험실" = "Labs";

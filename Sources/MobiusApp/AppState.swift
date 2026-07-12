@@ -12,6 +12,28 @@ final class AppState: ObservableObject {
     @Published var lastError: String?
     @Published private(set) var usage: [UUID: UsageSnapshot] = [:]
     private var usageTask: Task<Void, Never>?
+    private var usageCacheLoaded = false
+    private static let usageCacheKey = "usageCacheV1"
+
+    /// 마지막 성공 스냅샷 복원 — 비활성 계정은 저장 토큰이 만료되어(수 시간) 조회가 401로
+    /// 실패할 수 있는데, 그때 빈 게이지 대신 마지막 값을 보여준다. 초기화 시각은 절대
+    /// 시각이라 지나면 표기가 자연히 사라지고, 계정이 다시 활성화되면 값도 갱신된다.
+    private func loadUsageCacheIfNeeded() {
+        guard !usageCacheLoaded else { return }
+        usageCacheLoaded = true
+        guard let data = UserDefaults.standard.data(forKey: Self.usageCacheKey),
+              let dict = try? JSONDecoder().decode([UUID: UsageSnapshot].self, from: data)
+        else { return }
+        for (id, snap) in dict where usage[id] == nil { usage[id] = snap }
+    }
+
+    private func saveUsageCache() {
+        let ids = Set(store.file.accounts.map(\.id))
+        let pruned = usage.filter { ids.contains($0.key) }
+        if let data = try? JSONEncoder().encode(pruned) {
+            UserDefaults.standard.set(data, forKey: Self.usageCacheKey)
+        }
+    }
     /// 게이지 캐시 유효 시간 — 팝오버를 자주 여닫아도 이 간격보다 잦게 조회하지 않는다
     private let usageStaleness: TimeInterval = 240
 
@@ -76,6 +98,7 @@ final class AppState: ObservableObject {
 
     /// 팝오버가 열릴 때 호출 — 캐시가 만료된 계정만 사용량 조회 (상시 폴링 없음)
     func refreshUsageIfStale() {
+        loadUsageCacheIfNeeded()
         guard UserDefaults.standard.object(forKey: "showUsageGauges") == nil
                 || UserDefaults.standard.bool(forKey: "showUsageGauges") else { return }
         guard usageTask == nil else { return }
@@ -114,6 +137,7 @@ final class AppState: ObservableObject {
                 MobiusNotification.postAccountsChanged()
                 reload()
             }
+            saveUsageCache()
         }
     }
 

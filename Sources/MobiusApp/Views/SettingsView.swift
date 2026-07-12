@@ -8,6 +8,8 @@ struct SettingsView: View {
     @State private var cliMessage = ""
     @AppStorage("showUsageGauges") private var showUsageGauges = true
     @AppStorage("autoUpdateCheck") private var autoUpdateCheck = true
+    @State private var showDesktopAutoInfo = false
+    @State private var showDesktopSyncInfo = false
     @State private var claudeInfo: ClaudeCLI.Info?
     @State private var claudeChecked = false
     @State private var installingClaude = false
@@ -131,16 +133,28 @@ struct SettingsView: View {
                 Toggle(loc("Claude Code CLI 자동 Fallback"), isOn: Binding(
                     get: { state.file.autoSwitchEnabled },
                     set: { state.setAutoSwitch($0) }))
-                VStack(alignment: .leading, spacing: 3) {
-                    Toggle(loc("Claude Desktop 자동 Fallback"), isOn: Binding(
-                        get: { state.file.desktopAutoSwitchEnabled },
-                        set: { state.setDesktopAutoSwitch($0) }))
-                    Text(loc("자동 전환 시 Claude Desktop이 종료 후 재실행됩니다"))
-                        .font(.caption).foregroundStyle(.secondary)
+                Toggle(isOn: Binding(
+                    get: { state.file.desktopAutoSwitchEnabled },
+                    set: { state.setDesktopAutoSwitch($0) })) {
+                    HStack(spacing: 5) {
+                        Text(loc("Claude Desktop 자동 Fallback"))
+                        desktopInfoButton(
+                            isPresented: $showDesktopAutoInfo,
+                            when: loc("한도가 차서 Mobius가 알아서 계정을 바꿀 때"),
+                            note: loc("카드를 눌러 직접 바꿀 때는 '계정 전환 시 Claude Desktop도 전환'이 담당해요."))
+                    }
                 }
-                Toggle(loc("계정 전환 시 Claude Desktop도 전환"), isOn: Binding(
+                Toggle(isOn: Binding(
                     get: { state.file.desktopSyncEnabled },
-                    set: { state.setDesktopSync($0) }))
+                    set: { state.setDesktopSync($0) })) {
+                    HStack(spacing: 5) {
+                        Text(loc("계정 전환 시 Claude Desktop도 전환"))
+                        desktopInfoButton(
+                            isPresented: $showDesktopSyncInfo,
+                            when: loc("카드를 눌러 직접 계정을 바꿀 때"),
+                            note: loc("자동 전환일 때는 'Claude Desktop 자동 Fallback'이 담당해요. Desktop에 연결해 둔 계정에서만 동작해요."))
+                    }
+                }
             }
             labsSection
             Section(loc("업데이트")) {
@@ -170,6 +184,38 @@ struct SettingsView: View {
         }
         .formStyle(.grouped)
         .frame(width: 580, height: state.file.accounts.count <= 1 ? 800 : 660)
+    }
+
+    /// Desktop 토글 2종의 차이를 설명하는 ⓘ 팝오버 — "언제 / 하는 일 / 나머지는 누가"
+    private func desktopInfoButton(isPresented: Binding<Bool>,
+                                   when: String, note: String) -> some View {
+        Button { isPresented.wrappedValue.toggle() } label: {
+            Image(systemName: "info.circle")
+                .font(.system(size: 11)).foregroundStyle(.secondary)
+        }
+        .buttonStyle(.plain)
+        .popover(isPresented: isPresented, arrowEdge: .bottom) {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(alignment: .top, spacing: 7) {
+                    Text(loc("언제")).font(.system(size: 10.5, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                    Text(when).font(.system(size: 11.5))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                HStack(alignment: .top, spacing: 7) {
+                    Text(loc("하는 일")).font(.system(size: 10.5, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                    Text(loc("Claude Desktop도 같은 계정으로 재시작해요 (2~5초)"))
+                        .font(.system(size: 11.5))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Divider()
+                Text(note).font(.system(size: 10.5)).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(12)
+            .frame(width: 280, alignment: .leading)
+        }
     }
 
     // MARK: 실험실 — 여러 Mac 동기화
