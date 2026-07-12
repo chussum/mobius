@@ -109,7 +109,8 @@ learns on one Mac, it knows on all of them.
 - Only items you turn on on a given Mac take part; a Mac with sync off is untouched.
 - Deletion is your choice: "keep on other Macs" (default) or "delete on other Macs too"
   (moved to a trash folder and kept 30 days — never wiped instantly).
-- Continuing conversations requires the same project folder path on both Macs.
+- Projects inside your home folder continue across Macs even when usernames differ
+  (home paths are remapped automatically during sync). Paths outside home must match.
 
 ## Terminal usage (optional)
 

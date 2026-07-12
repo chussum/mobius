@@ -169,6 +169,40 @@ final class SyncEngineTests: XCTestCase {
         XCTAssertTrue(backups.contains { $0.contains("c.md") })
     }
 
+    func testSessionSlugRemapsAcrossDifferentHomes() throws {
+        // Mac A: 홈 homeA — 홈 아래 프로젝트 세션
+        let homeA = tmp.appendingPathComponent("homeA")
+        let claudeA = homeA.appendingPathComponent(".claude")
+        let slugA = homeA.path.replacingOccurrences(of: "/", with: "-") + "-Projects-x"
+        try write(claudeA.appendingPathComponent("projects"), "\(slugA)/s1.jsonl", "대화",
+                  mtime: Date(timeIntervalSinceNow: -600))
+        let a = SyncEngine(machineID: "mac-a", localTrashDir: trash, busyWindow: 0)
+        _ = a.sync(categories: [.sessions], claudeDir: claudeA,
+                   syncRoot: syncRoot, propagateDeletes: false)
+
+        // 클라우드에는 홈 부분이 ~ 토큰으로 중립화되어야 한다
+        let portable = syncRoot.appendingPathComponent("sessions/~-Projects-x/s1.jsonl")
+        XCTAssertTrue(fm.fileExists(atPath: portable.path))
+
+        // Mac B: 사용자명이 다른 홈 homeB — 자기 슬러그로 복원되어야 한다
+        let homeB = tmp.appendingPathComponent("homeB")
+        let claudeB = homeB.appendingPathComponent(".claude")
+        let b = SyncEngine(machineID: "mac-b",
+                           localTrashDir: tmp.appendingPathComponent("trash-b"), busyWindow: 0)
+        _ = b.sync(categories: [.sessions], claudeDir: claudeB,
+                   syncRoot: syncRoot, propagateDeletes: false)
+        let slugB = homeB.path.replacingOccurrences(of: "/", with: "-") + "-Projects-x"
+        XCTAssertEqual(read(claudeB.appendingPathComponent("projects"), "\(slugB)/s1.jsonl"),
+                       "대화")
+        // 홈 밖 경로 슬러그는 리매핑 없이 그대로 왕복하는지
+        try write(claudeA.appendingPathComponent("projects"), "-private-tmp-y/s2.jsonl", "밖",
+                  mtime: Date(timeIntervalSinceNow: -600))
+        _ = a.sync(categories: [.sessions], claudeDir: claudeA,
+                   syncRoot: syncRoot, propagateDeletes: false)
+        XCTAssertTrue(fm.fileExists(atPath: syncRoot
+            .appendingPathComponent("sessions/-private-tmp-y/s2.jsonl").path))
+    }
+
     func testSingleFileCategoryRoundtrip() throws {
         try write(claudeDir, "CLAUDE.md", "글로벌 메모리",
                   mtime: Date(timeIntervalSinceNow: -300))

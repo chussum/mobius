@@ -268,8 +268,9 @@ struct SettingsView: View {
                     Spacer()
                     syncStatusRow
                 }
-                Text(loc("대화 이어 쓰기는 두 Mac의 프로젝트 폴더 경로가 같을 때 동작해요."))
+                Text(loc("홈 폴더 안 프로젝트는 Mac마다 사용자명이 달라도 대화를 이어 쓸 수 있어요. 홈 밖 경로는 두 Mac의 경로가 같아야 해요."))
                     .font(.caption).foregroundStyle(.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
     }

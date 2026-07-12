@@ -22,6 +22,42 @@ public enum SyncCategory: String, CaseIterable, Codable, Sendable {
     }
 }
 
+/// 세션 슬러그의 홈 경로 부분을 머신 중립 토큰으로 치환한다.
+/// 로컬  : projects/-Users-hyungjoo-Projects-x/세션.jsonl
+/// 클라우드: projects/~-Projects-x/세션.jsonl   ← 사용자명이 달라도 공유 가능
+/// 홈 밖 경로(-private-tmp-… 등)는 그대로 둔다 — 그런 프로젝트는 경로가 같아야 이어진다.
+struct SlugRemapper {
+    static let token = "~"
+    let localPrefix: String // 예: "-Users-hyungjoo" (홈 절대경로의 / → - 치환)
+
+    init(home: URL) {
+        localPrefix = home.path.replacingOccurrences(of: "/", with: "-")
+    }
+
+    private func mapFirst(_ rel: String, _ transform: (String) -> String?) -> String {
+        var parts = rel.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
+        guard let first = parts.first, let mapped = transform(first) else { return rel }
+        parts[0] = mapped
+        return parts.joined(separator: "/")
+    }
+
+    /// 로컬 relpath → 클라우드(portable) relpath
+    func toPortable(_ rel: String) -> String {
+        mapFirst(rel) { first in
+            first.hasPrefix(localPrefix)
+                ? SlugRemapper.token + first.dropFirst(localPrefix.count) : nil
+        }
+    }
+
+    /// 클라우드(portable) relpath → 로컬 relpath
+    func toLocal(_ rel: String) -> String {
+        mapFirst(rel) { first in
+            first.hasPrefix(SlugRemapper.token)
+                ? localPrefix + first.dropFirst(SlugRemapper.token.count) : nil
+        }
+    }
+}
+
 public struct SyncReport: Equatable, Sendable {
     public var uploaded = 0      // 로컬 → 원격 복사
     public var downloaded = 0    // 원격 → 로컬 복사
@@ -197,13 +233,22 @@ public final class SyncEngine {
             try? fm.createDirectory(at: localBase, withIntermediateDirectories: true)
             try? fm.createDirectory(at: remoteBase, withIntermediateDirectories: true)
 
-            let local = snapshot(of: localBase, only: only, report: &report)
+            // 세션 슬러그의 홈 부분은 클라우드에서 머신 중립 토큰(~)으로 — 사용자명이
+            // 달라도 이어 쓰기가 되도록. 비교·manifest·tombstone 키는 전부 portable 기준.
+            let remapper: SlugRemapper? = cat == .sessions
+                ? SlugRemapper(home: claudeDir.deletingLastPathComponent()) : nil
+
+            var local = snapshot(of: localBase, only: only, report: &report)
+            if let remapper {
+                local = Dictionary(uniqueKeysWithValues:
+                    local.map { (remapper.toPortable($0.key), $0.value) })
+            }
             let remote = snapshot(of: remoteBase, only: only, report: &report)
 
             for rel in Set(local.keys).union(remote.keys).sorted() {
                 let key = "\(cat.rawValue)/\(rel)"
                 let L = local[rel], R = remote[rel]
-                let localURL = localBase.appendingPathComponent(rel)
+                let localURL = localBase.appendingPathComponent(remapper?.toLocal(rel) ?? rel)
                 let remoteURL = remoteBase.appendingPathComponent(rel)
 
                 // 실행 중인 claude가 쓰는 중일 수 있는 파일 — 이번 라운드 건너뜀.
@@ -283,11 +328,13 @@ public final class SyncEngine {
                 }
             }
 
-            // manifest 갱신: 동기화 후 로컬 상태 재스캔
+            // manifest 갱신: 동기화 후 로컬 상태 재스캔 (키는 portable 기준)
             var post = SyncReport()
             let after = snapshot(of: localBase, only: only, report: &post)
             manifest = manifest.filter { !$0.key.hasPrefix("\(cat.rawValue)/") }
-            for (rel, e) in after { manifest["\(cat.rawValue)/\(rel)"] = e }
+            for (rel, e) in after {
+                manifest["\(cat.rawValue)/\(remapper?.toPortable(rel) ?? rel)"] = e
+            }
         }
 
         saveManifest(manifest, syncRoot)
