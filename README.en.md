@@ -202,3 +202,13 @@ Usage gauges are fetched only when the popover opens (4-minute cache) — never 
   with 0700 permissions. Cookies are already encrypted with a Keychain-held key at
   the source, so no plaintext tokens are stored.
 - Deleting an account also deletes its secret snapshot and Desktop snapshot.
+
+## License
+
+Released under the MIT License — see [`LICENSE`](LICENSE) for the full text.
+
+The only external dependency, [swift-argument-parser](https://github.com/apple/swift-argument-parser) (Apple, Apache License 2.0), is credited in [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md).
+
+> This is an open-source personal project and is **not affiliated with Anthropic.**
+> "Claude" and "Anthropic" are trademarks of Anthropic PBC and are used here only
+> descriptively to refer to the products Mobius interoperates with.

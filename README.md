@@ -185,3 +185,12 @@ CLI로 전환해도 실행 중인 앱 화면에 즉시 반영됩니다.
 - Desktop 스냅샷은 `~/Library/Application Support/Mobius/desktop-profiles/`에 0700 권한으로
   저장됩니다. Cookies는 원본부터 Keychain 키로 암호화되어 있어 평문 유출이 아닙니다.
 - 계정을 삭제하면 해당 비밀 스냅샷과 Desktop 스냅샷도 함께 삭제됩니다.
+
+## 라이센스
+
+MIT 라이센스로 배포됩니다 — 전문은 [`LICENSE`](LICENSE)를 참고하세요.
+
+유일한 외부 의존성인 [swift-argument-parser](https://github.com/apple/swift-argument-parser)(Apple, Apache License 2.0)의 고지는 [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md)에 있습니다.
+
+> 이 프로젝트는 오픈소스 개인 프로젝트이며 **Anthropic과 무관합니다.** "Claude", "Anthropic"은
+> Anthropic PBC의 상표이며, 여기서는 호환 대상 제품을 가리키기 위한 서술적 용도로만 사용됩니다.

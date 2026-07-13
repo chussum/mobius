@@ -24,6 +24,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>CFBundleIdentifier</key><string>dev.chussum.mobius</string>
   <key>CFBundleName</key><string>Mobius</string>
   <key>CFBundlePackageType</key><string>APPL</string>
+  <key>NSHumanReadableCopyright</key><string>© 2026 Mobius Contributors. MIT License.</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>CFBundleShortVersionString</key><string>0.2.3</string>
   <key>CFBundleVersion</key><string>1</string>
