@@ -58,6 +58,34 @@ final class UsageFetcherTests: XCTestCase {
         XCTAssertNil(snap.scopedLimits)
     }
 
+    // 이슈 #4: 잠자기 뒤 첫 팝오버의 401 — 활성 계정도 자연 만료면 오탐이라 마킹하면 안 된다
+    // (오마킹 → 엔진이 멀쩡한 주계정을 밀어내 폴백 전환 + 재로그인 뱃지 연쇄).
+    func testAuthErrorMarkingPolicy() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let past = 1_500_000_000_000, future = 1_900_000_000_000   // epoch ms
+        func blob(access: Int, rte: Int? = nil) -> Data {
+            let rtePart = rte.map { #","refreshTokenExpiresAt":\#($0)"# } ?? ""
+            return Data(#"{"claudeAiOauth":{"accessToken":"A","expiresAt":\#(access)\#(rtePart)}}"#.utf8)
+        }
+        // (a) access 유효한데 401 = 폐기 → 활성/비활성 모두 마킹
+        XCTAssertTrue(UsageFetcher.shouldMarkReauthAfterAuthError(
+            blob: blob(access: future, rte: future), isActive: true, now: now))
+        XCTAssertTrue(UsageFetcher.shouldMarkReauthAfterAuthError(
+            blob: blob(access: future, rte: future), isActive: false, now: now))
+        // (b) ★ 활성 + access 만료 + refresh 토큰 생존 → claude가 다음 세션에서 갱신 = 마킹 금지
+        XCTAssertFalse(UsageFetcher.shouldMarkReauthAfterAuthError(
+            blob: blob(access: past, rte: future), isActive: true, now: now))
+        // (c) 활성 + refresh 토큰까지 시간 만료 → 진짜 죽음 = 마킹
+        XCTAssertTrue(UsageFetcher.shouldMarkReauthAfterAuthError(
+            blob: blob(access: past, rte: past), isActive: true, now: now))
+        // (d) 비활성 + access 만료 → 정상 휴면 = 마킹 금지 (refresh 만료는 validateFallbacksLocally 전담)
+        XCTAssertFalse(UsageFetcher.shouldMarkReauthAfterAuthError(
+            blob: blob(access: past, rte: past), isActive: false, now: now))
+        // (e) refresh 만료 정보가 없으면 죽었다고 단정하지 않는다 (오탐 방지)
+        XCTAssertFalse(UsageFetcher.shouldMarkReauthAfterAuthError(
+            blob: blob(access: past), isActive: true, now: now))
+    }
+
     func testExpiresAtParsing() {
         // 실측: claudeAiOauth.expiresAt는 13자리 epoch 밀리초 (2026-07-11 확인)
         let ms = Data(#"{"claudeAiOauth":{"expiresAt":1783785648000}}"#.utf8)

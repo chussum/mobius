@@ -67,6 +67,23 @@ public enum UsageFetcher {
         return Date(timeIntervalSince1970: n > 1e12 ? n / 1000 : n)
     }
 
+    /// usage 401/403 후 재로그인 마킹 판단. 자연 만료된 access 토큰의 401은 오탐이므로
+    /// 마킹하지 않는다 — **활성 계정도 예외가 아니다**: claude는 세션이 돌 때만 토큰을
+    /// 갱신하므로, 잠자기 등으로 한동안 안 돌면 라이브 토큰이 만료된 채 남는다
+    /// (이슈 #4 실측 연쇄 — 아침 첫 팝오버 401 → 활성 오마킹 → 엔진이 멀쩡한 주계정을
+    /// 밀어내 폴백 전환 + 재로그인 뱃지).
+    /// 마킹하는 경우: (a) access 토큰이 아직 유효한데 거부 = 폐기(활성/비활성 공통),
+    /// (b) 활성인데 refresh 토큰까지 시간 만료 = claude도 못 살림 → 재로그인만 남음.
+    /// ※ (b)는 보수적 안전망이다 — claude가 쓴 라이브 blob에는 refreshTokenExpiresAt가
+    /// 없어(핵심 사실의 blob 필드 목록) 값이 있는 blob(Mobius가 refresh 후 재구성한
+    /// 스냅샷 등)에서만 발동한다. 정보가 없으면 죽었다고 단정하지 않는다.
+    /// 비활성의 refresh 만료 판정은 validateFallbacksLocally 전담 — 여기서 관여하지 않는다.
+    public static func shouldMarkReauthAfterAuthError(blob: Data, isActive: Bool,
+                                                      now: Date = Date()) -> Bool {
+        if (expiresAt(from: blob) ?? .distantPast) > now { return true }  // 유효한데 거부 = 폐기
+        return isActive && CredentialBlob.isRefreshTokenExpired(blob: blob, now: now)
+    }
+
     static let isoFrac: ISO8601DateFormatter = {
         let f = ISO8601DateFormatter()
         f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]

@@ -164,11 +164,12 @@ final class AppState: ObservableObject {
                     }
                 } catch is UsageFetcherError {
                     // 401/403 = 이 계정의 토큰이 거부됨. 계정별 토큰으로 조회하므로 오귀인 불가.
-                    // - 활성 계정: 라이브 토큰으로 조회했는데도 거부 = 진짜 재로그인 필요.
-                    // - 비활성 계정: 저장 토큰이 자연 만료(expiresAt 지남)면 정상 휴면이라 마킹 안 함
-                    //   (전환하면 Claude Code가 갱신). 아직 유효기간인데 거부면 폐기된 것 → 마킹.
-                    let stillValid = (UsageFetcher.expiresAt(from: blob) ?? .distantPast) > Date()
-                    if (isActive || stillValid), !profile.needsReauth {
+                    // 단 자연 만료 토큰의 401은 **활성/비활성 모두** 오탐이라 마킹하지 않는다 —
+                    // 활성도 잠자기 등으로 claude가 안 돌면 라이브 토큰이 만료된 채 남는다
+                    // (이슈 #4: 오마킹 → 엔진이 멀쩡한 주계정을 밀어내던 연쇄의 수정).
+                    // 판정 규칙은 UsageFetcher.shouldMarkReauthAfterAuthError 참조.
+                    if UsageFetcher.shouldMarkReauthAfterAuthError(blob: blob, isActive: isActive),
+                       !profile.needsReauth {
                         try? store.setNeedsReauth(profile.id, true)
                         reauthChanged = true
                         notify(title: loc("재로그인 필요"),
