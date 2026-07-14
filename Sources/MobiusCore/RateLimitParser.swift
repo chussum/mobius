@@ -2,14 +2,25 @@ import Foundation
 
 /// 세션 로그에서 발견된 "이 계정의" 사용 한도 이벤트.
 public struct RateLimitHit: Equatable, Sendable {
-    /// 리셋 시각. 월간 지출 한도처럼 리셋 시각이 없는 이벤트는 nil —
+    /// 이벤트가 가리키는 한도의 종류.
+    /// - window: 5시간/주간 창 소진 — 그대로 소진 기록 대상.
+    /// - monthlySpend: extra usage 크레딧의 월간 지출 한도(P3) — 창 소진이 아니며
+    ///   플랜 창이 멀쩡해도 뜬다(2026-07-13 실측: 이벤트 후에도 세션 정상 동작).
+    ///   단, 창 소진과 겹치면 이 메시지가 우선 표시돼 창 소진을 가릴 수 있으므로,
+    ///   호출측은 기록 대신 usage로 5h/주간 현황을 교차 확인해 판단한다.
+    public enum Kind: Equatable, Sendable { case window, monthlySpend }
+
+    /// 리셋 시각. 시각을 못 읽는 창 소진 변형(P5)은 nil —
     /// 호출측(AppState/CLI)이 보수적 폴백(예: now+24h)을 적용한다.
     public var resetsAt: Date?
+    public var kind: Kind
     /// 모델 전용 한도(월간 지출 = 프리미엄 모델 한도)인가. 계정 자체 한도(세션/주간)와 구분.
+    /// (교차 확인 없이 직접 기록하는 경로에서 pin/알람숨김 규칙을 유지하기 위해 보존.)
     public var modelScoped: Bool
 
-    public init(resetsAt: Date?, modelScoped: Bool = false) {
+    public init(resetsAt: Date?, kind: Kind = .window, modelScoped: Bool = false) {
         self.resetsAt = resetsAt
+        self.kind = kind
         self.modelScoped = modelScoped
     }
 
@@ -86,11 +97,12 @@ public enum RateLimitParser {
             return legacyEpochHit(in: text, reference: reference)
         }
 
-        // P3: 월간 지출 한도 — 리셋 시각 없음
-        // 월간 지출 한도 = 프리미엄 모델(Fable 등) 전용 한도. 계정 자체는 여유가 있을 수 있으므로
-        // modelScoped 표식을 달아, 사용자가 그 계정을 직접 고른 경우 자동 전환을 막는다.
+        // P3: 월간 지출 한도 — 창 소진이 아님(extra usage 크레딧 월 한도, 플랜 창 여유여도
+        // 발생: 2026-07-13 실측). kind로 구분해 호출측(AppState)이 usage로 5h/주간을 교차
+        // 확인한다. modelScoped=true도 유지 — 교차 확인 없이 직접 기록하는 경로(CLI 등)에서
+        // upstream의 pin/알람숨김 규칙이 계속 동작하도록.
         if firstMatch(monthlySpend, in: text) != nil {
-            return RateLimitHit(resetsAt: nil, modelScoped: true)
+            return RateLimitHit(resetsAt: nil, kind: .monthlySpend, modelScoped: true)
         }
         // P2: 날짜 + 시각 (주간 한도)
         if let m = firstMatch(dateAndTime, in: text),

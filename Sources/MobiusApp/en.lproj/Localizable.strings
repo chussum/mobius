@@ -2,17 +2,13 @@
 
 /* AppState — 알림/오류 */
 "계정 목록 로드 실패: %@" = "Failed to load accounts: %@";
-"모든 계정 한도 소진" = "All accounts hit their limits";
 "전환 가능한 계정이 없습니다. 리셋을 기다려주세요." = "No account is available to switch to. Please wait for a reset.";
 "한도 소진 — 자동 전환이 꺼져 있습니다" = "Limit reached — auto-switch is off";
 "%@ 계정이 한도에 도달했습니다. 수동으로 전환하세요." = "The account %@ reached its limit. Switch manually.";
-"Primary 계정으로 복귀" = "Back to primary account";
-"Fallback 계정으로 전환" = "Switched to fallback account";
-"활성 계정: %@" = "Active account: %@";
 "✅ %@ 계정으로 복귀했어요" = "✅ Back on %@";
 "한도가 초기화돼 주 계정으로 돌아왔어요." = "Your limit reset, so you're back on your primary account.";
 "🔄 %@ 계정으로 전환했어요" = "🔄 Switched to %@";
-"%@ 한도 소진 → %@. 새로 시작하는 claude 세션부터 적용돼요." = "%@ hit its limit → %@. Applies to newly started claude sessions.";
+"%@ 한도 소진 → %@. 새로 시작하는 %@ 세션부터 적용돼요." = "%@ hit its limit → %@. Applies to newly started %@ sessions.";
 "자동 전환 실패: %@" = "Auto-switch failed: %@";
 "전환 실패: %@" = "Switch failed: %@";
 "Desktop 전환이 진행 중입니다 — 이번 전환에서는 Desktop을 건너뜁니다." = "A Desktop switch is already in progress — skipping Desktop this time.";
@@ -23,7 +19,6 @@
 "Primary 변경 실패: %@" = "Failed to change primary: %@";
 "Claude Code CLI가 필요합니다 — 설정에서 설치하세요." = "Claude Code CLI is required — install it from Settings.";
 "Claude Code CLI 필요" = "Claude Code CLI required";
-"계정을 추가하려면 먼저 Claude Code CLI를 설치하세요. 설정 → Claude Code CLI에서 설치할 수 있어요." = "Install Claude Code CLI first to add an account. You can install it from Settings → Claude Code CLI.";
 "계정 추가 완료" = "Account added";
 "기존 계정 자격증명 갱신됨" = "Existing account credentials refreshed";
 "계정 추가 실패" = "Failed to add account";
@@ -48,9 +43,7 @@
 "로그인이 취소되었습니다." = "Login was canceled.";
 
 /* SettingsView */
-"설치됨" = "Installed";
 "확인 중…" = "Checking…";
-"Claude Code CLI가 설치되어 있지 않아요" = "Claude Code CLI is not installed";
 "Mobius는 Claude Code CLI로 계정을 로그인·전환합니다. 아래 버튼으로 공식 설치 스크립트를 실행하세요 (관리자 권한 불필요)." = "Mobius signs in and switches accounts via Claude Code CLI. Run the official install script with the button below (no admin rights needed).";
 "설치 중…" = "Installing…";
 "Claude Code 설치" = "Install Claude Code";
@@ -58,8 +51,8 @@
 "설치 완료! 이제 계정을 추가할 수 있어요." = "Installed! You can add accounts now.";
 "아직 등록된 계정이 없어요" = "No accounts yet";
 "Fallback 계정을 추가해 보세요" = "Try adding a fallback account";
-"메뉴바의 ∞ 아이콘을 클릭하고 **계정 추가**를 눌러 Claude 계정을 등록하세요. 개인·회사 계정을 함께 등록해 두면, 한 계정의 사용량이 차는 순간 다음 계정으로 알아서 전환됩니다." = "Click the ∞ icon in the menu bar and press **Add Account** to register your Claude accounts. Register personal and work accounts together, and Mobius switches to the next one the moment an account fills up.";
-"지금은 계정이 하나뿐이라 사용량이 차면 기다리는 수밖에 없어요. 메뉴바의 ∞ 아이콘 → **계정 추가**로 계정을 하나 더 등록하면, 한도가 차는 순간 자동으로 이어서 쓸 수 있습니다." = "With only one account, you can only wait when the limit fills up. Add another via the ∞ menu bar icon → **Add Account**, and Mobius continues automatically the moment the limit is hit.";
+"아래 **설치 현황**의 **계정 추가** 버튼으로 Claude 계정을 등록하세요. 개인·회사 계정을 함께 등록해 두면, 한 계정의 사용량이 차는 순간 다음 계정으로 알아서 전환됩니다." = "Register your Claude accounts with the **Add Account** button under **Installed Tools** below. Register personal and work accounts together, and Mobius switches to the next one the moment an account fills up.";
+"지금은 계정이 하나뿐이라 사용량이 차면 기다리는 수밖에 없어요. 아래 **설치 현황**의 **계정 추가**로 계정을 하나 더 등록하면, 한도가 차는 순간 자동으로 이어서 쓸 수 있습니다." = "With only one account, you can only wait when the limit fills up. Add another via **Add Account** under **Installed Tools** below, and Mobius continues automatically the moment the limit is hit.";
 "일반" = "General";
 "업데이트" = "Updates";
 "현재 버전" = "Current version";
@@ -74,20 +67,21 @@
 "시스템 기본" = "System default";
 "로그인 시 자동 시작" = "Launch at login";
 "실패: %@" = "Failed: %@";
-"Claude Code CLI 자동 Fallback" = "Auto fallback for Claude Code CLI";
 "사용량 게이지 표시" = "Show usage gauges";
 "계정 카드에 5시간·주간 사용량과 초기화 남은 시간을 표시합니다" = "Shows 5-hour/weekly usage and time until reset on account cards";
-"Claude Desktop 자동 Fallback" = "Auto fallback for Claude Desktop";
-"자동 전환 시 Claude Desktop이 종료 후 재실행됩니다" = "Claude Desktop restarts when an auto-switch happens";
-"계정 전환 시 Claude Desktop도 전환 (experimental)" = "Also switch Claude Desktop on account switch (experimental)";
+"자동 전환" = "Auto-switch";
+"한도가 차면 다음 계정으로 자동으로 이어집니다" = "When the limit is hit, Mobius continues on the next account automatically";
+"설치됨" = "Installed";
+"미설치" = "Not installed";
 "계정 전환 시 Claude Desktop도 전환" = "Also switch Claude Desktop on account switch";
+"자동 전환 시에도 Claude Desktop 전환" = "Also switch Claude Desktop on auto-switch";
 "언제" = "When";
 "하는 일" = "What it does";
 "한도가 차서 Mobius가 알아서 계정을 바꿀 때" = "When Mobius switches accounts by itself after a limit is hit";
 "카드를 눌러 직접 계정을 바꿀 때" = "When you switch accounts yourself by clicking a card";
 "Claude Desktop도 같은 계정으로 재시작해요 (2~5초)" = "Claude Desktop restarts on the same account too (2–5s)";
 "카드를 눌러 직접 바꿀 때는 '계정 전환 시 Claude Desktop도 전환'이 담당해요." = "Manual switches are covered by 'Also switch Claude Desktop on account switch'.";
-"자동 전환일 때는 'Claude Desktop 자동 Fallback'이 담당해요. Desktop에 연결해 둔 계정에서만 동작해요." = "Automatic switches are covered by 'Auto fallback for Claude Desktop'. Works only for accounts connected to Desktop.";
+"자동 전환일 때는 '자동 전환 시에도 Claude Desktop 전환'이 담당해요. Desktop에 연결해 둔 계정에서만 동작해요." = "Automatic switches are covered by 'Also switch Claude Desktop on auto-switch'. Works only for accounts connected to Desktop.";
 
 /* 실험실 — 여러 Mac 동기화 */
 "실험실" = "Labs";
@@ -121,11 +115,17 @@
 "동기화할 항목을 하나 이상 켜주세요" = "Turn on at least one item to sync";
 "보관 위치에 접근할 수 없어요" = "Can't reach the storage location";
 "홈 폴더 안 프로젝트는 Mac마다 사용자명이 달라도 대화를 이어 쓸 수 있어요. 홈 밖 경로는 두 Mac의 경로가 같아야 해요." = "Projects inside your home folder continue across Macs even with different usernames. Paths outside home must match on both Macs.";
-"`mobius` 명령어 설치" = "Install the `mobius` command";
+
+/* 리셋 프로브 */
+"한도 초기화 확정 (최소 호출)" = "Pin limit resets (minimal call)";
+"초기화된 계정에 최소한의 호출 1회를 보내 다음 초기화 시점을 확정하고 알림으로 알려줍니다. 호출은 소량의 사용량을 소비합니다." = "Sends one minimal call to accounts whose limit has reset, pinning the next reset time and notifying you. The call consumes a tiny amount of usage.";
+"%@ 한도 초기화됨" = "%@ limit reset";
+"다음 초기화: %@" = "Next reset: %@";
+"다음 초기화 시점 확인에 실패했어요 — 게이지가 곧 갱신됩니다." = "Couldn't confirm the next reset time — gauges will update shortly.";
+"초기화 시점을 확정하지 못했어요 — 다음 사용 시 5시간 창이 시작됩니다." = "Couldn't pin the reset time — the 5-hour window will start on next use.";
 "설치" = "Install";
 "번들에서 mobius 바이너리를 찾을 수 없습니다 (개발 빌드에서는 Scripts/install-cli.sh 사용)" = "Couldn't find the mobius binary in the bundle (use Scripts/install-cli.sh for dev builds)";
 "설치 실패: %@" = "Install failed: %@";
-"설치 완료: /usr/local/bin/mobius" = "Installed: /usr/local/bin/mobius";
 
 /* DesktopCaptureSheet */
 "Desktop 연결" = "Connect Desktop";
@@ -140,10 +140,11 @@
 
 /* AccountCardView */
 "재로그인 필요" = "Re-login required";
-"로그인이 만료됐어요" = "Login expired";
-"%@ 계정에 다시 로그인해야 해요. 카드의 '다시 로그인'을 눌러주세요." = "You need to sign in again to %@. Press 'Sign in again' on its card.";
 "다시 로그인" = "Sign in again";
 "%@ 계정의 인증이 만료됐어요. 카드의 '다시 로그인'을 눌러주세요." = "Authentication for %@ has expired. Press 'Sign in again' on its card.";
+"%@ 계정의 로그인이 만료됐어요. 카드의 '다시 로그인'을 눌러주세요." = "%@'s login has expired. Press 'Sign in again' on its card.";
+"%@ 계정의 로그인이 만료돼 전환을 건너뛰었어요. '다시 로그인'을 눌러주세요." = "%@'s login has expired, so the switch was skipped. Press 'Sign in again'.";
+"다운로드 중…" = "Downloading…";
 "Primary 계정으로 설정" = "Set as primary account";
 "Claude Desktop 다시 연결" = "Reconnect Claude Desktop";
 "Claude Desktop 연결" = "Connect Claude Desktop";
@@ -158,12 +159,26 @@
 "%d분 후" = "in %dm";
 
 /* AccountListView */
-"자동 Fallback이 무엇인지 보기" = "What is auto fallback?";
-"자동 Fallback" = "Auto Fallback";
-"사용하던 계정의 한도가 다 차면, 아래 순서(우선순위)대로 여유 있는 다음 계정으로 자동 전환됩니다." = "When the active account hits its limit, Mobius switches to the next available account in the order below.";
-"맨 위 계정의 한도가 초기화되면 다시 맨 위 계정으로 돌아옵니다." = "When the top account's limit resets, Mobius returns to it.";
-"끄면 자동 전환 없이 한도 소진 알림만 보냅니다. 계정은 카드를 눌러 직접 바꿀 수 있어요." = "When off, you only get limit notifications — no auto-switching. Tap a card to switch manually.";
 "뫼비우스" = "";
 "계정 추가" = "Add Account";
 "삭제" = "Delete";
 "등록된 계정이 없습니다" = "No accounts registered";
+"설정(⚙)의 설치 현황에서 계정을 추가하세요" = "Add accounts from Settings (⚙) → Installed Tools";
+"설정" = "Settings";
+"종료" = "Quit";
+
+/* Codex 지원 (프로바이더별 풀) */
+"%@ 모든 계정 한도 소진" = "All %@ accounts hit their limits";
+"터미널에서 `codex logout` 후 `codex login`으로 추가할 계정에 로그인하면, Mobius가 몇 초 안에 자동으로 등록합니다." = "In a terminal, run `codex logout` then `codex login` with the account you want to add — Mobius registers it automatically within seconds.";
+"지금 쓰던 계정은 이미 카드에 저장돼 있어 카드를 눌러 언제든 되돌아올 수 있어요." = "Your current account is already saved as a card, so you can switch back anytime by tapping it.";
+"%@ 활성 계정이 밖에서 바뀌었어요" = "%@ active account changed externally";
+"외부 로그인 또는 실행 중 세션의 갱신으로 활성 계정이 %@(으)로 바뀌었습니다. 카드를 눌러 되돌릴 수 있어요." = "An external login or a running session's token refresh switched the active account to %@. Tap a card to switch back.";
+
+/* 설치 현황 / mobius 명령어 관리 */
+"설치 현황" = "Installed Tools";
+"설치 안 됨" = "Not installed";
+"재설치" = "Reinstall";
+"설치 완료: %@" = "Installed: %@";
+"삭제 완료" = "Removed";
+"삭제 실패: %@" = "Failed to remove: %@";
+"계정을 추가하려면 먼저 Claude Code CLI를 설치하세요. 설정 → 설치 현황에서 설치할 수 있어요." = "Install the Claude Code CLI first to add accounts. You can install it from Settings → Installed Tools.";

@@ -97,11 +97,35 @@ final class AutoSwitchEngineTests: XCTestCase {
     }
 
     func testAutoSwitchDisabledNotifiesExhaustedOnly() {
-        // 스펙: 자동 fallback을 끄면 전환 없이 "소진 알림만"
-        file.autoSwitchEnabled = false
+        // 스펙: 자동 전환을 끄면 전환 없이 "소진 알림만"
+        file.autoSwitchByProvider[.claude] = false
         let d = AutoSwitchEngine().onRateLimitHit(
             file: file, hit: RateLimitHit(resetsAt: t0.addingTimeInterval(3600)), now: t0)
         XCTAssertEqual(d, .notifyExhaustedOnly(primary.id))
+    }
+
+    func testAutoSwitchToggleGatesOnlyItsOwnPool() {
+        // claude 풀만 끔 — codex 풀 엔진은 여전히 전환한다
+        let x1 = AccountProfile(id: UUID(), provider: .codex, nickname: "x1", emailAddress: "x1@x",
+                                organizationName: "", tierDescription: "")
+        let x2 = AccountProfile(id: UUID(), provider: .codex, nickname: "x2", emailAddress: "x2@x",
+                                organizationName: "", tierDescription: "")
+        file.accounts += [x1, x2]
+        file.activeByProvider[.codex] = x1.id
+        file.autoSwitchByProvider[.claude] = false
+
+        let hit = RateLimitHit(resetsAt: t0.addingTimeInterval(3600))
+        XCTAssertEqual(AutoSwitchEngine(provider: .claude).onRateLimitHit(file: file, hit: hit, now: t0),
+                       .notifyExhaustedOnly(primary.id))
+        XCTAssertEqual(AutoSwitchEngine(provider: .codex).onRateLimitHit(file: file, hit: hit, now: t0),
+                       .switchTo(x2.id, reason: .activeExhausted))
+
+        // onTick 복귀도 꺼진 풀만 억제된다
+        file.activeByProvider = [.claude: fb1.id, .codex: x2.id]
+        file.autoSwitchedByProvider = [.claude: true, .codex: true]
+        XCTAssertEqual(AutoSwitchEngine(provider: .claude).onTick(file: file, now: t0), .none)
+        XCTAssertEqual(AutoSwitchEngine(provider: .codex).onTick(file: file, now: t0),
+                       .switchTo(x1.id, reason: .primaryRecovered))
     }
 
     func testTickReturnsToPrimaryAfterResetPlusMargin() {

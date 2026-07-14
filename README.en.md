@@ -2,10 +2,10 @@
 
 [한국어](README.md) | **English**
 
-**Stop juggling Claude accounts. Let them flow.**
+**Stop juggling Claude and Codex accounts. Let them flow.**
 
-Using Claude with multiple subscription accounts? Hit the limit, log out, log into
-another account, come back when it resets… Mobius removes that loop.
+Using Claude or Codex with multiple subscription accounts? Hit the limit, log out,
+log into another account, come back when it resets… Mobius removes that loop.
 
 - **Switch accounts with one click** — no re-login, takes effect instantly.
 - **Auto-switch when you hit a limit** — your workflow never stops.
@@ -14,7 +14,7 @@ another account, come back when it resets… Mobius removes that loop.
 Primary → fallback → back to primary. An endless Möbius strip — hence the name.
 
 <p align="center">
-  <img src="docs/images/screenshot.png" width="440" alt="Mobius menu bar popover — account cards, usage gauges, auto-fallback toggle">
+  <img src="docs/images/screenshot.png" width="440" alt="Mobius menu bar popover — account cards, usage gauges">
 </p>
 
 Click the ∞ icon in the menu bar to open this panel. Each account shows its
@@ -27,9 +27,11 @@ Click the ∞ icon in the menu bar to open this panel. Each account shows its
 - You use both the terminal (Claude Code CLI) and the Claude Desktop app
 
 > **Supported**: Claude Code CLI switching for claude.ai subscription accounts
-> (personal Max, work Team/Enterprise). Claude Desktop co-switching is supported too.
-> **Not supported**: Console API keys / Bedrock / Vertex.
-> **Requirements**: macOS 14+, the `claude` CLI.
+> (personal Max, work Team/Enterprise), and OpenAI **Codex CLI** switching
+> (ChatGPT subscription login) — the two providers run as independent pools, each with
+> its own auto-switch and auto-return. Claude Desktop co-switching is included as experimental.
+> **Not supported**: Console/OpenAI API keys / Bedrock / Vertex.
+> **Requirements**: macOS 14+ and the CLI of each provider you switch (`claude` / `codex`).
 
 ## Install
 
@@ -69,12 +71,12 @@ for extra convenience.
 > **Developers**: build from source with
 > `Scripts/make-app.sh && open dist/Mobius.app`
 > (run `Scripts/setup-signing.sh` once for a stable signing certificate).
-> Install the `mobius` CLI via app **Settings → mobius CLI → Install** or `Scripts/install-cli.sh`.
+> Install the `mobius` CLI via app **Settings → General → mobius CLI → Install** or `Scripts/install-cli.sh`.
 > For release signing, notarization & distribution, see [docs/RELEASING.md](docs/RELEASING.md).
 
 ## Getting started
 
-1. Menu bar ∞ icon → **Add Account**
+1. Menu bar ∞ icon → Settings (⚙) → **Installed Tools → Add Account**
 2. Sign in with the Claude account you want to add — that's it!
 
 The login window always opens in a clean session, so it never auto-approves against
@@ -92,13 +94,17 @@ instead of creating a duplicate.
 - **Menu bar icon color**: default (primary active) · amber (fallback active) · red (all exhausted).
   Every switch fires a macOS notification.
 
-### The three toggles
+### Settings toggles
 
-| Toggle | Default | What it does |
-|---|---|---|
-| Auto fallback for Claude Code CLI | On | Auto-switch when a limit is hit. Off = notification only; manual switching always works |
-| Auto fallback for Claude Desktop | Off | Also switch Claude Desktop on auto-switch (Desktop restarts at that moment) |
-| Also switch Claude Desktop on account switch | Off | Co-switch Desktop on card-click switches. Works only for accounts connected to Desktop |
+All in Settings (⚙). **Auto-switch** is a per-CLI toggle under Installed Tools
+(Claude Code CLI / Codex CLI each); the two Claude Desktop toggles live in the
+**Labs** (실험실) section.
+
+| Toggle | Section | Default | What it does |
+|---|---|---|---|
+| Auto-switch (per CLI) | Installed Tools | On | Auto-switch when a limit is hit. Off = notification only; manual switching always works |
+| Also switch Claude Desktop on auto-switch | Labs | Off | Also switch Claude Desktop on auto-switch (Desktop restarts at that moment) |
+| Also switch Claude Desktop on account switch | Labs | Off | Co-switch Desktop on card-click switches. Works only for accounts connected to Desktop |
 
 ### Using Claude Desktop too
 
@@ -124,14 +130,15 @@ learns on one Mac, it knows on all of them.
 ## Terminal usage (optional)
 
 The app covers everything, but if you prefer the terminal, the `mobius` command is
-available (app **Settings → mobius CLI → Install**):
+available (app **Settings → General → mobius CLI → Install**):
 
 ```
-mobius list              # account list (active ●, priority, limit status)
-mobius switch <name>     # switch by nickname
-mobius status            # active account, time until reset
-mobius capture <name>    # register the currently logged-in claude account
-mobius auto on|off       # toggle auto fallback
+mobius list                        # account list per provider (active ●, priority, limit status)
+mobius switch <name>               # switch by nickname (--provider claude|codex if ambiguous)
+mobius status                      # active account per provider, time until reset
+mobius capture <name>              # register the currently logged-in claude account
+mobius capture <name> --provider codex   # register the currently logged-in codex account
+mobius auto on|off                 # toggle auto-switch (--provider claude|codex, both if omitted)
 ```
 
 CLI switches reflect instantly in the running app.
@@ -146,11 +153,14 @@ gauges (fetched when you open the popover, 4-minute cache), sign-in, and a once-
 update check (GitHub, can be turned off in Settings); disable the gauges and update
 check and background network use drops to zero.
 
-1. **Detect**: every 15 seconds it scans only the new lines of
-   `~/.claude/projects/**/*.jsonl` session logs and parses reset times from
-   rate-limit events (the first scan records offsets only — no false positives from
-   old events). Events containing `not your usage limit` are excluded — measurements
-   show 69% of rate-limit events are server-side limits, not account limits.
+1. **Detect**: every 15 seconds it scans only the new lines of session logs
+   (the first scan records offsets only — no false positives from old events).
+   For Claude it parses reset times from rate-limit events in
+   `~/.claude/projects/**/*.jsonl`, excluding events containing `not your usage limit` —
+   measurements show 69% of rate-limit events are server-side limits, not account limits.
+   For Codex it reads the structured usage (rate_limits) carried in every turn of
+   `~/.codex/sessions/**/*.jsonl` — usage gauges come from the same source, so Codex
+   involves no server requests at all.
 2. **Switch**: when the active account is exhausted, switch to the next available
    account by priority. If none is available, you just get an "all accounts exhausted"
    notification.
@@ -165,6 +175,14 @@ Usage gauges are fetched only when the popover opens (4-minute cache) — never 
 
 ## Good to know
 
+- **Adding a Codex account**: in a terminal, run `codex logout` then `codex login`
+  with the account you want to add — Mobius registers it automatically within seconds
+  (your current account is already saved as a card, so you can switch back anytime).
+  Codex has no automatic "sign in again" detection yet.
+- **If a Codex switch reverts on its own**: a still-running codex session from the
+  previous account can write its refreshed tokens back, flipping the login (Mobius
+  notifies you when this happens). To make a switch stick, close the previous
+  account's running codex sessions.
 - **Running `claude` sessions**: switching does **not** interrupt running sessions
   (measured through many switch round-trips). However, an already-running session
   keeps using the previous account's credentials — start a new session to use the

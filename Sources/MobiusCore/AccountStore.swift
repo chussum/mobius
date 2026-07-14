@@ -53,74 +53,86 @@ public final class AccountStore: @unchecked Sendable {
 
     // MARK: 프로필
 
-    /// 스냅샷의 email로 기존 프로필을 찾아 갱신하거나 새로 만든다. 첫 계정은 자동 활성.
+    /// (provider, email)로 기존 프로필을 찾아 갱신하거나 새로 만든다.
+    /// 그 프로바이더의 첫 계정은 자동 활성.
     @discardableResult
-    public func upsertProfile(nickname: String, snapshot: CredentialsSnapshot) throws -> AccountProfile {
+    public func upsertProfile(nickname: String, provider: Provider,
+                              identity: ProviderIdentity, secretData: Data) throws -> AccountProfile {
         lock.lock(); defer { lock.unlock() }
-        guard let oauthJSON = snapshot.oauthAccountJSON,
-              let block = try JSONSerialization.jsonObject(with: oauthJSON) as? [String: Any],
-              let email = block["emailAddress"] as? String else {
-            throw AccountStoreError.snapshotMissingEmail
-        }
-        let org = block["organizationName"] as? String ?? ""
-        let tier = Self.tierDescription(from: block)
-
         var profile: AccountProfile
-        if let idx = file.accounts.firstIndex(where: { $0.emailAddress == email }) {
+        if let idx = file.accounts.firstIndex(where: {
+            $0.provider == provider && $0.emailAddress == identity.emailAddress
+        }) {
             file.accounts[idx].nickname = nickname
-            file.accounts[idx].organizationName = org
-            file.accounts[idx].tierDescription = tier
+            file.accounts[idx].organizationName = identity.organizationName
+            file.accounts[idx].tierDescription = identity.tierDescription
             file.accounts[idx].needsReauth = false
             profile = file.accounts[idx]
         } else {
-            profile = AccountProfile(id: UUID(), nickname: nickname, emailAddress: email,
-                                     organizationName: org, tierDescription: tier)
+            profile = AccountProfile(id: UUID(), provider: provider, nickname: nickname,
+                                     emailAddress: identity.emailAddress,
+                                     organizationName: identity.organizationName,
+                                     tierDescription: identity.tierDescription)
             file.accounts.append(profile)
-            if file.activeAccountID == nil { file.activeAccountID = profile.id }
+            if file.activeByProvider[provider] == nil {
+                file.activeByProvider[provider] = profile.id
+            }
         }
-        try setSecret(snapshot, for: profile.id)
+        try setSecretData(secretData, for: profile.id)
         try save()
         return profile
     }
 
-    static func tierDescription(from block: [String: Any]) -> String {
-        let tier = (block["organizationRateLimitTier"] as? String)
-            ?? (block["organizationType"] as? String) ?? ""
-        // "default_claude_max_20x" → "Max 20x" 정도의 사람이 읽는 문자열로
-        return tier.replacingOccurrences(of: "default_", with: "")
-            .replacingOccurrences(of: "claude_", with: "")
-            .replacingOccurrences(of: "_", with: " ")
-            .capitalized
+    /// Claude 편의 경로 — 스냅샷에서 신원을 추출해 등록한다 (CLI capture·LoginFlow용).
+    @discardableResult
+    public func upsertProfile(nickname: String, snapshot: CredentialsSnapshot) throws -> AccountProfile {
+        guard let oauthJSON = snapshot.oauthAccountJSON,
+              let block = try JSONSerialization.jsonObject(with: oauthJSON) as? [String: Any],
+              let identity = ClaudeConfigIO.identity(fromOAuthBlock: block) else {
+            throw AccountStoreError.snapshotMissingEmail
+        }
+        return try upsertProfile(nickname: nickname, provider: .claude, identity: identity,
+                                 secretData: try JSONEncoder().encode(snapshot))
     }
 
     // MARK: 비밀 스냅샷 (0700 파일 — Claude Code의 .credentials.json과 동일 보안 수준)
+    // 내용물은 프로바이더가 정한 직렬화 바이트 (ProviderConfigIO 참조). 스토어는 해석하지 않는다.
 
-    public func secret(for id: UUID) throws -> CredentialsSnapshot? {
+    public func secretData(for id: UUID) throws -> Data? {
         // 1순위: 파일. 승인창 없음.
         if let data = try? Data(contentsOf: env.secretFile(for: id)) {
-            return try JSONDecoder().decode(CredentialsSnapshot.self, from: data)
+            return data
         }
-        // 2순위: 구버전 Keychain 항목 → 발견 시 파일로 이관하고 Keychain 항목 제거
+        // 2순위: 구버전 Keychain 항목(Claude 시절) → 발견 시 파일로 이관하고 Keychain 항목 제거
         //        (한 번만 승인창이 뜨고, 이후로는 파일에서 읽어 다시 뜨지 않는다).
         if let data = ((try? keychain.read(service: Self.secretService(for: id),
                                            account: Self.secretAccount)) ?? nil) {
-            let snap = try JSONDecoder().decode(CredentialsSnapshot.self, from: data)
-            try? writeSecretFile(snap, for: id)
+            _ = try JSONDecoder().decode(CredentialsSnapshot.self, from: data) // 형식 검증
+            try? writeSecretFile(data, for: id)
             try? keychain.delete(service: Self.secretService(for: id),
                                  account: Self.secretAccount)
-            return snap
+            return data
         }
         return nil
     }
 
-    public func setSecret(_ snapshot: CredentialsSnapshot, for id: UUID) throws {
-        try writeSecretFile(snapshot, for: id)
+    public func setSecretData(_ data: Data, for id: UUID) throws {
+        try writeSecretFile(data, for: id)
         // 혹시 남아 있을 수 있는 구버전 Keychain 항목은 정리 (승인창 재발 방지)
         try? keychain.delete(service: Self.secretService(for: id), account: Self.secretAccount)
     }
 
-    private func writeSecretFile(_ snapshot: CredentialsSnapshot, for id: UUID) throws {
-        let data = try JSONEncoder().encode(snapshot)
+    /// Claude 편의 경로 — 기존 비밀 파일 포맷(CredentialsSnapshot JSON) 그대로.
+    public func secret(for id: UUID) throws -> CredentialsSnapshot? {
+        guard let data = try secretData(for: id) else { return nil }
+        return try JSONDecoder().decode(CredentialsSnapshot.self, from: data)
+    }
+
+    public func setSecret(_ snapshot: CredentialsSnapshot, for id: UUID) throws {
+        try setSecretData(try JSONEncoder().encode(snapshot), for: id)
+    }
+
+    private func writeSecretFile(_ data: Data, for id: UUID) throws {
         try FileManager.default.createDirectory(at: env.secretsDir,
             withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         let url = env.secretFile(for: id)
@@ -130,15 +142,20 @@ public final class AccountStore: @unchecked Sendable {
 
     // MARK: 상태 변경
 
-    public func setActive(_ id: UUID?) throws {
+    /// 지정 계정을 자기 프로바이더 풀의 활성으로 표시한다.
+    public func setActive(_ id: UUID) throws {
         lock.lock(); defer { lock.unlock() }
-        file.activeAccountID = id
+        guard let profile = file.accounts.first(where: { $0.id == id }) else {
+            throw AccountStoreError.unknownAccount
+        }
+        file.activeByProvider[profile.provider] = id
         try save()
     }
 
-    public func setAutoSwitch(_ enabled: Bool) throws {
+    /// provider 기본값 없음 — 풀을 바꾸는 연산은 대상 풀을 항상 명시한다 (오라우팅 방지).
+    public func setAutoSwitch(_ enabled: Bool, provider: Provider) throws {
         lock.lock(); defer { lock.unlock() }
-        file.autoSwitchEnabled = enabled
+        file.autoSwitchByProvider[provider] = enabled
         try save()
     }
 
@@ -150,9 +167,10 @@ public final class AccountStore: @unchecked Sendable {
 
     /// 현재 fallback 활성이 자동 전환의 결과인지 기록 — 파일로 영속되므로
     /// CLI 전환(별 프로세스)·앱 재시작 후에도 onTick 복귀 판단이 올바르다.
-    public func setAutoSwitchedFromPrimary(_ flagged: Bool) throws {
+    /// provider 기본값 없음 — 풀을 바꾸는 연산은 대상 풀을 항상 명시한다 (오라우팅 방지).
+    public func setAutoSwitchedFromPrimary(_ flagged: Bool, provider: Provider) throws {
         lock.lock(); defer { lock.unlock() }
-        file.autoSwitchedFromPrimary = flagged
+        file.autoSwitchedByProvider[provider] = flagged
         try save()
     }
 
@@ -168,16 +186,26 @@ public final class AccountStore: @unchecked Sendable {
         file = newFile
     }
 
-    /// fallback(인덱스 1 이상)끼리만 재배열. primary(0)는 고정.
-    public func moveFallback(fromIndex: Int, toIndex: Int) throws {
+    /// fallback(프로바이더 풀 내 인덱스 1 이상)끼리만 재배열. primary(0)는 고정.
+    /// 인덱스는 해당 프로바이더 계정 목록 기준이다.
+    public func moveFallback(provider: Provider, fromIndex: Int, toIndex: Int) throws {
         lock.lock(); defer { lock.unlock() }
+        var group = file.accounts.filter { $0.provider == provider }
         guard fromIndex >= 1, toIndex >= 1,
-              fromIndex < file.accounts.count, toIndex < file.accounts.count else {
+              fromIndex < group.count, toIndex < group.count else {
             throw AccountStoreError.cannotMovePrimary
         }
-        let item = file.accounts.remove(at: fromIndex)
-        file.accounts.insert(item, at: toIndex)
+        let item = group.remove(at: fromIndex)
+        group.insert(item, at: toIndex)
+        replaceGroup(provider, with: group)
         try save()
+    }
+
+    /// 프로바이더 그룹을 재배열 결과로 치환한다 — 전체 배열에서 그 프로바이더가 차지하던
+    /// 위치들은 유지하고 내용만 새 순서로 채운다 (타 프로바이더 계정 순서 불변).
+    private func replaceGroup(_ provider: Provider, with group: [AccountProfile]) {
+        var it = group.makeIterator()
+        file.accounts = file.accounts.map { $0.provider == provider ? it.next()! : $0 }
     }
 
     /// 재로그인 필요 마킹/해제. 변화 없으면 저장하지 않는다.
@@ -191,40 +219,51 @@ public final class AccountStore: @unchecked Sendable {
         try save()
     }
 
-    /// 지정 계정에만 사용자 핀을 세운다(나머지는 해제). 수동 전환 시 호출 —
+    /// 지정 계정에만 사용자 핀을 세운다(같은 프로바이더 풀의 나머지는 해제). 수동 전환 시 호출 —
     /// 모델 전용 한도(Fable 등)로 이 계정을 자동으로 밀어내지 않게 한다.
+    /// ★ 핀 해제는 반드시 같은 풀로 한정한다 — 전역 clear는 Codex 계정을 수동 전환할 때
+    ///   사용자가 골라둔 Claude 계정의 핀까지 풀어 modelScoped 한도에서 의도치 않은 자동 전환을
+    ///   유발한다(풀은 독립이므로 핀도 풀별 독립이어야 한다).
     public func setUserPinned(_ id: UUID) throws {
         lock.lock(); defer { lock.unlock() }
+        guard let provider = file.accounts.first(where: { $0.id == id })?.provider else {
+            throw AccountStoreError.unknownAccount
+        }
         var changed = false
-        for i in file.accounts.indices {
+        for i in file.accounts.indices where file.accounts[i].provider == provider {
             let want = file.accounts[i].id == id
             if file.accounts[i].userPinned != want { file.accounts[i].userPinned = want; changed = true }
         }
         if changed { try save() }
     }
 
-    /// 지정 계정을 primary(인덱스 0)로 승격. 기존 primary는 첫 fallback으로 내려간다.
-    /// primary 기준이 바뀌므로 autoSwitchedFromPrimary는 리셋 — 옛 primary 체제에서의
-    /// 자동 복귀 예약이 새 primary로 오귀속되지 않도록.
+    /// 지정 계정을 자기 프로바이더 풀의 primary(첫 자리)로 승격. 기존 primary는 첫
+    /// fallback으로 내려간다. primary 기준이 바뀌므로 그 풀의 autoSwitchedFromPrimary는
+    /// 리셋 — 옛 primary 체제에서의 자동 복귀 예약이 새 primary로 오귀속되지 않도록.
     public func setPrimary(_ id: UUID) throws {
         lock.lock(); defer { lock.unlock() }
-        guard let idx = file.accounts.firstIndex(where: { $0.id == id }) else {
+        guard let profile = file.accounts.first(where: { $0.id == id }) else {
             throw AccountStoreError.unknownAccount
         }
-        guard idx != 0 else { return } // 이미 primary — 변경 없음
-        let item = file.accounts.remove(at: idx)
-        file.accounts.insert(item, at: 0)
-        file.autoSwitchedFromPrimary = false
+        var group = file.accounts.filter { $0.provider == profile.provider }
+        guard group.first?.id != id else { return } // 이미 primary — 변경 없음
+        group.removeAll { $0.id == id }
+        group.insert(profile, at: 0)
+        replaceGroup(profile.provider, with: group)
+        file.autoSwitchedByProvider[profile.provider] = false
         try save()
     }
 
     public func remove(_ id: UUID) throws {
         lock.lock(); defer { lock.unlock() }
-        guard file.accounts.contains(where: { $0.id == id }) else {
+        guard let profile = file.accounts.first(where: { $0.id == id }) else {
             throw AccountStoreError.unknownAccount
         }
         file.accounts.removeAll { $0.id == id }
-        if file.activeAccountID == id { file.activeAccountID = file.accounts.first?.id }
+        if file.activeByProvider[profile.provider] == id {
+            file.activeByProvider[profile.provider] =
+                file.accounts.first { $0.provider == profile.provider }?.id
+        }
         try? FileManager.default.removeItem(at: env.secretFile(for: id))
         try? keychain.delete(service: Self.secretService(for: id), account: Self.secretAccount)
         try save()

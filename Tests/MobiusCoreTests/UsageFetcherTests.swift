@@ -86,6 +86,28 @@ final class UsageFetcherTests: XCTestCase {
             blob: blob(access: past), isActive: true, now: now))
     }
 
+    func testExhaustionHitMirrorsCodexSemantics() {
+        let now = Date(timeIntervalSince1970: 1_784_300_000)
+        let fiveReset = now.addingTimeInterval(3600)
+        let weekReset = now.addingTimeInterval(86_400)
+        func snap(_ five: Double?, _ week: Double?) -> UsageSnapshot {
+            UsageSnapshot(fiveHourPercent: five, fiveHourResetsAt: five != nil ? fiveReset : nil,
+                          sevenDayPercent: week, sevenDayResetsAt: week != nil ? weekReset : nil,
+                          fetchedAt: now)
+        }
+        // 창 여유 → 소진 아님 (monthly spend만 도달한 상황)
+        XCTAssertNil(snap(40, 39).exhaustionHit(now: now))
+        // 5시간 창 소진 → 그 창의 리셋 시각
+        XCTAssertEqual(snap(100, 39).exhaustionHit(now: now), RateLimitHit(resetsAt: fiveReset))
+        // 둘 다 소진 → 더 늦은 주간 리셋 시각
+        XCTAssertEqual(snap(100, 100).exhaustionHit(now: now), RateLimitHit(resetsAt: weekReset))
+        // 100%지만 리셋 시각이 이미 지남 → 소진 아님 (낡은 스냅샷 방어)
+        let stale = UsageSnapshot(fiveHourPercent: 100,
+                                  fiveHourResetsAt: now.addingTimeInterval(-60),
+                                  sevenDayPercent: 10, sevenDayResetsAt: weekReset, fetchedAt: now)
+        XCTAssertNil(stale.exhaustionHit(now: now))
+    }
+
     func testExpiresAtParsing() {
         // 실측: claudeAiOauth.expiresAt는 13자리 epoch 밀리초 (2026-07-11 확인)
         let ms = Data(#"{"claudeAiOauth":{"expiresAt":1783785648000}}"#.utf8)

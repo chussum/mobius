@@ -4,10 +4,13 @@ import Foundation
 public struct MobiusEnvironment: Sendable {
     public var home: URL
     public var localUser: String
+    /// codex CLI 설정 루트 오버라이드 (codex 자신의 CODEX_HOME과 동일 의미). nil이면 ~/.codex.
+    public var codexHome: URL?
 
-    public init(home: URL, localUser: String) {
+    public init(home: URL, localUser: String, codexHome: URL? = nil) {
         self.home = home
         self.localUser = localUser
+        self.codexHome = codexHome
     }
 
     public var claudeDir: URL { home.appendingPathComponent(".claude") }
@@ -43,6 +46,12 @@ public struct MobiusEnvironment: Sendable {
     public var claudeKeychainService: String { "Claude Code-credentials" }
     public var claudeKeychainAccount: String { localUser }
 
+    /// codex CLI 설정 루트. 자격증명은 auth.json 단일 파일(0600), Keychain 무관.
+    public var codexDir: URL { codexHome ?? home.appendingPathComponent(".codex") }
+    public var codexAuthFile: URL { codexDir.appendingPathComponent("auth.json") }
+    /// codex 세션 로그 루트 — rollout-*.jsonl에 rate_limits 이벤트가 in-band 포함된다.
+    public var codexSessionsDir: URL { codexDir.appendingPathComponent("sessions") }
+
     public static func live() -> MobiusEnvironment {
         let home: URL
         if let override = ProcessInfo.processInfo.environment["MOBIUS_HOME"] {
@@ -50,6 +59,8 @@ public struct MobiusEnvironment: Sendable {
         } else {
             home = FileManager.default.homeDirectoryForCurrentUser
         }
-        return MobiusEnvironment(home: home, localUser: NSUserName())
+        let codexHome = ProcessInfo.processInfo.environment["CODEX_HOME"]
+            .map { URL(fileURLWithPath: $0) }
+        return MobiusEnvironment(home: home, localUser: NSUserName(), codexHome: codexHome)
     }
 }

@@ -30,10 +30,29 @@ final class ModelsTests: XCTestCase {
          "autoSwitchEnabled": false, "desktopSyncEnabled": true}
         """
         let file = try JSONDecoder().decode(AccountsFile.self, from: Data(legacy.utf8))
-        XCTAssertFalse(file.autoSwitchEnabled)
+        // 구 전역 autoSwitchEnabled는 양쪽 풀에 동일 적용
+        XCTAssertFalse(file.isAutoSwitchEnabled(.claude))
+        XCTAssertFalse(file.isAutoSwitchEnabled(.codex))
         XCTAssertTrue(file.desktopSyncEnabled)
         XCTAssertFalse(file.desktopAutoSwitchEnabled) // 없으면 기본 끔
         XCTAssertFalse(file.autoSwitchedFromPrimary)  // 없으면 기본 false (수동 상태로 간주)
+    }
+
+    func testAutoSwitchByProviderRoundtripAndLegacyKey() throws {
+        var file = AccountsFile()
+        file.autoSwitchByProvider[.codex] = false
+        let data = try JSONEncoder().encode(file)
+        let back = try JSONDecoder().decode(AccountsFile.self, from: data)
+        XCTAssertTrue(back.isAutoSwitchEnabled(.claude))  // 기록 없는 풀은 기본 켬
+        XCTAssertFalse(back.isAutoSwitchEnabled(.codex))
+        // 다운그레이드 완충: 레거시 전역 키에는 Claude 풀 값이 실린다
+        let obj = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        XCTAssertEqual(obj["autoSwitchEnabled"] as? Bool, true)
+
+        file.autoSwitchByProvider[.claude] = false
+        let obj2 = try XCTUnwrap(JSONSerialization.jsonObject(
+            with: JSONEncoder().encode(file)) as? [String: Any])
+        XCTAssertEqual(obj2["autoSwitchEnabled"] as? Bool, false)
     }
 
     func testIsLimited() {

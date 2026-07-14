@@ -112,9 +112,10 @@ struct AccountCardView: View {
         .contentShape(Rectangle())
     }
 
-    // 상단 "리셋까지" 카운트다운은 계정이 **전반적으로** 소진일 때만 — 자동 Fallback 켬 + 한도 기록.
-    // 단, usage로 볼 때 5시간·주간엔 여유가 있고 모델 스코프(Fable 등)만 100%면, 계정은 다른
-    // 모델로 쓸 수 있으므로 상단 알람을 숨긴다 (그 한도는 아래 모델별 게이지가 이미 보여준다).
+    // 상단 "리셋까지" 카운트다운은 이 풀의 자동 전환이 켜져 있고(autoSwitchOn) 계정이
+    // **전반적으로** 소진일 때만 표시한다. usage로 볼 때 5시간·주간엔 여유가 있고 모델 스코프
+    // (Fable 등)만 100%면, 계정은 다른 모델로 쓸 수 있으므로 상단 알람을 숨긴다
+    // (그 한도는 아래 모델별 게이지가 이미 보여준다). 수동 모드에선 tier 설명으로 대체.
     private var generallyLimited: Bool {
         guard let u = usage else { return true } // usage 모르면 보수적으로 표시
         let five = u.fiveHourPercent ?? 0, week = u.sevenDayPercent ?? 0

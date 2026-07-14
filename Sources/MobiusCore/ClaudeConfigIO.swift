@@ -93,10 +93,54 @@ public struct ClaudeConfigIO: Sendable {
         try writeAtomic(out, to: env.claudeJSON, mode: 0o600)
     }
 
-    func writeAtomic(_ data: Data, to url: URL, mode: Int16) throws {
-        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
-                                                withIntermediateDirectories: true)
-        try data.write(to: url, options: .atomic)
-        try FileManager.default.setAttributes([.posixPermissions: mode], ofItemAtPath: url.path)
+}
+
+// MARK: - ProviderConfigIO (secret data = CredentialsSnapshot JSON — 기존 비밀 파일 포맷 그대로)
+
+extension ClaudeConfigIO: ProviderConfigIO {
+    public var provider: Provider { .claude }
+
+    public func readLiveSecretData() throws -> Data? {
+        guard let snap = try readLiveSnapshot() else { return nil }
+        return try JSONEncoder().encode(snap)
+    }
+
+    public func liveIdentity() throws -> ProviderIdentity? {
+        guard let block = try readOAuthAccountDict() else { return nil }
+        return Self.identity(fromOAuthBlock: block)
+    }
+
+    /// oauthAccount 블록 → 표시용 신원. 라이브 읽기와 스냅샷 기반 등록(AccountStore)이 공유.
+    public static func identity(fromOAuthBlock block: [String: Any]) -> ProviderIdentity? {
+        guard let email = block["emailAddress"] as? String else { return nil }
+        return ProviderIdentity(emailAddress: email,
+                                organizationName: block["organizationName"] as? String ?? "",
+                                tierDescription: tierDescription(from: block))
+    }
+
+    /// "default_claude_max_20x" → "Max 20x" 정도의 사람이 읽는 문자열로
+    static func tierDescription(from block: [String: Any]) -> String {
+        let tier = (block["organizationRateLimitTier"] as? String)
+            ?? (block["organizationType"] as? String) ?? ""
+        return tier.replacingOccurrences(of: "default_", with: "")
+            .replacingOccurrences(of: "claude_", with: "")
+            .replacingOccurrences(of: "_", with: " ")
+            .capitalized
+    }
+
+    public func readStableLiveSecretData(gap: Duration) async -> (data: Data, email: String)? {
+        guard let (snap, email) = await readStableLiveSnapshot(gap: gap),
+              let data = try? JSONEncoder().encode(snap) else { return nil }
+        return (data, email)
+    }
+
+    public func writeLiveSecretData(_ data: Data) throws {
+        try writeLiveSnapshot(try JSONDecoder().decode(CredentialsSnapshot.self, from: data))
+    }
+
+    /// Claude secret은 CredentialsSnapshot JSON이다 — 디코드되면 Claude 형태.
+    /// Codex auth.json(keychainBlob/credentialsFileData 키 없음)은 여기서 디코드 실패한다.
+    public func recognizesSecret(_ data: Data) -> Bool {
+        (try? JSONDecoder().decode(CredentialsSnapshot.self, from: data)) != nil
     }
 }

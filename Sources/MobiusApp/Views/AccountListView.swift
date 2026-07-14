@@ -37,33 +37,6 @@ struct AccountListView: View {
         .onAppear { state.reload(); state.refreshUsageIfStale(); state.validateFallbacksLocally(); now = Date() }
     }
 
-    @State private var showFallbackInfo = false
-
-    private var fallbackInfoButton: some View {
-        Button { showFallbackInfo.toggle() } label: {
-            Image(systemName: "info.circle")
-                .font(.system(size: 11)).foregroundStyle(.secondary)
-        }
-        .buttonStyle(.plain)
-        .help(loc("자동 Fallback이 무엇인지 보기"))
-        .popover(isPresented: $showFallbackInfo, arrowEdge: .bottom) {
-            VStack(alignment: .leading, spacing: 8) {
-                Label(loc("자동 Fallback"), systemImage: "infinity")
-                    .font(.system(size: 12, weight: .semibold))
-                Text(loc("사용하던 계정의 한도가 다 차면, 아래 순서(우선순위)대로 여유 있는 다음 계정으로 자동 전환됩니다."))
-                    .font(.system(size: 11)).foregroundStyle(.secondary)
-                Text(loc("맨 위 계정의 한도가 초기화되면 다시 맨 위 계정으로 돌아옵니다."))
-                    .font(.system(size: 11)).foregroundStyle(.secondary)
-                Divider()
-                Text(loc("끄면 자동 전환 없이 한도 소진 알림만 보냅니다. 계정은 카드를 눌러 직접 바꿀 수 있어요."))
-                    .font(.system(size: 11)).foregroundStyle(.tertiary)
-            }
-            .padding(14)
-            .frame(width: 260)
-            .fixedSize(horizontal: false, vertical: true)
-        }
-    }
-
     private var header: some View {
         HStack {
             Image(systemName: "infinity")
@@ -72,38 +45,56 @@ struct AccountListView: View {
             Text("Mobius").font(.system(size: 14, weight: .bold, design: .rounded))
             Text(loc("뫼비우스")).font(.system(size: 10)).foregroundStyle(.tertiary)
             Spacer()
-            fallbackInfoButton
-            Toggle(loc("Claude Code CLI 자동 Fallback"), isOn: Binding(
-                get: { state.file.autoSwitchEnabled },
-                set: { state.setAutoSwitch($0) }))
-                .toggleStyle(.switch).controlSize(.mini)
-                .font(.system(size: 10))
         }
     }
 
+    private var providersWithAccounts: [Provider] {
+        Provider.allCases.filter { !state.file.accounts(of: $0).isEmpty }
+    }
+
     private var cards: some View {
+        VStack(spacing: 10) {
+            ForEach(providersWithAccounts, id: \.self) { provider in
+                providerSection(provider)
+            }
+        }
+    }
+
+    @ViewBuilder private func providerSection(_ provider: Provider) -> some View {
+        let accounts = state.file.accounts(of: provider)
         VStack(spacing: 6) {
+            if providersWithAccounts.count > 1 {
+                HStack {
+                    Text(provider.displayName)
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                }
+            }
             // primary (고정)
-            if let primary = state.file.primary {
+            if let primary = accounts.first {
                 card(primary, isPrimary: true)
             }
-            // fallbacks (DnD 재정렬)
-            List {
-                ForEach(Array(state.file.accounts.dropFirst()), id: \.id) { p in
-                    card(p, isPrimary: false)
-                        .listRowInsets(EdgeInsets(top: 3, leading: 0, bottom: 3, trailing: 0))
-                        .listRowSeparator(.hidden)
-                        .listRowBackground(Color.clear)
+            // fallbacks (풀 내 DnD 재정렬)
+            let fallbacks = Array(accounts.dropFirst())
+            if !fallbacks.isEmpty {
+                List {
+                    ForEach(fallbacks, id: \.id) { p in
+                        card(p, isPrimary: false)
+                            .listRowInsets(EdgeInsets(top: 3, leading: 0, bottom: 3, trailing: 0))
+                            .listRowSeparator(.hidden)
+                            .listRowBackground(Color.clear)
+                    }
+                    .onMove { state.moveFallback(provider: provider, from: $0, to: $1) }
                 }
-                .onMove { state.moveFallback(from: $0, to: $1) }
+                .listStyle(.plain)
+                .scrollContentBackground(.hidden)
+                .frame(height: fallbacks.reduce(CGFloat(0)) { sum, p in
+                    sum + AccountCardView.estimatedHeight(
+                        hasUsage: usageFor(p) != nil,
+                        scopedCount: usageFor(p)?.scopedLimits?.count ?? 0)
+                })
             }
-            .listStyle(.plain)
-            .scrollContentBackground(.hidden)
-            .frame(height: state.file.accounts.dropFirst().reduce(CGFloat(0)) { sum, p in
-                sum + AccountCardView.estimatedHeight(
-                    hasUsage: usageFor(p) != nil,
-                    scopedCount: usageFor(p)?.scopedLimits?.count ?? 0)
-            })
         }
     }
 
@@ -111,12 +102,22 @@ struct AccountListView: View {
         showUsageGauges ? state.usage[p.id] : nil
     }
 
+    private func isActive(_ p: AccountProfile) -> Bool {
+        p.id == state.file.activeByProvider[p.provider]
+    }
+
     private func card(_ p: AccountProfile, isPrimary: Bool) -> some View {
-        AccountCardView(profile: p, isActive: p.id == (state.pendingSwitchID ?? state.file.activeAccountID),
+        // Desktop 연결·재로그인 플로우는 Claude 전용 (Codex 재로그인 감지는 미배선)
+        let claudeCard = p.provider == .claude
+        // 낙관적 표시: 수동 전환(Claude) 클릭 직후 pendingSwitchID로 그 카드를 즉시 활성으로
+        // 보여줘 UI가 스무스하게 전환된 것처럼 보이게 한다. Codex·평시엔 풀별 isActive.
+        let showActive = claudeCard && state.pendingSwitchID != nil
+            ? (p.id == state.pendingSwitchID) : isActive(p)
+        return AccountCardView(profile: p, isActive: showActive,
                         isPrimary: isPrimary,
-                        autoSwitchOn: state.file.autoSwitchEnabled,
+                        autoSwitchOn: state.file.isAutoSwitchEnabled(p.provider),
                         usage: usageFor(p), now: now,
-                        onConnectDesktop: state.desktopSwitcher.isDesktopInstalled
+                        onConnectDesktop: claudeCard && state.desktopSwitcher.isDesktopInstalled
                             ? { state.beginDesktopCapture(for: p.id) } : nil,
                         onDelete: { state.removeAccount(p.id) },
                         onSetPrimary: isPrimary ? nil : {
@@ -124,16 +125,16 @@ struct AccountListView: View {
                                 state.setPrimary(p.id)
                             }
                         },
-                        onReauth: p.needsReauth ? { state.addAccount() } : nil)
+                        onReauth: p.needsReauth && claudeCard ? { state.addAccount() } : nil)
             .matchedGeometryEffect(id: p.id, in: cardSpace)
             .onTapGesture {
-                guard p.id != state.file.activeAccountID else { return }
+                guard !isActive(p) else { return }
                 withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
                     state.manualSwitch(to: p.id)
                 }
             }
             .contextMenu {
-                if p.needsReauth {
+                if p.needsReauth && claudeCard {
                     Button(loc("다시 로그인")) { state.addAccount() }
                 }
                 if !isPrimary {
@@ -143,17 +144,34 @@ struct AccountListView: View {
                         }
                     }
                 }
-                Button(p.hasDesktopSnapshot ? loc("Claude Desktop 다시 연결") : loc("Claude Desktop 연결")) {
-                    state.beginDesktopCapture(for: p.id)
+                if claudeCard {
+                    Button(p.hasDesktopSnapshot ? loc("Claude Desktop 다시 연결") : loc("Claude Desktop 연결")) {
+                        state.beginDesktopCapture(for: p.id)
+                    }
                 }
                 Button(loc("삭제"), role: .destructive) { state.removeAccount(p.id) }
             }
     }
 
     private var emptyView: some View {
-        VStack(spacing: 8) {
+        VStack(spacing: 10) {
             Image(systemName: "infinity").font(.system(size: 28)).foregroundStyle(.tertiary)
             Text(loc("등록된 계정이 없습니다")).font(.system(size: 12)).foregroundStyle(.secondary)
+            // 1클릭 온보딩 — 설정 경유 없이 Claude 로그인 플로우를 바로 시작한다.
+            // (CLI 미설치면 addAccount가 설정에서 설치하도록 안내.)
+            Button { state.addAccount() } label: {
+                Label(loc("Claude 계정 추가"), systemImage: "plus.circle.fill")
+                    .font(.system(size: 12, weight: .medium))
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.small)
+            // Codex(터미널 adopt)·CLI 설치 등은 설정에서
+            Button(loc("설정에서 추가 (Codex 포함)")) {
+                NSApp.activate(ignoringOtherApps: true)
+                openSettings()
+            }
+            .buttonStyle(.plain)
+            .font(.system(size: 10)).foregroundStyle(.tertiary)
         }
         .frame(maxWidth: .infinity).padding(.vertical, 24)
     }
@@ -190,23 +208,29 @@ struct AccountListView: View {
 
     private var footer: some View {
         HStack {
-            Button { state.addAccount() } label: {
-                Label(loc("계정 추가"), systemImage: "plus.circle.fill").font(.system(size: 11))
-            }.buttonStyle(.plain).foregroundStyle(.secondary)
-            Spacer()
             if let err = state.lastError {
                 TruncatingErrorText(text: err)
             }
+            Spacer()
             // SettingsLink는 accessory(메뉴바 전용) 앱에서 창을 활성화하지 못해 무반응 —
             // 앱을 먼저 활성화한 뒤 openSettings 환경 액션으로 연다
-            Button {
+            footerButton("gearshape", help: loc("설정")) {
                 NSApp.activate(ignoringOtherApps: true)
                 openSettings()
-            } label: { Image(systemName: "gearshape").font(.system(size: 11)) }
-                .buttonStyle(.plain).foregroundStyle(.secondary)
-            Button { NSApp.terminate(nil) } label: {
-                Image(systemName: "power").font(.system(size: 11))
-            }.buttonStyle(.plain).foregroundStyle(.secondary)
+            }
+            footerButton("power", help: loc("종료")) { NSApp.terminate(nil) }
         }
+    }
+
+    /// footer 아이콘 버튼 — 아이콘보다 넓은 히트 영역(28pt)으로 누르기 쉽게
+    private func footerButton(_ symbol: String, help: String,
+                              action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol).font(.system(size: 13))
+                .frame(width: 28, height: 28)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain).foregroundStyle(.secondary)
+        .help(help)
     }
 }

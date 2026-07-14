@@ -25,7 +25,7 @@ final class LoginFlowController: NSObject, ASWebAuthenticationPresentationContex
     /// 실패/취소 시 에러 throw.
     func run() async throws -> LoginFlowResult {
         // ① 현재 상태 보관 (없으면 로그아웃 상태에서 시작한 것 — 복원 생략)
-        try switcher.resaveLiveIntoMatchingProfile()
+        try switcher.resaveLiveIntoMatchingProfile(provider: .claude)
         let previous = try io.readLiveSnapshot()
         let previousActiveID = store.file.activeAccountID
         let baselineEmail = try io.liveEmail()
@@ -57,7 +57,7 @@ final class LoginFlowController: NSObject, ASWebAuthenticationPresentationContex
                 session?.cancel(); session = nil   // 창 닫기
 
                 let nickname = store.file.accounts
-                    .first { $0.emailAddress == email }?.nickname
+                    .first { $0.provider == .claude && $0.emailAddress == email }?.nickname
                     ?? String(email.split(separator: "@").first ?? "account")
                 let profile = try store.upsertProfile(nickname: nickname, snapshot: snap)
 
@@ -65,8 +65,10 @@ final class LoginFlowController: NSObject, ASWebAuthenticationPresentationContex
                     MobiusNotification.postAccountsChanged()
                     return .refreshed(profile)
                 }
-                // ⑤ 원래 계정 복원 (새 계정은 fallback 목록 끝). 원래 계정 없으면 새 계정 유지.
-                if let previous, let prevID = previousActiveID {
+                // ⑤ 원래 계정 복원 (새 계정은 fallback 목록 끝). 원래 계정이 없거나
+                //    로그인 진행 중 삭제됐으면 새 계정을 활성으로 유지한다.
+                if let previous, let prevID = previousActiveID,
+                   store.file.accounts.contains(where: { $0.id == prevID }) {
                     try io.writeLiveSnapshot(previous)
                     try store.setActive(prevID)
                 } else {

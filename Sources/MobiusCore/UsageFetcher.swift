@@ -32,6 +32,21 @@ public struct UsageSnapshot: Codable, Equatable, Sendable {
         self.scopedLimits = scopedLimits
         self.fetchedAt = fetchedAt
     }
+
+    /// 소진 판정 — CodexRateLimitStatus.exhaustionHit와 같은 의미론:
+    /// 100% 이상인 창들 중 가장 늦은(그리고 아직 안 지난) resets_at을 리셋 시각으로.
+    /// 어느 창도 소진이 아니면 nil. monthly spend 이벤트(P3)의 usage 교차 확인용.
+    public func exhaustionHit(now: Date) -> RateLimitHit? {
+        var exhaustedResets: [Date] = []
+        if let pct = fiveHourPercent, pct >= 100, let r = fiveHourResetsAt, r > now {
+            exhaustedResets.append(r)
+        }
+        if let pct = sevenDayPercent, pct >= 100, let r = sevenDayResetsAt, r > now {
+            exhaustedResets.append(r)
+        }
+        guard let resetsAt = exhaustedResets.max() else { return nil }
+        return RateLimitHit(resetsAt: resetsAt)
+    }
 }
 
 public enum UsageFetcherError: Error, Equatable {
@@ -64,7 +79,7 @@ public enum UsageFetcher {
         if let d = raw as? Double { n = d }
         else if let i = raw as? Int { n = Double(i) }
         else { return nil }
-        return Date(timeIntervalSince1970: n > 1e12 ? n / 1000 : n)
+        return dateFromEpochSecondsOrMillis(n)
     }
 
     /// usage 401/403 후 재로그인 마킹 판단. 자연 만료된 access 토큰의 401은 오탐이므로

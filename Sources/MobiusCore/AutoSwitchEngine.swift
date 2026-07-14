@@ -13,13 +13,15 @@ public enum Decision: Equatable, Sendable {
 }
 
 /// 순수 상태머신. 부작용 없음 — 호출자가 Decision을 실행하고 noteSwitched()로 알려준다.
+/// 프로바이더 풀당 1인스턴스 — 쿨다운/복귀 판단이 풀별로 독립이다.
 public final class AutoSwitchEngine: @unchecked Sendable {
+    public let provider: Provider
     public var cooldown: TimeInterval = 120   // 전환 직후 재전환 금지
     public var margin: TimeInterval = 60      // 리셋 시각 + margin 후에만 복귀
     private var lastSwitchAt: Date = .distantPast
     private let lock = NSLock()
 
-    public init() {}
+    public init(provider: Provider = .claude) { self.provider = provider }
 
     public func noteSwitched(now: Date = Date()) {
         lock.lock(); defer { lock.unlock() }
@@ -31,9 +33,9 @@ public final class AutoSwitchEngine: @unchecked Sendable {
         return now < lastSwitchAt.addingTimeInterval(cooldown)
     }
 
-    /// 후보: 순서(우선순위)대로, 한도 안 걸렸고 재인증 불필요한 계정
+    /// 후보: 풀 내 순서(우선순위)대로, 한도 안 걸렸고 재인증 불필요한 계정
     private func firstAvailable(in file: AccountsFile, excluding: UUID?, now: Date) -> UUID? {
-        file.accounts.first {
+        file.accounts(of: provider).first {
             $0.id != excluding && !$0.isLimited(now: now) && !$0.needsReauth
         }?.id
     }
@@ -42,9 +44,9 @@ public final class AutoSwitchEngine: @unchecked Sendable {
     /// 쿨다운 내 hit는 무시 — 전환 직후 구 세션이 계속 남기는 stale 로그를
     /// 새 활성 계정의 소진으로 오인해 연쇄 전환(B→C→D)되는 것을 막는다.
     public func onRateLimitHit(file: AccountsFile, hit: RateLimitHit, now: Date) -> Decision {
-        guard let active = file.active, !inCooldown(now) else { return .none }
-        // 자동 전환 꺼짐 — 스펙상 "끄면 소진 알림만": 전환 없이 알림 결정만 반환
-        guard file.autoSwitchEnabled else { return .notifyExhaustedOnly(active.id) }
+        guard let active = file.active(of: provider), !inCooldown(now) else { return .none }
+        // 이 풀의 자동 전환 꺼짐 — 스펙상 "끄면 소진 알림만": 전환 없이 알림 결정만 반환
+        guard file.isAutoSwitchEnabled(provider) else { return .notifyExhaustedOnly(active.id) }
         // 모델 전용 한도(Fable 등) + 사용자가 이 계정을 직접 고름(pin) → 전환하지 않고 머문다.
         // 계정은 다른 모델로 쓸 수 있고, 사용자가 "여기 있겠다"고 이미 선택했으므로.
         if hit.modelScoped && active.userPinned { return .none }
@@ -71,7 +73,8 @@ public final class AutoSwitchEngine: @unchecked Sendable {
     /// 주기 틱: (A) 활성 계정이 소진 상태면 여유 있는 계정으로 자가 전환,
     ///          (B) fallback 활성이 자동 전환의 결과라면 primary 리셋 시 복귀.
     public func onTick(file: AccountsFile, now: Date) -> Decision {
-        guard file.autoSwitchEnabled, !inCooldown(now), let active = file.active else { return .none }
+        guard file.isAutoSwitchEnabled(provider), !inCooldown(now),
+              let active = file.active(of: provider) else { return .none }
 
         // (A) 자가복구: 활성 계정이 소진/로그인만료인데 여전히 활성이면 여유 계정으로 전환한다
         //     (로그 hit 순간의 전환을 쿨다운·throw 등으로 놓쳐도 다음 틱에 복구).
@@ -84,8 +87,8 @@ public final class AutoSwitchEngine: @unchecked Sendable {
 
         // (B) primary 복귀 — 현재 fallback 활성이 "자동 전환"의 결과일 때만
         //     (사용자가 수동으로 fallback에 전환한 상태는 강제로 되돌리지 않는다).
-        guard file.autoSwitchedFromPrimary,
-              let primary = file.primary,
+        guard file.isAutoSwitchedFromPrimary(provider),
+              let primary = file.primary(of: provider),
               active.id != primary.id,
               !primary.needsReauth else { return .none }
         if let rl = primary.rateLimit {

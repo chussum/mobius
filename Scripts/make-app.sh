@@ -34,23 +34,36 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>NSHighResolutionCapable</key><true/>
 </dict></plist>
 PLIST
-# 서명 우선순위: Developer ID Application(공증 가능) > Mobius Dev Signing(자체서명) > ad-hoc.
-# Developer ID가 있으면 하드닝 런타임 + 보안 타임스탬프로 서명 → Scripts/make-dmg.sh가 공증까지 한다.
-# 없으면 기존 자체서명/ad-hoc 폴백(로컬 개발 빌드는 공증 없이 빠르게).
-DEVID=$(security find-identity -v -p codesigning | grep "Developer ID Application" | head -1 | awk '{print $2}')
-if [ -n "$DEVID" ]; then
-  # 공증 필수 조건: --options runtime(하드닝 런타임) + --timestamp(Apple TSA, 네트워크 필요).
-  # 중첩 Mach-O(mobius CLI)를 먼저 서명한 뒤 앱 번들을 서명한다 — --deep는 Apple 비권장이라
-  # 개별 서명. 메인 실행파일 MobiusApp은 앱 번들 서명 시 함께 봉인된다.
-  echo "🔏 Developer ID 서명 ($DEVID) + 하드닝 런타임"
-  codesign --force --options runtime --timestamp -s "$DEVID" "$APP/Contents/MacOS/mobius"
-  codesign --force --options runtime --timestamp -s "$DEVID" "$APP"
-elif security find-identity -v -p codesigning | grep -q "Mobius Dev Signing"; then
+# 서명 정체성 우선순위: MOBIUS_SIGN_IDENTITY 환경변수 > Developer ID Application(자동 감지,
+#   공증 가능) > 'Mobius Dev Signing'(setup-signing.sh 자체서명) > ad-hoc 폴백.
+# 고정 정체성으로 서명해야 Keychain "항상 허용"이 리빌드 후에도 유지된다.
+SIGN_IDENTITY="${MOBIUS_SIGN_IDENTITY:-}"
+IS_DEVID=0
+case "$SIGN_IDENTITY" in "Developer ID Application"*) IS_DEVID=1 ;; esac
+if [ -z "$SIGN_IDENTITY" ]; then
+  DEVID_HASH=$(security find-identity -v -p codesigning | grep "Developer ID Application" | head -1 | awk '{print $2}')
+  if [ -n "$DEVID_HASH" ]; then SIGN_IDENTITY="$DEVID_HASH"; IS_DEVID=1; fi
+fi
+if [ -z "$SIGN_IDENTITY" ] && security find-identity -v -p codesigning | grep -q "Mobius Dev Signing"; then
+  SIGN_IDENTITY="Mobius Dev Signing"
+fi
+if [ -n "$SIGN_IDENTITY" ]; then
+  # Developer ID면 공증 필수 조건인 --options runtime(하드닝 런타임) + --timestamp(Apple TSA,
+  # 네트워크 필요)로 서명 → Scripts/make-dmg.sh가 공증까지 한다. 중첩 Mach-O(mobius CLI)를
+  # 먼저 개별 서명한다(--deep는 Apple 비권장). 메인 실행파일은 앱 번들 서명 시 함께 봉인.
+  EXTRA=""
+  if [ "$IS_DEVID" = "1" ]; then
+    EXTRA="--options runtime --timestamp"
+    echo "🔏 Developer ID 서명 + 하드닝 런타임"
+    codesign --force $EXTRA -s "$SIGN_IDENTITY" "$APP/Contents/MacOS/mobius"
+  else
+    echo "🔏 고정 서명: $SIGN_IDENTITY"
+  fi
   # 서명 실패(중복 인증서로 ambiguous 등)를 조용히 지나치면 linker-signed adhoc으로
   # 남아 전환마다 승인창이 뜬다 — 명시적으로 실패시킨다.
-  codesign --force -s "Mobius Dev Signing" "$APP" || {
-    echo "ERROR: 고정 서명 실패 — 'Mobius Dev Signing' 중복/신뢰 상태를 확인:"
-    echo "  security find-certificate -a -c 'Mobius Dev Signing' -Z ~/Library/Keychains/login.keychain-db | grep SHA-1"
+  codesign --force $EXTRA -s "$SIGN_IDENTITY" "$APP" || {
+    echo "ERROR: 서명 실패 — '$SIGN_IDENTITY' 중복/신뢰 상태를 확인:"
+    echo "  security find-certificate -a -c '$SIGN_IDENTITY' -Z ~/Library/Keychains/login.keychain-db | grep SHA-1"
     exit 1
   }
 else
