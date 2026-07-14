@@ -65,6 +65,11 @@ final class AppState: ObservableObject {
     static let proactiveRefreshSweepInterval: TimeInterval = 3600
     static let proactiveRefreshRenewWindow: TimeInterval = 3 * 24 * 3600
     static let proactiveRefreshPerAccountGate: TimeInterval = 6 * 3600
+    // 만료 토큰 게이지용 refresh(reactive)의 계정당 재시도 쿨다운 — transient(네트워크/5xx)
+    // 실패 시 usage 캐시가 안 갱신돼 계속 stale로 남으므로, 이게 없으면 팝오버를 여닫을
+    // 때마다 회전 시도가 반복된다. 성공하면 즉시 해제(exp가 미래로 풀려 재진입도 자연히 멈춤).
+    private var lastUsageRefreshAttemptAt: [UUID: Date] = [:]
+    static let usageRefreshRetryCooldown: TimeInterval = 600
 
     init() {
         let env = MobiusEnvironment.live()
@@ -141,8 +146,48 @@ final class AppState: ObservableObject {
                 if isActive, let live = try? io.readLiveSnapshot() { blob = live.keychainBlob }
                 else { blob = (try? store.secret(for: profile.id))?.keychainBlob }
                 guard let blob else { continue }
+                // 비활성 계정의 저장 access 토큰이 만료됐으면 게이지를 못 읽어 얼어붙는다
+                // (429/401 → 조용히 continue). 폴백 refresh 기계로 미리 갱신한다 — 활성은
+                // check의 첫 guard가 절대 건드리지 않고, 회전 토큰은 원자 저장되며,
+                // refresh 토큰이 만료/폐기면 needsReauth로 마킹된다(계정당 access TTL≈1h라
+                // 갱신 후엔 만료 조건이 풀려 재-refresh가 자연히 멈춘다 = 스톰 없음).
+                var fetchBlob = blob
+                if !isActive, !profile.needsReauth,
+                   let exp = UsageFetcher.expiresAt(from: blob), exp <= now {
+                    // 계정당 쿨다운: 최근 시도가 있으면 이번 라운드는 아예 건너뛴다(만료 토큰이라
+                    // 어차피 게이지도 못 읽는다). transient 실패가 팝오버마다 회전 시도로 반복되지
+                    // 않게 하는 것 — 첫 시도는 게이팅 안 됨(distantPast)이라 프리즈 해소는 유지.
+                    guard now.timeIntervalSince(lastUsageRefreshAttemptAt[profile.id] ?? .distantPast)
+                            >= Self.usageRefreshRetryCooldown else { continue }
+                    lastUsageRefreshAttemptAt[profile.id] = now
+                    switch await fallbackChecker.check(profile.id,
+                                                       activeAccountID: store.file.activeAccountID,
+                                                       now: now, allowNetwork: true) {
+                    case .refreshedAlive:
+                        lastUsageRefreshAttemptAt[profile.id] = nil   // 성공 — 쿨다운 해제
+                        if let fresh = (try? store.secret(for: profile.id))?.keychainBlob {
+                            fetchBlob = fresh
+                        }
+                    case .dead, .storeFailed:
+                        // **네트워크로만 알 수 있는** 죽음(invalid_grant / 저장 실패) — 매 팝오버
+                        // 함께 도는 validateFallbacksLocally는 로컬 검사(allowNetwork:false)라
+                        // 못 잡는다. 여기서 알림을 전담한다(check가 이미 needsReauth 마킹).
+                        reauthChanged = true
+                        notify(title: loc("재로그인 필요"),
+                               body: loc("%@ 계정의 인증이 만료됐어요. 카드의 '다시 로그인'을 눌러주세요.", profile.nickname))
+                        continue
+                    case .locallyDead, .noRefreshToken:
+                        // **로컬로 판정 가능**한 죽음 — 매 팝오버 함께 도는 validateFallbacksLocally가
+                        // 알림을 전담하므로(같은 계정에 알림 2개 방지) 여기선 알리지 않는다.
+                        // check가 켠 needsReauth 반영(reload)만 하고 조용히 스킵.
+                        reauthChanged = true
+                        continue
+                    case .transient, .notFallback, .noSecret:
+                        continue   // 갱신 실패/불가 — 쿨다운 뒤 재시도
+                    }
+                }
                 do {
-                    guard let snap = try await UsageFetcher.fetch(keychainBlob: blob)
+                    guard let snap = try await UsageFetcher.fetch(keychainBlob: fetchBlob)
                     else { continue }
                     usage[profile.id] = snap
                     // 조회 성공 = 토큰 살아있음 → 잘못 남은 재로그인 마킹 자가 해제
@@ -168,7 +213,9 @@ final class AppState: ObservableObject {
                     // 활성도 잠자기 등으로 claude가 안 돌면 라이브 토큰이 만료된 채 남는다
                     // (이슈 #4: 오마킹 → 엔진이 멀쩡한 주계정을 밀어내던 연쇄의 수정).
                     // 판정 규칙은 UsageFetcher.shouldMarkReauthAfterAuthError 참조.
-                    if UsageFetcher.shouldMarkReauthAfterAuthError(blob: blob, isActive: isActive),
+                    // ★ 판정 대상은 fetchBlob: refresh 성공 시 fetchBlob은 신선한(유효) 토큰이라
+                    //   그래도 401이면 폐기로 마킹, refresh를 안 한 경로면 fetchBlob==blob.
+                    if UsageFetcher.shouldMarkReauthAfterAuthError(blob: fetchBlob, isActive: isActive),
                        !profile.needsReauth {
                         try? store.setNeedsReauth(profile.id, true)
                         reauthChanged = true
