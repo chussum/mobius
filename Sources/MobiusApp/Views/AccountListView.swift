@@ -82,10 +82,11 @@ struct AccountListView: View {
             Text("Mobius").font(.system(size: 14, weight: .bold, design: .rounded))
             Text(loc("뫼비우스")).font(.system(size: 10)).foregroundStyle(.tertiary)
             Spacer()
-            // 풀 탭에서만 그 풀의 자동 전환 토글 — 구 전역 토글과 같은 자리라 익숙하고,
-            // 탭 바가 한 줄을 온전히 쓸 수 있다(100% 폭). 전체 탭의 풀별 토글은 설정에.
+            // 풀 탭(또는 전체 탭인데 풀이 하나뿐)에서 그 풀의 자동 전환 토글 — 구 전역
+            // 토글과 같은 자리라 익숙하고, 탭 바가 한 줄을 온전히 쓸 수 있다(100% 폭).
             // 라벨은 어느 CLI의 전환인지 명시 (Claude Code CLI / Codex CLI — 사용자 요청).
-            if let provider = tab.provider {
+            // 전체 탭에서 풀이 여럿이면 각 섹션 헤더의 미니 토글이 담당한다(sectionHeader).
+            if let provider = headerToggleProvider {
                 Toggle(loc("%@ 자동 전환", provider.cliDisplayName), isOn: Binding(
                     get: { state.file.isAutoSwitchEnabled(provider) },
                     set: { state.setAutoSwitch($0, provider: provider) }))
@@ -98,6 +99,15 @@ struct AccountListView: View {
 
     private var providersWithAccounts: [Provider] {
         Provider.allCases.filter { !state.file.accounts(of: $0).isEmpty }
+    }
+
+    /// 헤더 오른쪽 토글이 담당할 풀 — 풀 탭이면 그 풀, 전체 탭이면 풀이 하나뿐일 때만
+    /// 그 풀(섹션 헤더가 없어 토글 자리도 없으므로). 풀이 여럿인 전체 탭은 nil —
+    /// 각 섹션 헤더의 미니 토글이 담당한다.
+    private var headerToggleProvider: Provider? {
+        if let provider = tab.provider { return provider }
+        let pools = providersWithAccounts
+        return pools.count == 1 ? pools.first : nil
     }
 
     // MARK: 프로바이더 탭 바 — 100% 폭, 3등분 (자동 전환 토글은 헤더 오른쪽)
@@ -133,9 +143,10 @@ struct AccountListView: View {
         }
     }
 
-    /// 전체 탭의 풀 경계 — 대문자 레이블 + 오른쪽으로 흐르는 헤어라인.
-    /// 맨글자 하나만 떠 있으면 길 잃은 텍스트처럼 보여서(사용자 피드백), 디바이더로
-    /// "여기부터 이 풀"임을 시각적으로 고정한다.
+    /// 전체 탭의 풀 경계 — 대문자 레이블 + 오른쪽으로 흐르는 헤어라인 + 풀 자동 전환
+    /// 미니 토글. 맨글자 하나만 떠 있으면 길 잃은 텍스트처럼 보여서(사용자 피드백)
+    /// 디바이더로 "여기부터 이 풀"임을 고정하고, 전체 탭에서도 풀별 자동 전환 상태가
+    /// 보이고 조작 가능하게 한다 (풀 탭 헤더 토글과 짝 — 사각지대 제거).
     private func sectionHeader(_ provider: Provider) -> some View {
         HStack(spacing: 8) {
             Text(provider.displayName.uppercased())
@@ -145,6 +156,14 @@ struct AccountListView: View {
             Rectangle()
                 .fill(Color.primary.opacity(0.08))
                 .frame(height: 1)
+            // 라벨·크기는 풀 탭 헤더 토글과 동일하게 (미세하게 다르면 어색 — 사용자 피드백)
+            Toggle(loc("%@ 자동 전환", provider.cliDisplayName), isOn: Binding(
+                get: { state.file.isAutoSwitchEnabled(provider) },
+                set: { state.setAutoSwitch($0, provider: provider) }))
+                .toggleStyle(.switch).controlSize(.mini)
+                .font(.system(size: 10))
+                .foregroundStyle(.secondary)
+                .help(loc("한도가 차면 다음 계정으로 자동으로 이어집니다"))
         }
         .padding(.leading, 2)
     }

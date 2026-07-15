@@ -132,8 +132,10 @@ struct SettingsView: View {
         }
     }
 
-    /// CLI별 자동 전환 토글 + 등록 계정 요약 — 설치 현황의 Claude/Codex 블록 공용.
-    /// 계정 추가 진입점: Claude는 로그인 플로우 버튼, Codex는 터미널 안내(adopt 방식).
+    /// CLI별 자동 전환 토글 + 등록 계정 요약 — 설치 현황의 Claude/Codex 탭 공용.
+    /// 계정들은 라운드 박스 안의 행으로(팝오버 카드와 같은 시각 언어 — PRIMARY 캡슐,
+    /// 활성은 초록 점 + '사용 중'). 계정 추가 진입점: Claude는 로그인 플로우 버튼,
+    /// Codex는 터미널 안내(adopt 방식).
     @ViewBuilder private func poolControls(_ provider: Provider) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             Toggle(loc("자동 전환"), isOn: Binding(
@@ -143,35 +145,62 @@ struct SettingsView: View {
                 .font(.caption).foregroundStyle(.secondary)
         }
         let accounts = state.file.accounts(of: provider)
-        VStack(alignment: .leading, spacing: 4) {
-            if accounts.isEmpty {
-                Text(loc("등록된 계정이 없습니다"))
-                    .font(.system(size: 11)).foregroundStyle(.secondary)
-            }
-            ForEach(accounts, id: \.id) { p in
-                HStack(spacing: 6) {
-                    Circle()
-                        .fill(p.id == state.file.activeByProvider[provider]
-                              ? Color.green : Color.secondary.opacity(0.35))
-                        .frame(width: 5, height: 5)
-                    Text(p.nickname).font(.system(size: 11, weight: .medium))
-                    Text(p.emailAddress).font(.system(size: 10)).foregroundStyle(.secondary)
-                        .lineLimit(1).truncationMode(.middle)
+        VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: 0) {
+                if accounts.isEmpty {
+                    Text(loc("등록된 계정이 없습니다"))
+                        .font(.system(size: 11)).foregroundStyle(.secondary)
+                        .padding(.horizontal, 10).padding(.vertical, 8)
+                }
+                ForEach(Array(accounts.enumerated()), id: \.element.id) { idx, p in
+                    accountRow(p, isPrimary: idx == 0, provider: provider)
+                    if idx < accounts.count - 1 {
+                        Divider().padding(.leading, 24)
+                    }
                 }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.04)))
             switch provider {
             case .claude:
                 Button(loc("계정 추가")) { state.addAccount() }
-                    .controlSize(.small).padding(.top, 2)
+                    .controlSize(.small)
             case .codex:
                 Text(loc("터미널에서 `codex logout` 후 `codex login`으로 추가할 계정에 로그인하면, Mobius가 몇 초 안에 자동으로 등록합니다."))
                     .font(.caption).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true).padding(.top, 2)
+                    .fixedSize(horizontal: false, vertical: true)
                 Text(loc("지금 쓰던 계정은 이미 카드에 저장돼 있어 카드를 눌러 언제든 되돌아올 수 있어요."))
                     .font(.caption).foregroundStyle(.tertiary)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
+    }
+
+    /// 계정 요약 행 — 활성 점 · 닉네임 · PRIMARY 캡슐 · 이메일 · (활성이면) '사용 중'
+    private func accountRow(_ p: AccountProfile, isPrimary: Bool,
+                            provider: Provider) -> some View {
+        let isActive = p.id == state.file.activeByProvider[provider]
+        let accent = Color(red: 0.35, green: 0.65, blue: 1.0)
+        return HStack(spacing: 8) {
+            Circle()
+                .fill(isActive ? Color.green : Color.secondary.opacity(0.3))
+                .frame(width: 6, height: 6)
+            Text(p.nickname).font(.system(size: 11.5, weight: .medium))
+            if isPrimary {
+                Text("PRIMARY").font(.system(size: 7.5, weight: .bold))
+                    .padding(.horizontal, 4).padding(.vertical, 1.5)
+                    .background(accent.opacity(0.18), in: Capsule())
+                    .foregroundStyle(accent)
+            }
+            Text(p.emailAddress).font(.system(size: 10.5)).foregroundStyle(.secondary)
+                .lineLimit(1).truncationMode(.middle)
+            Spacer()
+            if isActive {
+                Text(loc("사용 중")).font(.system(size: 9.5, weight: .medium))
+                    .foregroundStyle(.green)
+            }
+        }
+        .padding(.horizontal, 10).padding(.vertical, 6)
     }
 
     /// mobius CLI 행 (일반 섹션) — 설치 상태 pill + 설치/재설치/삭제
