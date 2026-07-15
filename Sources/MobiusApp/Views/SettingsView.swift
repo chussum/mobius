@@ -158,14 +158,35 @@ struct SettingsView: View {
                         Divider().padding(.leading, 24)
                     }
                 }
+                // 계정 추가는 박스 안의 마지막 행 — 리스트를 수정하는 액션은 리스트 안에
+                // (iOS/macOS 설정의 '계정 추가' 행 패턴). 떠 있는 작은 버튼보다 히트
+                // 영역이 행 전체로 넓고 소속이 분명하다. Codex는 CLI adopt 방식이라
+                // 행 대신 아래 안내 텍스트가 그 역할을 한다.
+                if provider == .claude {
+                    Divider().padding(.leading, 30)
+                    Button { state.addAccount() } label: {
+                        HStack(spacing: 8) {
+                            // 위 계정 행들의 점(●)과 같은 글리프 컬럼(12pt) — 크기가 다른
+                            // 아이콘이 점들과 나란하면 리듬이 깨진다 (사용자 피드백).
+                            Image(systemName: "plus")
+                                .font(.system(size: 9, weight: .bold))
+                                .frame(width: 12)
+                            Text(loc("계정 추가"))
+                                .font(.system(size: 11.5, weight: .medium))
+                        }
+                        // 팝오버 푸터의 계정 추가와 같은 회색 — 설정의 중립 팔레트에서
+                        // 액센트 파랑은 혼자 튄다 (사용자 피드백).
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 10).padding(.vertical, 7)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.04)))
-            switch provider {
-            case .claude:
-                Button(loc("계정 추가")) { state.addAccount() }
-                    .controlSize(.small)
-            case .codex:
+            if provider == .codex {
                 Text(loc("터미널에서 `codex logout` 후 `codex login`으로 추가할 계정에 로그인하면, Mobius가 몇 초 안에 자동으로 등록합니다."))
                     .font(.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -176,29 +197,33 @@ struct SettingsView: View {
         }
     }
 
-    /// 계정 요약 행 — 활성 점 · 닉네임 · PRIMARY 캡슐 · 이메일 · (활성이면) '사용 중'
+
+    /// 계정 요약 행 — [점 12pt 컬럼] 닉네임 · PRIMARY(회색) · 사용 중 ……… 이메일(우측).
+    /// 이메일을 오른쪽 정렬해 닉네임 길이에 따른 지그재그를 없애고(왼쪽 이름/오른쪽 값 —
+    /// macOS 설정 문법), PRIMARY 캡슐은 회색 톤다운 — 중립 팔레트에서 파랑은 혼자 튄다
+    /// (사용자 피드백). 활성 표시는 초록 점 + '사용 중' 캡션.
     private func accountRow(_ p: AccountProfile, isPrimary: Bool,
                             provider: Provider) -> some View {
         let isActive = p.id == state.file.activeByProvider[provider]
-        let accent = Color(red: 0.35, green: 0.65, blue: 1.0)
         return HStack(spacing: 8) {
             Circle()
                 .fill(isActive ? Color.green : Color.secondary.opacity(0.3))
                 .frame(width: 6, height: 6)
+                .frame(width: 12)
             Text(p.nickname).font(.system(size: 11.5, weight: .medium))
             if isPrimary {
                 Text("PRIMARY").font(.system(size: 7.5, weight: .bold))
                     .padding(.horizontal, 4).padding(.vertical, 1.5)
-                    .background(accent.opacity(0.18), in: Capsule())
-                    .foregroundStyle(accent)
+                    .background(Color.secondary.opacity(0.12), in: Capsule())
+                    .foregroundStyle(.secondary)
             }
-            Text(p.emailAddress).font(.system(size: 10.5)).foregroundStyle(.secondary)
-                .lineLimit(1).truncationMode(.middle)
-            Spacer()
             if isActive {
                 Text(loc("사용 중")).font(.system(size: 9.5, weight: .medium))
                     .foregroundStyle(.green)
             }
+            Spacer()
+            Text(p.emailAddress).font(.system(size: 10.5)).foregroundStyle(.secondary)
+                .lineLimit(1).truncationMode(.middle)
         }
         .padding(.horizontal, 10).padding(.vertical, 6)
     }
@@ -290,17 +315,21 @@ struct SettingsView: View {
                     Text(loc("계정 카드에 5시간·주간 사용량과 초기화 남은 시간을 표시합니다"))
                         .font(.caption).foregroundStyle(.secondary)
                 }
-                mobiusCLIRow
             }
             Section(loc("설치 현황")) {
+                // mobius 자체 CLI는 프로바이더와 무관한 공통 도구 — 탭 위에 항상 표시.
+                mobiusCLIRow
                 PillPicker(options: Provider.allCases.map {
                     .init(value: $0.rawValue, label: $0.displayName,
                           badge: state.file.accounts(of: $0).count)
                 }, selection: $settingsTabRaw, fillsWidth: true)
                 switch settingsTab {
                 case .claude:
+                    // 탭 콘텐츠는 VStack 한 덩어리라 Form의 행 구분선이 없다 —
+                    // 다른 섹션과 같은 표현으로 Divider를 직접 넣는다 (사용자 피드백).
                     VStack(alignment: .leading, spacing: 10) {
                         claudeCLIRow
+                        Divider()
                         poolControls(.claude)
                     }
                     .padding(.vertical, 2)
@@ -309,12 +338,14 @@ struct SettingsView: View {
                     VStack(alignment: .leading, spacing: 10) {
                         toolRow("Claude Desktop", path: claudeDesktop?.path,
                                 version: claudeDesktop?.version)
+                        Divider()
                         desktopToggles
                     }
                     .padding(.vertical, 2)
                 case .codex:
                     VStack(alignment: .leading, spacing: 10) {
                         toolRow("Codex CLI", path: codexInfo?.path, version: codexInfo?.version)
+                        Divider()
                         poolControls(.codex)
                     }
                     .padding(.vertical, 2)
@@ -416,6 +447,7 @@ struct SettingsView: View {
                     note: loc("자동 전환일 때는 '자동 전환 시에도 Claude Desktop 전환'이 담당해요. Desktop에 연결해 둔 계정에서만 동작해요."))
             }
         }
+        Divider()
         Toggle(isOn: Binding(
             get: { state.file.desktopAutoSwitchEnabled },
             set: { state.setDesktopAutoSwitch($0) })) {
