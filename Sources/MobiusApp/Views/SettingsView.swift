@@ -19,6 +19,10 @@ struct SettingsView: View {
     @State private var claudeInstallMessage = ""
     @State private var mobiusPaths: [String] = []
     @State private var mobiusChecked = false
+    /// 설치 현황의 프로바이더 탭 — 팝오버와 같은 필 탭, 마지막 선택 유지.
+    @AppStorage("settingsProviderTab") private var settingsTabRaw = Provider.claude.rawValue
+
+    private var settingsTab: Provider { Provider(rawValue: settingsTabRaw) ?? .claude }
 
     var body: some View {
         settingsForm
@@ -260,20 +264,35 @@ struct SettingsView: View {
                 mobiusCLIRow
             }
             Section(loc("설치 현황")) {
-                VStack(alignment: .leading, spacing: 10) {
-                    claudeCLIRow
-                    poolControls(.claude)
+                PillPicker(options: Provider.allCases.map {
+                    .init(value: $0.rawValue, label: $0.displayName,
+                          badge: state.file.accounts(of: $0).count)
+                }, selection: $settingsTabRaw, fillsWidth: true)
+                switch settingsTab {
+                case .claude:
+                    VStack(alignment: .leading, spacing: 10) {
+                        claudeCLIRow
+                        poolControls(.claude)
+                    }
+                    .padding(.vertical, 2)
+                    // Claude Desktop 연동은 Claude 전용 기능 — 앱 상태와 토글을 한자리에
+                    // (구 실험실 → 프로바이더 탭으로 이동, 사용자 요청).
+                    VStack(alignment: .leading, spacing: 10) {
+                        toolRow("Claude Desktop", path: claudeDesktop?.path,
+                                version: claudeDesktop?.version)
+                        desktopToggles
+                    }
+                    .padding(.vertical, 2)
+                case .codex:
+                    VStack(alignment: .leading, spacing: 10) {
+                        toolRow("Codex CLI", path: codexInfo?.path, version: codexInfo?.version)
+                        poolControls(.codex)
+                    }
+                    .padding(.vertical, 2)
+                    // 동명의 "ChatGPT" 앱이 둘일 수 있어(구형 com.openai.chat) 번들 ID
+                    // com.openai.codex(Codex 데스크톱)만 대상으로 감지한다.
+                    toolRow("ChatGPT", path: chatGPTApp?.path, version: chatGPTApp?.version)
                 }
-                .padding(.vertical, 2)
-                VStack(alignment: .leading, spacing: 10) {
-                    toolRow("Codex CLI", path: codexInfo?.path, version: codexInfo?.version)
-                    poolControls(.codex)
-                }
-                .padding(.vertical, 2)
-                toolRow("Claude Desktop", path: claudeDesktop?.path, version: claudeDesktop?.version)
-                // 동명의 "ChatGPT" 앱이 둘일 수 있어(구형 com.openai.chat) 번들 ID
-                // com.openai.codex(Codex 데스크톱)만 대상으로 감지한다.
-                toolRow("ChatGPT", path: chatGPTApp?.path, version: chatGPTApp?.version)
             }
             labsSection
             Section(loc("업데이트")) {
@@ -354,30 +373,35 @@ struct SettingsView: View {
         }
     }
 
+    /// Claude Desktop 동시 전환 토글 2종 — 설치 현황의 Claude 탭에 표시
+    /// (Claude 전용 기능이라 실험실보다 프로바이더 탭이 제자리다).
+    @ViewBuilder private var desktopToggles: some View {
+        Toggle(isOn: Binding(
+            get: { state.file.desktopSyncEnabled },
+            set: { state.setDesktopSync($0) })) {
+            HStack(spacing: 5) {
+                Text(loc("계정 전환 시 Claude Desktop도 전환"))
+                desktopInfoButton(
+                    isPresented: $showDesktopSyncInfo,
+                    when: loc("카드를 눌러 직접 계정을 바꿀 때"),
+                    note: loc("자동 전환일 때는 '자동 전환 시에도 Claude Desktop 전환'이 담당해요. Desktop에 연결해 둔 계정에서만 동작해요."))
+            }
+        }
+        Toggle(isOn: Binding(
+            get: { state.file.desktopAutoSwitchEnabled },
+            set: { state.setDesktopAutoSwitch($0) })) {
+            HStack(spacing: 5) {
+                Text(loc("자동 전환 시에도 Claude Desktop 전환"))
+                desktopInfoButton(
+                    isPresented: $showDesktopAutoInfo,
+                    when: loc("한도가 차서 Mobius가 알아서 계정을 바꿀 때"),
+                    note: loc("카드를 눌러 직접 바꿀 때는 '계정 전환 시 Claude Desktop도 전환'이 담당해요."))
+            }
+        }
+    }
+
     private var labsSection: some View {
         Section(loc("실험실")) {
-            Toggle(isOn: Binding(
-                get: { state.file.desktopSyncEnabled },
-                set: { state.setDesktopSync($0) })) {
-                HStack(spacing: 5) {
-                    Text(loc("계정 전환 시 Claude Desktop도 전환"))
-                    desktopInfoButton(
-                        isPresented: $showDesktopSyncInfo,
-                        when: loc("카드를 눌러 직접 계정을 바꿀 때"),
-                        note: loc("자동 전환일 때는 '자동 전환 시에도 Claude Desktop 전환'이 담당해요. Desktop에 연결해 둔 계정에서만 동작해요."))
-                }
-            }
-            Toggle(isOn: Binding(
-                get: { state.file.desktopAutoSwitchEnabled },
-                set: { state.setDesktopAutoSwitch($0) })) {
-                HStack(spacing: 5) {
-                    Text(loc("자동 전환 시에도 Claude Desktop 전환"))
-                    desktopInfoButton(
-                        isPresented: $showDesktopAutoInfo,
-                        when: loc("한도가 차서 Mobius가 알아서 계정을 바꿀 때"),
-                        note: loc("카드를 눌러 직접 바꿀 때는 '계정 전환 시 Claude Desktop도 전환'이 담당해요."))
-                }
-            }
             VStack(alignment: .leading, spacing: 3) {
                 Toggle(loc("다른 Mac과 동기화"), isOn: $syncEnabled)
                 Text(loc("이 Mac에서 켠 항목만 동기화에 참여해요. 끄면 이 Mac은 아무 영향도 받지 않아요."))

@@ -3,6 +3,16 @@ import SwiftUI
 import Combine
 import MobiusCore
 
+extension Provider {
+    /// 사용자에게 보이는 CLI 도구 이름 (토글 라벨 등).
+    var cliDisplayName: String {
+        switch self {
+        case .claude: return "Claude Code CLI"
+        case .codex: return "Codex CLI"
+        }
+    }
+}
+
 /// 팝오버 상단 필터 탭 — 전체 / Claude / Codex. rawValue가 AppStorage로 저장돼
 /// 마지막 선택이 재시작 후에도 유지된다.
 enum ProviderTab: String, CaseIterable {
@@ -72,26 +82,11 @@ struct AccountListView: View {
             Text("Mobius").font(.system(size: 14, weight: .bold, design: .rounded))
             Text(loc("뫼비우스")).font(.system(size: 10)).foregroundStyle(.tertiary)
             Spacer()
-        }
-    }
-
-    private var providersWithAccounts: [Provider] {
-        Provider.allCases.filter { !state.file.accounts(of: $0).isEmpty }
-    }
-
-    // MARK: 프로바이더 탭 바
-
-    private var tabBar: some View {
-        HStack(spacing: 8) {
-            ProviderTabPicker(selectionRaw: $providerTabRaw, counts: [
-                .all: state.file.accounts.count,
-                .claude: state.file.accounts(of: .claude).count,
-                .codex: state.file.accounts(of: .codex).count,
-            ])
-            Spacer()
-            // 풀 탭에서만 그 풀의 자동 전환 토글 노출 (전체 탭의 풀별 토글은 설정에)
+            // 풀 탭에서만 그 풀의 자동 전환 토글 — 구 전역 토글과 같은 자리라 익숙하고,
+            // 탭 바가 한 줄을 온전히 쓸 수 있다(100% 폭). 전체 탭의 풀별 토글은 설정에.
+            // 라벨은 어느 CLI의 전환인지 명시 (Claude Code CLI / Codex CLI — 사용자 요청).
             if let provider = tab.provider {
-                Toggle(loc("자동 전환"), isOn: Binding(
+                Toggle(loc("%@ 자동 전환", provider.cliDisplayName), isOn: Binding(
                     get: { state.file.isAutoSwitchEnabled(provider) },
                     set: { state.setAutoSwitch($0, provider: provider) }))
                     .toggleStyle(.switch).controlSize(.mini)
@@ -101,52 +96,20 @@ struct AccountListView: View {
         }
     }
 
-    /// Toss 스타일 필 세그먼트 — 선택된 조각이 캡슐로 미끄러진다.
-    private struct ProviderTabPicker: View {
-        @Binding var selectionRaw: String
-        let counts: [ProviderTab: Int]
-        @Namespace private var pillSpace
+    private var providersWithAccounts: [Provider] {
+        Provider.allCases.filter { !state.file.accounts(of: $0).isEmpty }
+    }
 
-        var body: some View {
-            HStack(spacing: 2) {
-                ForEach(ProviderTab.allCases, id: \.self) { t in
-                    segment(t)
-                }
-            }
-            .padding(3)
-            .background(Capsule().fill(Color.primary.opacity(0.06)))
-        }
+    // MARK: 프로바이더 탭 바 — 100% 폭, 3등분 (자동 전환 토글은 헤더 오른쪽)
 
-        private func segment(_ t: ProviderTab) -> some View {
-            let selected = selectionRaw == t.rawValue
-            return Button {
-                withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
-                    selectionRaw = t.rawValue
-                }
-            } label: {
-                HStack(spacing: 4) {
-                    Text(t.title)
-                        .font(.system(size: 11, weight: selected ? .semibold : .medium))
-                    if let n = counts[t], n > 0 {
-                        Text("\(n)")
-                            .font(.system(size: 10, weight: .semibold))
-                            .foregroundStyle(selected ? Color.secondary : Color(nsColor: .tertiaryLabelColor))
-                    }
-                }
-                .padding(.horizontal, 10).padding(.vertical, 4)
-                .background {
-                    if selected {
-                        Capsule()
-                            .fill(Color(nsColor: .controlBackgroundColor))
-                            .shadow(color: .black.opacity(0.15), radius: 1.5, y: 0.5)
-                            .matchedGeometryEffect(id: "pill", in: pillSpace)
-                    }
-                }
-                .contentShape(Capsule())
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(selected ? .primary : .secondary)
-        }
+    private func poolCount(_ t: ProviderTab) -> Int {
+        t.provider.map { state.file.accounts(of: $0).count } ?? state.file.accounts.count
+    }
+
+    private var tabBar: some View {
+        PillPicker(options: ProviderTab.allCases.map {
+            .init(value: $0.rawValue, label: $0.title, badge: poolCount($0))
+        }, selection: $providerTabRaw, fillsWidth: true)
     }
 
     // MARK: 카드 목록

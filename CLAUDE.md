@@ -372,6 +372,12 @@ Sources/MobiusApp/        SwiftUI 메뉴바 앱 + AppState + Views/ + LoginFlow 
   비대칭으로** 얹어 카드가 List 밖 요소보다 좁고 어긋나 보인다(픽셀 실측) — 음수 패딩으로
   상쇄했고, 세로 스크롤바 거터는 `scrollDisabled(true)`로 제거(풀 List는 높이=내용이라 스크롤
   불필요). 푸터 에러 배너는 5분 TTL로 tick이 자동 소거.
+  후속 다듬기(같은 날): 탭 바 100% 폭(3등분), 자동 전환 토글은 헤더 오른쪽(구 전역 토글
+  자리 — 풀 탭에서만 표시), 필 세그먼트는 공용 `PillPicker`로 추출. 설정 '설치 현황'도
+  같은 필 탭(Claude/Codex, `settingsProviderTab` 유지)으로 분리하고 **Desktop 동시 전환
+  토글 2종을 실험실 → Claude 탭으로 이동**(Claude 전용 기능이라 제자리 — 실험실엔 멀티 Mac
+  동기화만 남음). List 높이 상수는 실측 기반이므로 카드 레이아웃을 바꾸면
+  `AccountCardView.estimatedHeight`를 재실측할 것.
 - **설정 UI 재구성 + 자동 전환 풀별 분리(2026-07-12,
   `docs/design/settings-ui-restructure-prep.md` R1~R6 구현)**: autoSwitchEnabled(전역) →
   `autoSwitchByProvider`(풀별, 구 키는 디코드 시 양쪽 풀 적용 + encode 시 Claude 값 병행

@@ -184,3 +184,4 @@
 /* 팝오버 프로바이더 탭 */
 "전체" = "All";
 "Codex는 터미널로 추가해요" = "Add Codex via the terminal";
+"%@ 자동 전환" = "%@ auto-switch";
