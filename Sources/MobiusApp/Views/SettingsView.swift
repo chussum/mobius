@@ -310,9 +310,12 @@ struct SettingsView: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
+            // mobius 자체 CLI는 프로바이더와 무관한 공통 도구 — 탭 카드와 분리된
+            // 자체 카드(Section)로, '설치 현황' 헤더는 여기에 (사용자 요청).
             Section(loc("설치 현황")) {
-                // mobius 자체 CLI는 프로바이더와 무관한 공통 도구 — 탭 위에 항상 표시.
                 mobiusCLIRow
+            }
+            Section {
                 PillPicker(options: Provider.allCases.map {
                     .init(value: $0.rawValue, label: $0.displayName,
                           badge: state.file.accounts(of: $0).count)
