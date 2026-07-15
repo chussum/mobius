@@ -57,6 +57,12 @@ public final class Switcher: @unchecked Sendable {
             fixed.append(ProviderReassignment(id: account.id, nickname: account.nickname,
                                               from: account.provider, to: actual))
         }
+        // heal은 **provider만** 되돌린다 — 저장 secret이 provider의 authority이기 때문. 완전
+        // 다운그레이드로 루트 activeByProvider까지 사라져 되돌린 풀의 active가 비어도 여기서는
+        // 채우지 않는다: heal은 **라이브 identity를 모르므로**(저장 secret만 본다) 어떤 계정이
+        // 실제 활성인지 알 수 없고, 임의로 찍으면 오active가 영속돼 오라우팅/오전환(switchTo가
+        // 라이브 토큰 퇴행)을 유발할 수 있다(적대적 리뷰). active는 **라이브를 읽는
+        // reconcile/adopt**가 첫 틱에 채운다 — 그 사이 '활성 없음'은 무해(초 단위, 실측 확인).
         return fixed
     }
 

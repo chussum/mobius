@@ -7,6 +7,9 @@ struct AccountCardView: View {
     let isPrimary: Bool
     let autoSwitchOn: Bool
     let usage: UsageSnapshot?
+    /// 활성 Codex 계정인데 아직 사용량 데이터가 없을 때(세션 로그 in-band라 codex 턴이 한 번
+    /// 돌아야 생긴다) 빈 게이지 대신 안내를 띄운다. 리스트가 판정해 넘긴다.
+    var codexAwaitingData: Bool = false
     let now: Date
     /// Desktop 설치 시에만 전달 — 눈에 보이는 ⋯ 메뉴에 "Claude Desktop 연결" 노출
     var onConnectDesktop: (() -> Void)? = nil
@@ -22,8 +25,9 @@ struct AccountCardView: View {
     /// AccountListView의 List 높이 계산과 공유. 과소추정하면 내부 스크롤이 생기므로 살짝 크게.
     /// 게이지 없으면 74. 있으면 기본 5시간+주간 2줄(116)에 모델 스코프 한도(Fable 등)
     /// 줄당 +15를 더한다 — 리스트 높이 계산이 실제 카드 높이를 따라가야 스크롤이 안 생긴다.
-    static func estimatedHeight(hasUsage: Bool, scopedCount: Int = 0) -> CGFloat {
-        hasUsage ? 122 + CGFloat(scopedCount) * 17 : 74
+    static func estimatedHeight(hasUsage: Bool, scopedCount: Int = 0,
+                                codexHint: Bool = false) -> CGFloat {
+        hasUsage ? 122 + CGFloat(scopedCount) * 17 : (codexHint ? 90 : 74)
     }
 
     var body: some View {
@@ -64,6 +68,10 @@ struct AccountCardView: View {
                 statusLine
                 if let usage {
                     gauges(usage).padding(.top, 3)
+                } else if codexAwaitingData {
+                    Text(loc("codex 사용 후 사용량이 표시돼요"))
+                        .font(.system(size: 10)).foregroundStyle(.tertiary)
+                        .padding(.top, 3)
                 }
             }
             Spacer()

@@ -261,7 +261,10 @@ final class AppState: ObservableObject {
         guard fallbackLocalTask == nil else { return }
         let active = store.file.activeAccountID
         let now = Date()
-        let targets = store.file.accounts.filter { $0.id != active && !$0.needsReauth }
+        // Claude 전용: 이 checker는 Claude refresh 토큰 형태만 판정한다. Codex 계정이 새면
+        // (a) 활성 제외 가드가 Claude activeAccountID 기준이라 활성 Codex가 우회될 수 있고
+        // (b) 팝오버마다 Codex 계정 수만큼 불필요한 secret 디코드 시도가 돈다.
+        let targets = store.file.accounts.filter { $0.provider == .claude && $0.id != active && !$0.needsReauth }
         guard !targets.isEmpty else { return }
         fallbackLocalTask = Task { @MainActor in
             defer { fallbackLocalTask = nil }

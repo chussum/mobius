@@ -92,7 +92,8 @@ struct AccountListView: View {
                 .frame(height: fallbacks.reduce(CGFloat(0)) { sum, p in
                     sum + AccountCardView.estimatedHeight(
                         hasUsage: usageFor(p) != nil,
-                        scopedCount: usageFor(p)?.scopedLimits?.count ?? 0)
+                        scopedCount: usageFor(p)?.scopedLimits?.count ?? 0,
+                        codexHint: codexAwaitingData(p))
                 })
             }
         }
@@ -106,6 +107,12 @@ struct AccountListView: View {
         p.id == state.file.activeByProvider[p.provider]
     }
 
+    /// 활성 Codex 계정인데 아직 사용량 데이터가 없을 때(게이지 켜짐 + Codex는 세션 로그
+    /// in-band라 앱 시작 후 codex 턴이 한 번 돌아야 rate_limits가 생김) 빈 게이지 대신 안내.
+    private func codexAwaitingData(_ p: AccountProfile) -> Bool {
+        showUsageGauges && p.provider == .codex && isActive(p) && state.usage[p.id] == nil
+    }
+
     private func card(_ p: AccountProfile, isPrimary: Bool) -> some View {
         // Desktop 연결·재로그인 플로우는 Claude 전용 (Codex 재로그인 감지는 미배선)
         let claudeCard = p.provider == .claude
@@ -116,7 +123,7 @@ struct AccountListView: View {
         return AccountCardView(profile: p, isActive: showActive,
                         isPrimary: isPrimary,
                         autoSwitchOn: state.file.isAutoSwitchEnabled(p.provider),
-                        usage: usageFor(p), now: now,
+                        usage: usageFor(p), codexAwaitingData: codexAwaitingData(p), now: now,
                         onConnectDesktop: claudeCard && state.desktopSwitcher.isDesktopInstalled
                             ? { state.beginDesktopCapture(for: p.id) } : nil,
                         onDelete: { state.removeAccount(p.id) },

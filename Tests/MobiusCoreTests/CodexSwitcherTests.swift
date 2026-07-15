@@ -166,4 +166,51 @@ final class CodexSwitcherTests: XCTestCase {
                                  extraIOs: [codexIO]).healMisassignedProviders()
         XCTAssertTrue(again.isEmpty)
     }
+
+    /// 완전 다운그레이드: 구버전이 per-account provider뿐 아니라 **루트 activeByProvider까지**
+    /// 드롭한 진짜 v1 재저장 형태. heal은 **provider만** 되돌리고 active는 채우지 않으며(라이브
+    /// 미상 — 임의 active는 오라우팅/오전환 위험, 적대적 리뷰), **라이브를 읽는 reconcile**이
+    /// 실제 활성을 채운다 — heal + 레거시 디코드 + reconcile 조합 검증.
+    func testFullDowngradeHealRestoresProviderAndReconcileFillsActive() async throws {
+        let cx1 = try registerCodex("cx1", email: "cx1@corp.com",
+                                    data: CodexFixtures.authJSON(email: "cx1@corp.com"))
+        let cx2 = try registerCodex("cx2", email: "cx2@gmail.com",
+                                    data: CodexFixtures.authJSON(email: "cx2@gmail.com"))
+        let claude = try store.upsertProfile(nickname: "cl",
+                                             snapshot: claudeSnap(email: "cl@x.com", tok: "t1"))
+
+        // 진짜 v1 재저장: per-account provider + 루트 풀별 키 전부 드롭.
+        // (activeAccountID(legacy)는 남겨 둔다 — v1도 이 키는 썼다.)
+        let url = env.accountsFile
+        var root = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as! [String: Any]
+        var accts = root["accounts"] as! [[String: Any]]
+        for i in accts.indices { accts[i].removeValue(forKey: "provider") }
+        root["accounts"] = accts
+        for k in ["activeByProvider", "autoSwitchByProvider",
+                  "autoSwitchedByProvider"] { root.removeValue(forKey: k) }
+        try JSONSerialization.data(withJSONObject: root).write(to: url)
+
+        // 신버전 재로드: Codex 계정은 ?? .claude 흡수, Codex 풀 active는 비어 있어야(재현 전제)
+        let store2 = try AccountStore(env: env, keychain: kc)
+        XCTAssertEqual(store2.file.accounts.first { $0.id == cx1.id }?.provider, .claude)
+        XCTAssertNil(store2.file.activeByProvider[.codex])
+        let switcher2 = Switcher(env: env, keychain: kc, store: store2, io: io, extraIOs: [codexIO])
+
+        // heal: provider는 되돌리되 active는 채우지 않는다(라이브 미상 — reconcile의 몫)
+        let fixed = try switcher2.healMisassignedProviders()
+        XCTAssertEqual(fixed.count, 2)
+        XCTAssertEqual(store2.file.accounts.first { $0.id == cx1.id }?.provider, .codex)
+        XCTAssertEqual(store2.file.accounts.first { $0.id == cx2.id }?.provider, .codex)
+        XCTAssertNil(store2.file.activeByProvider[.codex])              // ★ heal은 active를 찍지 않음
+        XCTAssertEqual(store2.file.activeByProvider[.claude], claude.id) // Claude 풀은 legacy로 복원됨
+
+        // 라이브를 읽는 reconcile이 실제 활성(cx2)을 채운다
+        try codexIO.writeLiveSecretData(CodexFixtures.authJSON(email: "cx2@gmail.com"))
+        try await switcher2.reconcile()
+        XCTAssertEqual(store2.file.activeByProvider[.codex], cx2.id)
+
+        // 영속: 다시 로드해도 유지
+        let store3 = try AccountStore(env: env, keychain: kc)
+        XCTAssertEqual(store3.file.activeByProvider[.codex], cx2.id)
+    }
 }

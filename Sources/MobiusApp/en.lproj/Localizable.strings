@@ -170,6 +170,7 @@
 "%@ 활성 계정이 밖에서 바뀌었어요" = "%@ active account changed externally";
 "외부 로그인 또는 실행 중 세션의 갱신으로 활성 계정이 %@(으)로 바뀌었습니다. 카드를 눌러 되돌릴 수 있어요." = "An external login or a running session's token refresh switched the active account to %@. Tap a card to switch back.";
 "구버전이 저장한 계정 목록에서 프로바이더 정보가 소실돼 복구했습니다: %@" = "Recovered provider info that an older version had dropped from the account list: %@";
+"codex 사용 후 사용량이 표시돼요" = "Usage appears after you use codex";
 
 /* 설치 현황 / mobius 명령어 관리 */
 "설치 현황" = "Installed Tools";
