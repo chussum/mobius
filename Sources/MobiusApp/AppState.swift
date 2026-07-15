@@ -9,7 +9,13 @@ enum MenuStatus { case primaryActive, fallbackActive, allExhausted, unknown }
 @MainActor
 final class AppState: ObservableObject {
     @Published private(set) var file = AccountsFile()
-    @Published var lastError: String?
+    /// 푸터 에러 배너. 5분 지나면 tick이 자동 소거한다 — 스스로 사라지지 않아
+    /// 옛 에러(예: 취소한 로그인)가 영구 잔류하던 것 방지(사용자 요청).
+    @Published var lastError: String? {
+        didSet { lastErrorAt = lastError == nil ? nil : Date() }
+    }
+    private var lastErrorAt: Date?
+    static let lastErrorTTL: TimeInterval = 5 * 60
     @Published private(set) var usage: [UUID: UsageSnapshot] = [:]
     // 수동 전환 낙관적 표시 — 클릭 즉시 이 계정을 활성으로 보여주고(스무스), 실제 refresh+스왑은
     // 백그라운드에서. 완료되면 nil로 정착(실제 activeAccountID가 인계).
@@ -109,6 +115,8 @@ final class AppState: ObservableObject {
         }
         self.file = store.file
         self.lastError = initError
+        // init에서의 직접 대입은 didSet이 불리지 않는다 — TTL 기준점을 수동 기록
+        if initError != nil { lastErrorAt = Date() }
 
         UNUserNotificationCenter.current()
             .requestAuthorization(options: [.alert, .sound]) { _, _ in }
@@ -507,6 +515,10 @@ final class AppState: ObservableObject {
     func tick() async {
         checkForUpdates() // 내부에서 24시간 게이트 — 실제 조회는 하루 1회
         syncNow()         // 내부에서 15분 게이트 — 켜져 있을 때만 동작
+        // 오래된 푸터 에러 자동 소거 (TTL 5분)
+        if let at = lastErrorAt, Date().timeIntervalSince(at) >= Self.lastErrorTTL {
+            lastError = nil
+        }
         // 로그인 창이 열려 있는 동안은 reconcile/자동 전환이 LoginFlow의
         // 자격증명 변경 감지와 경합하지 않도록 전체를 건너뛴다.
         // Desktop 가이드 캡처 중에도 동일 — 자동 전환이 Desktop을 재실행하면

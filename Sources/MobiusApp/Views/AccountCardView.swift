@@ -27,7 +27,8 @@ struct AccountCardView: View {
     /// 줄당 +15를 더한다 — 리스트 높이 계산이 실제 카드 높이를 따라가야 스크롤이 안 생긴다.
     static func estimatedHeight(hasUsage: Bool, scopedCount: Int = 0,
                                 codexHint: Bool = false) -> CGFloat {
-        hasUsage ? 122 + CGFloat(scopedCount) * 17 : (codexHint ? 90 : 74)
+        // codexHint 90은 실제보다 살짝 작아 List에 스크롤바가 생겼다(실측) → 94로 보정.
+        hasUsage ? 122 + CGFloat(scopedCount) * 17 : (codexHint ? 94 : 74)
     }
 
     var body: some View {

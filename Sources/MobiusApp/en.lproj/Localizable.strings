@@ -180,3 +180,7 @@
 "삭제 완료" = "Removed";
 "삭제 실패: %@" = "Failed to remove: %@";
 "계정을 추가하려면 먼저 Claude Code CLI를 설치하세요. 설정 → 설치 현황에서 설치할 수 있어요." = "Install the Claude Code CLI first to add accounts. You can install it from Settings → Installed Tools.";
+
+/* 팝오버 프로바이더 탭 */
+"전체" = "All";
+"Codex는 터미널로 추가해요" = "Add Codex via the terminal";

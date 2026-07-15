@@ -3,12 +3,39 @@ import SwiftUI
 import Combine
 import MobiusCore
 
+/// 팝오버 상단 필터 탭 — 전체 / Claude / Codex. rawValue가 AppStorage로 저장돼
+/// 마지막 선택이 재시작 후에도 유지된다.
+enum ProviderTab: String, CaseIterable {
+    case all, claude, codex
+
+    var provider: Provider? {
+        switch self {
+        case .all: return nil
+        case .claude: return .claude
+        case .codex: return .codex
+        }
+    }
+
+    var title: String {
+        switch self {
+        case .all: return loc("전체")
+        case .claude: return Provider.claude.displayName
+        case .codex: return Provider.codex.displayName
+        }
+    }
+}
+
 struct AccountListView: View {
     @EnvironmentObject var state: AppState
     @Environment(\.openSettings) private var openSettings
     @AppStorage("showUsageGauges") private var showUsageGauges = true
+    @AppStorage("providerTab") private var providerTabRaw = ProviderTab.all.rawValue
     @State private var now = Date()
+    @State private var showAddChooser = false
+    @State private var showCodexAddGuide = false
     private let clock = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
+
+    private var tab: ProviderTab { ProviderTab(rawValue: providerTabRaw) ?? .all }
 
     var body: some View {
         ZStack {
@@ -17,6 +44,7 @@ struct AccountListView: View {
                 if state.file.accounts.isEmpty {
                     emptyView
                 } else {
+                    tabBar
                     cards
                 }
                 footer
@@ -31,7 +59,7 @@ struct AccountListView: View {
         }
         .animation(.spring(response: 0.3, dampingFraction: 0.85),
                    value: state.desktopCapture)
-        .frame(width: 410)
+        .frame(width: 430)
         .onReceive(clock) { now = $0 }
         .onAppear { state.reload(); state.refreshUsageIfStale(); state.validateFallbacksLocally(); now = Date() }
     }
@@ -51,10 +79,98 @@ struct AccountListView: View {
         Provider.allCases.filter { !state.file.accounts(of: $0).isEmpty }
     }
 
-    private var cards: some View {
-        VStack(spacing: 10) {
-            ForEach(providersWithAccounts, id: \.self) { provider in
-                providerSection(provider)
+    // MARK: 프로바이더 탭 바
+
+    private var tabBar: some View {
+        HStack(spacing: 8) {
+            ProviderTabPicker(selectionRaw: $providerTabRaw, counts: [
+                .all: state.file.accounts.count,
+                .claude: state.file.accounts(of: .claude).count,
+                .codex: state.file.accounts(of: .codex).count,
+            ])
+            Spacer()
+            // 풀 탭에서만 그 풀의 자동 전환 토글 노출 (전체 탭의 풀별 토글은 설정에)
+            if let provider = tab.provider {
+                Toggle(loc("자동 전환"), isOn: Binding(
+                    get: { state.file.isAutoSwitchEnabled(provider) },
+                    set: { state.setAutoSwitch($0, provider: provider) }))
+                    .toggleStyle(.switch).controlSize(.mini)
+                    .font(.system(size: 10))
+                    .help(loc("한도가 차면 다음 계정으로 자동으로 이어집니다"))
+            }
+        }
+    }
+
+    /// Toss 스타일 필 세그먼트 — 선택된 조각이 캡슐로 미끄러진다.
+    private struct ProviderTabPicker: View {
+        @Binding var selectionRaw: String
+        let counts: [ProviderTab: Int]
+        @Namespace private var pillSpace
+
+        var body: some View {
+            HStack(spacing: 2) {
+                ForEach(ProviderTab.allCases, id: \.self) { t in
+                    segment(t)
+                }
+            }
+            .padding(3)
+            .background(Capsule().fill(Color.primary.opacity(0.06)))
+        }
+
+        private func segment(_ t: ProviderTab) -> some View {
+            let selected = selectionRaw == t.rawValue
+            return Button {
+                withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
+                    selectionRaw = t.rawValue
+                }
+            } label: {
+                HStack(spacing: 4) {
+                    Text(t.title)
+                        .font(.system(size: 11, weight: selected ? .semibold : .medium))
+                    if let n = counts[t], n > 0 {
+                        Text("\(n)")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(selected ? Color.secondary : Color(nsColor: .tertiaryLabelColor))
+                    }
+                }
+                .padding(.horizontal, 10).padding(.vertical, 4)
+                .background {
+                    if selected {
+                        Capsule()
+                            .fill(Color(nsColor: .controlBackgroundColor))
+                            .shadow(color: .black.opacity(0.15), radius: 1.5, y: 0.5)
+                            .matchedGeometryEffect(id: "pill", in: pillSpace)
+                    }
+                }
+                .contentShape(Capsule())
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(selected ? .primary : .secondary)
+        }
+    }
+
+    // MARK: 카드 목록
+
+    @ViewBuilder private var cards: some View {
+        if let provider = tab.provider {
+            // 풀 탭: 타이틀 없이 그 풀만 (기존 단일 풀 시절 디자인)
+            poolCards(provider)
+        } else {
+            // 전체 탭: 풀별 섹션 + 타이틀 (두 풀 다 있을 때만 타이틀 표기)
+            VStack(spacing: 10) {
+                ForEach(providersWithAccounts, id: \.self) { provider in
+                    VStack(spacing: 6) {
+                        if providersWithAccounts.count > 1 {
+                            HStack {
+                                Text(provider.displayName)
+                                    .font(.system(size: 10, weight: .semibold))
+                                    .foregroundStyle(.secondary)
+                                Spacer()
+                            }
+                        }
+                        poolCards(provider)
+                    }
+                }
             }
         }
     }
@@ -66,29 +182,37 @@ struct AccountListView: View {
     // 까다로웠다. 풀의 전 계정을 한 List에 두면(primary는 moveDisabled) 전환이 같은 id 집합
     // 내 "행 이동"으로 diff되어 오프셋이 깨지지 않는다 (실측: 미니 재현 앱 + 실앱 검증,
     // 2026-07-15).
-    @ViewBuilder private func providerSection(_ provider: Provider) -> some View {
+    @ViewBuilder private func poolCards(_ provider: Provider) -> some View {
         let accounts = state.file.accounts(of: provider)
-        VStack(spacing: 6) {
-            if providersWithAccounts.count > 1 {
-                HStack {
-                    Text(provider.displayName)
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                }
-            }
+        if accounts.isEmpty {
+            poolEmptyView(provider)
+        } else {
             List {
                 ForEach(accounts, id: \.id) { p in
-                    card(p, isPrimary: p.id == accounts.first?.id)
+                    let isPrimary = p.id == accounts.first?.id
+                    card(p, isPrimary: isPrimary)
+                        // 시각 위계: fallback 카드는 양쪽을 균등하게 들여 primary보다 살짝
+                        // 작게(가운데 정렬). 행 안의 스타일 변경이라 이슈 #5(멤버십 불변)와
+                        // 무관 — primary 전환 시에도 행은 그대로, 크기만 다시 그려진다.
+                        .padding(.horizontal, isPrimary ? 0 : 12)
                         .listRowInsets(EdgeInsets(top: 3, leading: 0, bottom: 3, trailing: 0))
                         .listRowSeparator(.hidden)
                         .listRowBackground(Color.clear)
-                        .moveDisabled(p.id == accounts.first?.id)
+                        .moveDisabled(isPrimary)
                 }
                 .onMove { state.moveFallback(provider: provider, from: $0, to: $1) }
             }
             .listStyle(.plain)
             .scrollContentBackground(.hidden)
+            // 높이가 내용과 정확히 같아 스크롤할 게 없다 — 스크롤을 꺼서 세로 스크롤바
+            // 거터(카드가 왼쪽으로 밀리며 오른쪽에 빈 틈)가 생기지 않게 한다 (사용자 실측).
+            .scrollDisabled(true)
+            .scrollIndicators(.hidden)
+            // macOS List(NSTableView)가 행 콘텐츠에 좌 7pt·우 9pt의 자체 여백을 비대칭으로
+            // 얹어, 카드가 List 밖 요소(탭 바·헤더, 패딩 14)보다 좁고 어긋나 보인다
+            // (픽셀 실측 2026-07-15: 카드 [21..407] vs 컨테이너 [14..416]). 음수 패딩으로 상쇄.
+            .padding(.leading, -7)
+            .padding(.trailing, -9)
             .frame(height: accounts.reduce(CGFloat(0)) { sum, p in
                 sum + AccountCardView.estimatedHeight(
                     hasUsage: usageFor(p) != nil,
@@ -96,6 +220,30 @@ struct AccountListView: View {
                     codexHint: codexAwaitingData(p))
             })
         }
+    }
+
+    /// 풀 탭이 비어 있을 때 — 프로바이더별 계정 추가 안내.
+    @ViewBuilder private func poolEmptyView(_ provider: Provider) -> some View {
+        VStack(spacing: 8) {
+            Text(loc("등록된 계정이 없습니다"))
+                .font(.system(size: 12)).foregroundStyle(.secondary)
+            switch provider {
+            case .claude:
+                Button { state.addAccount() } label: {
+                    Label(loc("Claude 계정 추가"), systemImage: "plus.circle.fill")
+                        .font(.system(size: 12, weight: .medium))
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+            case .codex:
+                Text(loc("터미널에서 `codex logout` 후 `codex login`으로 추가할 계정에 로그인하면, Mobius가 몇 초 안에 자동으로 등록합니다."))
+                    .font(.system(size: 11)).foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, 20)
+            }
+        }
+        .frame(maxWidth: .infinity).padding(.vertical, 18)
     }
 
     private func usageFor(_ p: AccountProfile) -> UsageSnapshot? {
@@ -213,6 +361,9 @@ struct AccountListView: View {
 
     private var footer: some View {
         HStack {
+            if !state.file.accounts.isEmpty {
+                addAccountButton
+            }
             if let err = state.lastError {
                 TruncatingErrorText(text: err)
             }
@@ -224,6 +375,59 @@ struct AccountListView: View {
                 openSettings()
             }
             footerButton("power", help: loc("종료")) { NSApp.terminate(nil) }
+        }
+    }
+
+    /// 계정 추가 — 탭에 따라 동작이 다르다: Claude 탭은 브라우저 로그인 즉시,
+    /// Codex 탭은 CLI 안내(브라우저 로그인 미지원), 전체 탭은 프로바이더 선택 팝오버.
+    @ViewBuilder private var addAccountButton: some View {
+        let label = Label(loc("계정 추가"), systemImage: "plus.circle.fill")
+            .font(.system(size: 11))
+        switch tab {
+        case .claude:
+            Button { state.addAccount() } label: { label }
+                .buttonStyle(.plain).foregroundStyle(.secondary)
+        case .codex:
+            Button { showCodexAddGuide.toggle() } label: { label }
+                .buttonStyle(.plain).foregroundStyle(.secondary)
+                .popover(isPresented: $showCodexAddGuide, arrowEdge: .bottom) {
+                    codexAddGuide.padding(14).frame(width: 280)
+                }
+        case .all:
+            Button { showAddChooser.toggle() } label: { label }
+                .buttonStyle(.plain).foregroundStyle(.secondary)
+                .popover(isPresented: $showAddChooser, arrowEdge: .bottom) {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Button {
+                            showAddChooser = false
+                            state.addAccount()
+                        } label: {
+                            Label(loc("Claude 계정 추가"), systemImage: "globe")
+                                .font(.system(size: 12, weight: .medium))
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+                        Divider()
+                        codexAddGuide
+                    }
+                    .padding(14)
+                    .frame(width: 280)
+                }
+        }
+    }
+
+    /// Codex 계정 추가 안내 — 브라우저 로그인 미지원, CLI adopt 방식 안내.
+    private var codexAddGuide: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Label(loc("Codex는 터미널로 추가해요"), systemImage: "terminal")
+                .font(.system(size: 12, weight: .semibold))
+            Text(loc("터미널에서 `codex logout` 후 `codex login`으로 추가할 계정에 로그인하면, Mobius가 몇 초 안에 자동으로 등록합니다."))
+                .font(.system(size: 11)).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Text(loc("지금 쓰던 계정은 이미 카드에 저장돼 있어 카드를 눌러 언제든 되돌아올 수 있어요."))
+                .font(.system(size: 10)).foregroundStyle(.tertiary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 

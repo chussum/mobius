@@ -363,6 +363,15 @@ Sources/MobiusApp/        SwiftUI 메뉴바 앱 + AppState + Views/ + LoginFlow 
   실패한다 — 새 프로바이더 추가 시 별도 마이그레이션 설계 필요. ② healMisassignedProviders를
   CLI makeContext에도 적용(앱과 동일 — 복구 시 stderr 경고). ③ README.en `mobius auto`
   "both if omitted" 오기 정정(미지정 시 Claude만).
+- **팝오버 리디자인(2026-07-15, 사용자 피드백)**: 필 세그먼트 탭 전체/Claude/Codex —
+  마지막 선택은 AppStorage `providerTab`으로 재시작 후에도 유지. 전체 탭은 풀 섹션+타이틀,
+  풀 탭은 타이틀 없이 그 풀만 + 풀별 자동 전환 토글(구 헤더 토글의 귀환) + 계정 추가
+  (Claude 탭=브라우저 로그인, Codex 탭=CLI 안내 팝오버, 전체 탭=선택 팝오버). 카드 시각
+  위계: fallback 카드는 양쪽 12pt 들여 가운데 정렬 — 행 안 스타일 변경이라 이슈 #5(List
+  멤버십 불변)와 무관. ★ macOS List(NSTableView)는 행 콘텐츠에 **좌 7pt·우 9pt 자체 여백을
+  비대칭으로** 얹어 카드가 List 밖 요소보다 좁고 어긋나 보인다(픽셀 실측) — 음수 패딩으로
+  상쇄했고, 세로 스크롤바 거터는 `scrollDisabled(true)`로 제거(풀 List는 높이=내용이라 스크롤
+  불필요). 푸터 에러 배너는 5분 TTL로 tick이 자동 소거.
 - **설정 UI 재구성 + 자동 전환 풀별 분리(2026-07-12,
   `docs/design/settings-ui-restructure-prep.md` R1~R6 구현)**: autoSwitchEnabled(전역) →
   `autoSwitchByProvider`(풀별, 구 키는 디코드 시 양쪽 풀 적용 + encode 시 Claude 값 병행
