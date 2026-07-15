@@ -73,12 +73,19 @@ Sources/MobiusApp/        SwiftUI 메뉴바 앱 + AppState + Views/ + LoginFlow 
   refresh가 있으면 새로 쏘지 않고 그 결과에 합류하며, refresh 본체는 게이트 통과 후 스냅샷을
   **다시 읽는다**(직전 회전 반영 — FallbackAuthChecker.inFlight). refresh 지점을 늘리는
   변경(예: PR #2 팝오버 게이지 갱신)의 전제 조건.
-- **트리거**: (1) 팝오버 = **네트워크 0 로컬 검사만**(빈/시간만료 refresh 토큰 즉시 플래그),
+- **트리거**: (1) 팝오버의 **폴백 로컬 검증**(validateFallbacksLocally) = **네트워크 0 로컬
+  검사만**(빈/시간만료 refresh 토큰 즉시 플래그) — 팝오버 자체가 네트워크 0이란 뜻은 아니다((5) 예외),
   (2) **자동 폴백 전환 직전** = 실제 refresh(onTick(A)가 매 틱 재시도 → 죽은 폴백 스킵→다음 자동),
   (3) **수동 전환(계정 클릭)** = 대상 계정 refresh 1회(살았는지+신선한 토큰), (4) **만료 임박
   자동 갱신** = 폴백의 refreshTokenExpiresAt가 3일 이내면 1시간 스윕·계정당 6시간 간격으로 미리
-  refresh(안 쓰던 폴백이 몇 주 뒤 조용히 죽는 것 방지). refresh는 access·refresh 토큰과 두 만료를
-  모두 갱신. → 매 팝오버 호출 없음 = 블락 위험 최소화.
+  refresh(안 쓰던 폴백이 몇 주 뒤 조용히 죽는 것 방지), (5) **비활성 계정 usage 조회 직전** =
+  저장 access 토큰이 이미 만료됐으면 refresh 후 조회(refreshUsageIfStale). 안 그러면 만료 토큰으로
+  조회→429/401→조용히 스킵으로 **게이지가 마지막 스냅샷에 얼어붙어** 리셋이 안 되는 것처럼 보인다
+  (실측: 비활성 계정 access 만료 후 게이지 프리즈). access TTL≈1h라 갱신 후 만료 조건이 풀려
+  재-refresh는 자연히 멈춘다(스톰 없음). **★ transient(네트워크/5xx) 실패 시엔 usage 캐시가 안
+  갱신돼 계속 stale로 남아 팝오버마다 회전 시도가 반복되므로, 계정당 재시도 쿨다운
+  (`usageRefreshRetryCooldown` 10분)으로 백오프한다 — 성공 시 즉시 해제(만료조건 자연 소멸).**
+  refresh는 access·refresh 토큰과 두 만료를 모두 갱신. → 매 팝오버 호출 없음 = 블락 위험 최소화.
 
 ### macOS 26 (Tahoe) 환경
 - 메뉴바 아이콘은 Control Center가 호스팅 — CGWindowList의 layer/owner로 존재 확인이 어려움.
