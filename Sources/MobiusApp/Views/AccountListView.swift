@@ -168,7 +168,8 @@ struct AccountListView: View {
                         // 시각 위계: fallback 카드는 양쪽을 균등하게 들여 primary보다 살짝
                         // 작게(가운데 정렬). 행 안의 스타일 변경이라 이슈 #5(멤버십 불변)와
                         // 무관 — primary 전환 시에도 행은 그대로, 크기만 다시 그려진다.
-                        .padding(.horizontal, isPrimary ? 0 : 12)
+                        // 12pt는 수축감이 크다는 피드백 → 8pt (위계는 보이되 덜 쪼그라들게).
+                        .padding(.horizontal, isPrimary ? 0 : 8)
                         .listRowInsets(EdgeInsets(top: 3, leading: 0, bottom: 3, trailing: 0))
                         .listRowSeparator(.hidden)
                         .listRowBackground(Color.clear)
