@@ -157,22 +157,33 @@ struct AccountListView: View {
             poolCards(provider)
         } else {
             // 전체 탭: 풀별 섹션 + 타이틀 (두 풀 다 있을 때만 타이틀 표기)
-            VStack(spacing: 10) {
+            VStack(spacing: 14) {
                 ForEach(providersWithAccounts, id: \.self) { provider in
-                    VStack(spacing: 6) {
+                    VStack(spacing: 5) {
                         if providersWithAccounts.count > 1 {
-                            HStack {
-                                Text(provider.displayName)
-                                    .font(.system(size: 10, weight: .semibold))
-                                    .foregroundStyle(.secondary)
-                                Spacer()
-                            }
+                            sectionHeader(provider)
                         }
                         poolCards(provider)
                     }
                 }
             }
         }
+    }
+
+    /// 전체 탭의 풀 경계 — 대문자 레이블 + 오른쪽으로 흐르는 헤어라인.
+    /// 맨글자 하나만 떠 있으면 길 잃은 텍스트처럼 보여서(사용자 피드백), 디바이더로
+    /// "여기부터 이 풀"임을 시각적으로 고정한다.
+    private func sectionHeader(_ provider: Provider) -> some View {
+        HStack(spacing: 8) {
+            Text(provider.displayName.uppercased())
+                .font(.system(size: 9.5, weight: .semibold))
+                .kerning(0.8)
+                .foregroundStyle(.secondary)
+            Rectangle()
+                .fill(Color.primary.opacity(0.08))
+                .frame(height: 1)
+        }
+        .padding(.leading, 2)
     }
 
     // ★ primary 카드도 반드시 풀의 같은 List의 행이어야 한다 (이슈 #5). primary를 List 밖

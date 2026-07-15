@@ -21,14 +21,14 @@ struct AccountCardView: View {
 
     private let accent = Color(red: 0.35, green: 0.65, blue: 1.0)
 
-    /// 카드 1행이 List에서 차지하는 높이(행 인셋 6pt 포함) — 넉넉히 잡아 내부 스크롤을 없앤다.
-    /// AccountListView의 List 높이 계산과 공유. 과소추정하면 내부 스크롤이 생기므로 살짝 크게.
-    /// 게이지 없으면 74. 있으면 기본 5시간+주간 2줄(116)에 모델 스코프 한도(Fable 등)
-    /// 줄당 +15를 더한다 — 리스트 높이 계산이 실제 카드 높이를 따라가야 스크롤이 안 생긴다.
+    /// 카드 1행이 List에서 차지하는 높이(행 인셋 6pt 포함) — AccountListView의 List 높이
+    /// 계산과 공유. List는 scrollDisabled라 과소추정=카드 하단 잘림, 과대추정=푸터 위
+    /// 빈 여백이므로 **픽셀 실측값 + 1~3pt 안전마진**으로 맞춘다 (실측 2026-07-15:
+    /// 게이지+Fable 카드 fill 117~119 → 행 123~125, codex 힌트 카드 87 → 행 93.
+    /// 이전 값 122+17n은 카드당 ~15pt 과잉이라 Claude 탭 하단에 큰 빈 공간이 남았다).
     static func estimatedHeight(hasUsage: Bool, scopedCount: Int = 0,
                                 codexHint: Bool = false) -> CGFloat {
-        // codexHint 90은 실제보다 살짝 작아 List에 스크롤바가 생겼다(실측) → 94로 보정.
-        hasUsage ? 122 + CGFloat(scopedCount) * 17 : (codexHint ? 94 : 74)
+        hasUsage ? 110 + CGFloat(scopedCount) * 16 : (codexHint ? 94 : 74)
     }
 
     var body: some View {
