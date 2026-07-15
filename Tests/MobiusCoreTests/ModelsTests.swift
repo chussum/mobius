@@ -55,6 +55,54 @@ final class ModelsTests: XCTestCase {
         XCTAssertEqual(obj2["autoSwitchEnabled"] as? Bool, false)
     }
 
+    /// 프로바이더 키 딕셔너리는 JSON **객체**로 저장돼야 한다 — Provider를 딕셔너리 키로
+    /// 그대로 인코딩하면 Swift Codable이 배열(["claude", …])로 저장한다(CodingKeyRepresentable
+    /// 미채택). 사람이 읽을 수 있고 unknown 키 스킵이 가능한 객체 형태를 보증한다.
+    func testProviderMapsEncodeAsJSONObjects() throws {
+        let id = UUID()
+        var file = AccountsFile()
+        file.activeByProvider = [.claude: id]
+        file.autoSwitchByProvider[.codex] = false
+        let obj = try XCTUnwrap(JSONSerialization.jsonObject(
+            with: JSONEncoder().encode(file)) as? [String: Any])
+        let active = try XCTUnwrap(obj["activeByProvider"] as? [String: String])
+        XCTAssertEqual(active, ["claude": id.uuidString])
+        let auto = try XCTUnwrap(obj["autoSwitchByProvider"] as? [String: Bool])
+        XCTAssertEqual(auto, ["codex": false])
+    }
+
+    /// 미래 버전이 추가한 프로바이더 키가 있어도(다운그레이드) 그 키만 스킵하고 파일은
+    /// 정상 디코드돼야 한다 — unknown raw value 하나가 파일 전체 디코드 실패(→ corrupt
+    /// 백업 + 빈 스토어)로 번지는 실패 기록 13 클래스의 예방.
+    func testUnknownProviderKeyIsSkippedNotFatal() throws {
+        let id = UUID()
+        let json = """
+        {"accounts": [],
+         "activeByProvider": {"claude": "\(id.uuidString)", "gemini": "\(UUID().uuidString)"},
+         "autoSwitchByProvider": {"claude": true, "gemini": false},
+         "autoSwitchedByProvider": {"gemini": true}}
+        """
+        let file = try JSONDecoder().decode(AccountsFile.self, from: Data(json.utf8))
+        XCTAssertEqual(file.activeByProvider, [.claude: id])
+        XCTAssertTrue(file.isAutoSwitchEnabled(.claude))
+        XCTAssertFalse(file.isAutoSwitchedFromPrimary(.claude)) // gemini 값은 버려짐
+    }
+
+    /// 초기 v2 파일(배열 형태 딕셔너리 — [String:] 명시 인코딩 이전 버전이 저장)도
+    /// 읽을 수 있어야 한다.
+    func testEarlyV2ArrayFormProviderMapStillDecodes() throws {
+        let id = UUID()
+        let json = """
+        {"accounts": [],
+         "activeByProvider": ["claude", "\(id.uuidString)"],
+         "autoSwitchByProvider": ["codex", false]}
+        """
+        let file = try JSONDecoder().decode(AccountsFile.self, from: Data(json.utf8))
+        XCTAssertEqual(file.activeByProvider, [.claude: id])
+        XCTAssertFalse(file.isAutoSwitchEnabled(.codex))
+        XCTAssertTrue(file.isAutoSwitchEnabled(.claude))
+    }
+
     func testIsLimited() {
         let now = Date(timeIntervalSince1970: 1_000)
         var p = AccountProfile(id: UUID(), nickname: "n", emailAddress: "e",

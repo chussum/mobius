@@ -354,6 +354,15 @@ Sources/MobiusApp/        SwiftUI 메뉴바 앱 + AppState + Views/ + LoginFlow 
   ★ **혼합 버전 주의**: v2 accounts.json을 구버전 앱/CLI가 읽으면 활성 계정이 없어 보이고,
   구버전 UI에서 codex 프로필을 claude 경로로 전환할 수 있다(자격증명 오염 위험) —
   **새 코드로 변경(mutation)하기 전에 /Applications/Mobius.app과 CLI를 새 빌드로 교체할 것.**
+- **PR #3 후속(2026-07-15)**: ① 프로바이더 키 딕셔너리(activeByProvider 등)는 **[String:]
+  객체로 명시 인코딩** — Provider 키 그대로면 Swift Codable이 배열(["claude", …])로 저장한다
+  (CodingKeyRepresentable 미채택, 실측). 디코딩은 관대하게: **모르는 프로바이더 키는 스킵**
+  (미래 프로바이더 추가 후 다운그레이드 시 unknown raw value 하나가 파일 전체 디코드 실패
+  → corrupt 백업+빈 스토어로 번지는 실패 기록 13 클래스 예방), 초기 v2의 배열 형태도 읽기
+  지원(Models.decodeProviderMap). 단 per-account `provider` 필드는 여전히 unknown이면 디코드
+  실패한다 — 새 프로바이더 추가 시 별도 마이그레이션 설계 필요. ② healMisassignedProviders를
+  CLI makeContext에도 적용(앱과 동일 — 복구 시 stderr 경고). ③ README.en `mobius auto`
+  "both if omitted" 오기 정정(미지정 시 Claude만).
 - **설정 UI 재구성 + 자동 전환 풀별 분리(2026-07-12,
   `docs/design/settings-ui-restructure-prep.md` R1~R6 구현)**: autoSwitchEnabled(전역) →
   `autoSwitchByProvider`(풀별, 구 키는 디코드 시 양쪽 풀 적용 + encode 시 Claude 값 병행

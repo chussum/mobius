@@ -138,7 +138,7 @@ mobius switch <name>               # switch by nickname (--provider claude|codex
 mobius status                      # active account per provider, time until reset
 mobius capture <name>              # register the currently logged-in claude account
 mobius capture <name> --provider codex   # register the currently logged-in codex account
-mobius auto on|off                 # toggle auto-switch (--provider claude|codex, both if omitted)
+mobius auto on|off                 # toggle auto-switch (--provider claude|codex, Claude only if omitted)
 ```
 
 CLI switches reflect instantly in the running app.

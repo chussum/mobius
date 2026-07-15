@@ -124,20 +124,19 @@ public struct AccountsFile: Codable, Equatable, Sendable {
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         accounts = try c.decodeIfPresent([AccountProfile].self, forKey: .accounts) ?? []
-        if let pools = try c.decodeIfPresent([Provider: UUID].self, forKey: .activeByProvider) {
+        if let pools: [Provider: UUID] = Self.decodeProviderMap(c, .activeByProvider) {
             activeByProvider = pools
         } else {
             let legacy = try c.decodeIfPresent(UUID.self, forKey: .legacyActiveAccountID)
             activeByProvider = legacy.map { [.claude: $0] } ?? [:]
         }
-        if let flags = try c.decodeIfPresent([Provider: Bool].self,
-                                             forKey: .autoSwitchedByProvider) {
+        if let flags: [Provider: Bool] = Self.decodeProviderMap(c, .autoSwitchedByProvider) {
             autoSwitchedByProvider = flags
         } else {
             let legacy = try c.decodeIfPresent(Bool.self, forKey: .legacyAutoSwitchedFromPrimary)
             autoSwitchedByProvider = legacy.map { [.claude: $0] } ?? [:]
         }
-        if let flags = try c.decodeIfPresent([Provider: Bool].self, forKey: .autoSwitchByProvider) {
+        if let flags: [Provider: Bool] = Self.decodeProviderMap(c, .autoSwitchByProvider) {
             autoSwitchByProvider = flags
         } else {
             // 구 전역 키는 양쪽 풀에 동일 적용
@@ -148,6 +147,28 @@ public struct AccountsFile: Codable, Equatable, Sendable {
         desktopSyncEnabled = try c.decodeIfPresent(Bool.self, forKey: .desktopSyncEnabled) ?? true
         desktopAutoSwitchEnabled =
             try c.decodeIfPresent(Bool.self, forKey: .desktopAutoSwitchEnabled) ?? false
+    }
+
+    /// 프로바이더 키 딕셔너리의 관대한 디코딩 (키 없으면 nil → 호출측이 레거시 v1 키로 폴백).
+    /// - 신형(JSON 객체): `{"claude": …}` — **모르는 프로바이더 키는 스킵**한다. 미래 버전이
+    ///   추가한 프로바이더가 있어도 unknown raw value 하나가 파일 전체 디코드 실패(→ corrupt
+    ///   백업 + 빈 스토어)로 번지지 않게 한다 (실패 기록 13과 같은 클래스의 예방).
+    /// - 구형(JSON 배열): `["claude", …]` — Provider가 CodingKeyRepresentable을 채택하지 않아
+    ///   Swift 기본 Dictionary Codable이 배열로 저장하던 초기 v2 파일. 읽기만 지원한다.
+    private static func decodeProviderMap<V: Decodable>(
+        _ c: KeyedDecodingContainer<CodingKeys>, _ key: CodingKeys) -> [Provider: V]? {
+        if let raw = (try? c.decodeIfPresent([String: V].self, forKey: key)) ?? nil {
+            var out: [Provider: V] = [:]
+            for (k, v) in raw {
+                if let provider = Provider(rawValue: k) { out[provider] = v }
+            }
+            return out
+        }
+        return (try? c.decodeIfPresent([Provider: V].self, forKey: key)) ?? nil
+    }
+
+    private static func stringKeyed<V>(_ map: [Provider: V]) -> [String: V] {
+        Dictionary(uniqueKeysWithValues: map.map { ($0.key.rawValue, $0.value) })
     }
 
     enum CodingKeys: String, CodingKey {
@@ -161,9 +182,13 @@ public struct AccountsFile: Codable, Equatable, Sendable {
     public func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(accounts, forKey: .accounts)
-        try c.encode(activeByProvider, forKey: .activeByProvider)
-        try c.encode(autoSwitchedByProvider, forKey: .autoSwitchedByProvider)
-        try c.encode(autoSwitchByProvider, forKey: .autoSwitchByProvider)
+        // 프로바이더 키 딕셔너리는 [String:]으로 명시 인코딩 — Provider를 그대로 쓰면 Swift
+        // Dictionary Codable이 JSON 배열(["claude", …])로 저장한다(CodingKeyRepresentable
+        // 미채택). 객체 형태여야 사람이 읽을 수 있고 unknown 키 스킵(위 decodeProviderMap)이
+        // 가능하다.
+        try c.encode(Self.stringKeyed(activeByProvider), forKey: .activeByProvider)
+        try c.encode(Self.stringKeyed(autoSwitchedByProvider), forKey: .autoSwitchedByProvider)
+        try c.encode(Self.stringKeyed(autoSwitchByProvider), forKey: .autoSwitchByProvider)
         try c.encode(desktopSyncEnabled, forKey: .desktopSyncEnabled)
         try c.encode(desktopAutoSwitchEnabled, forKey: .desktopAutoSwitchEnabled)
         // 다운그레이드 완충: 풀 분리 이전 바이너리도 Claude 활성 상태는 올바르게 읽도록

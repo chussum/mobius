@@ -18,6 +18,15 @@ func makeContext() throws -> (env: MobiusEnvironment, store: AccountStore,
     let io = ClaudeConfigIO(env: env, keychain: kc)
     let codexIO = CodexConfigIO(env: env)
     let switcher = Switcher(env: env, keychain: kc, store: store, io: io, extraIOs: [codexIO])
+    // 구버전 바이너리가 저장하며 소실시킨 per-account provider 복구 — 앱(AppState.init)과
+    // 동일한 경로를 CLI에도 적용한다. 안 하면 앱을 먼저 켜기 전까지 `mobius list`에 Codex
+    // 계정이 Claude 풀로 보인다 (전환 자체는 어댑터의 형태 검증으로 안전하게 실패하지만).
+    if let reassigned = try? switcher.healMisassignedProviders(), !reassigned.isEmpty {
+        for r in reassigned {
+            FileHandle.standardError.write(Data(
+                "⚠️ 프로바이더 정보 소실을 복구했습니다: \(r.nickname) (\(r.from.rawValue) → \(r.to.rawValue))\n".utf8))
+        }
+    }
     return (env, store, io, codexIO, switcher)
 }
 
