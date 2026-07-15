@@ -363,9 +363,37 @@ struct SettingsView: View {
                     updateStatusRow
                 }
             }
+            supportSection
         }
         .formStyle(.grouped)
         .frame(width: 580, height: needsFallbackOnboarding ? 820 : 680)
+    }
+
+    /// 후원 — Ko-fi 페이지를 브라우저로 연다 (앱 내 결제 아님).
+    /// 매일 보는 팝오버가 아니라 설정에만 둔다 — 작업 공간에 후원 버튼은 부담스럽다.
+    private var supportSection: some View {
+        Section(loc("후원")) {
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(loc("Mobius가 도움이 됐다면"))
+                        .font(.system(size: 12, weight: .medium))
+                    Text(loc("커피 한 잔으로 개발을 응원해 주세요 — Mobius는 계속 무료 오픈소스로 만들어갑니다."))
+                        .font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer()
+                Button {
+                    NSWorkspace.shared.open(URL(string: "https://ko-fi.com/hyungjoo")!)
+                } label: {
+                    Label(loc("Ko-fi에서 응원하기"), systemImage: "cup.and.saucer.fill")
+                        .font(.system(size: 12, weight: .semibold))
+                }
+                .buttonStyle(.borderedProminent)
+                // Ko-fi 브랜드 레드 (#FF5E5B)
+                .tint(Color(red: 1.0, green: 0.37, blue: 0.36))
+            }
+            .padding(.vertical, 2)
+        }
     }
 
     /// Desktop 토글 2종의 차이를 설명하는 ⓘ 팝오버 — "언제 / 하는 일 / 나머지는 누가"

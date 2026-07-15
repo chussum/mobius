@@ -185,3 +185,9 @@
 "%@ 자동 전환" = "%@ auto-switch";
 "사용 중" = "Active";
 "Codex용 실험 기능은 아직 없어요." = "No experimental features for Codex yet.";
+
+/* 후원 */
+"후원" = "Support";
+"Mobius가 도움이 됐다면" = "Enjoying Mobius?";
+"커피 한 잔으로 개발을 응원해 주세요 — Mobius는 계속 무료 오픈소스로 만들어갑니다." = "Fuel development with a coffee — Mobius stays free and open source.";
+"Ko-fi에서 응원하기" = "Support on Ko-fi";
