@@ -88,6 +88,21 @@ final class ModelsTests: XCTestCase {
         XCTAssertFalse(file.isAutoSwitchedFromPrimary(.claude)) // gemini 값은 버려짐
     }
 
+    /// 아는 프로바이더 키의 값 손상은 조용히 삼키지 않고 throw해야 한다 — try?로 삼키면
+    /// 손상 파일이 빈 상태로 디코드되고 다음 save가 원본을 덮어써, AccountStore의
+    /// corrupt 백업 경로(원본 보존)가 무력화된다 (리뷰 지적 반영).
+    func testCorruptValueUnderKnownProviderKeyThrows() {
+        let corrupt = """
+        {"accounts": [], "activeByProvider": {"claude": "not-a-uuid"}}
+        """
+        XCTAssertThrowsError(try JSONDecoder().decode(AccountsFile.self, from: Data(corrupt.utf8)))
+        // 모르는 프로바이더 키는 값이 무엇이든 스킵 (전방호환 — 위와 구분되는 경계)
+        let unknownOnly = """
+        {"accounts": [], "activeByProvider": {"gemini": 12345}}
+        """
+        XCTAssertNoThrow(try JSONDecoder().decode(AccountsFile.self, from: Data(unknownOnly.utf8)))
+    }
+
     /// 초기 v2 파일(배열 형태 딕셔너리 — [String:] 명시 인코딩 이전 버전이 저장)도
     /// 읽을 수 있어야 한다.
     func testEarlyV2ArrayFormProviderMapStillDecodes() throws {

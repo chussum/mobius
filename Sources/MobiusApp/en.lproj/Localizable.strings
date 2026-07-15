@@ -72,8 +72,6 @@
 "계정 카드에 5시간·주간 사용량과 초기화 남은 시간을 표시합니다" = "Shows 5-hour/weekly usage and time until reset on account cards";
 "자동 전환" = "Auto-switch";
 "한도가 차면 다음 계정으로 자동으로 이어집니다" = "When the limit is hit, Mobius continues on the next account automatically";
-"설치됨" = "Installed";
-"미설치" = "Not installed";
 "계정 전환 시 Claude Desktop도 전환" = "Also switch Claude Desktop on account switch";
 "자동 전환 시에도 Claude Desktop 전환" = "Also switch Claude Desktop on auto-switch";
 "언제" = "When";

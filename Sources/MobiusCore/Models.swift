@@ -124,19 +124,19 @@ public struct AccountsFile: Codable, Equatable, Sendable {
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         accounts = try c.decodeIfPresent([AccountProfile].self, forKey: .accounts) ?? []
-        if let pools: [Provider: UUID] = Self.decodeProviderMap(c, .activeByProvider) {
+        if let pools: [Provider: UUID] = try Self.decodeProviderMap(c, .activeByProvider) {
             activeByProvider = pools
         } else {
             let legacy = try c.decodeIfPresent(UUID.self, forKey: .legacyActiveAccountID)
             activeByProvider = legacy.map { [.claude: $0] } ?? [:]
         }
-        if let flags: [Provider: Bool] = Self.decodeProviderMap(c, .autoSwitchedByProvider) {
+        if let flags: [Provider: Bool] = try Self.decodeProviderMap(c, .autoSwitchedByProvider) {
             autoSwitchedByProvider = flags
         } else {
             let legacy = try c.decodeIfPresent(Bool.self, forKey: .legacyAutoSwitchedFromPrimary)
             autoSwitchedByProvider = legacy.map { [.claude: $0] } ?? [:]
         }
-        if let flags: [Provider: Bool] = Self.decodeProviderMap(c, .autoSwitchByProvider) {
+        if let flags: [Provider: Bool] = try Self.decodeProviderMap(c, .autoSwitchByProvider) {
             autoSwitchByProvider = flags
         } else {
             // 구 전역 키는 양쪽 풀에 동일 적용
@@ -149,22 +149,37 @@ public struct AccountsFile: Codable, Equatable, Sendable {
             try c.decodeIfPresent(Bool.self, forKey: .desktopAutoSwitchEnabled) ?? false
     }
 
-    /// 프로바이더 키 딕셔너리의 관대한 디코딩 (키 없으면 nil → 호출측이 레거시 v1 키로 폴백).
-    /// - 신형(JSON 객체): `{"claude": …}` — **모르는 프로바이더 키는 스킵**한다. 미래 버전이
+    /// 프로바이더 키 딕셔너리의 디코딩 (키 없으면 nil → 호출측이 레거시 v1 키로 폴백).
+    /// - 신형(JSON 객체): `{"claude": …}` — **모르는 프로바이더 키만 스킵**한다. 미래 버전이
     ///   추가한 프로바이더가 있어도 unknown raw value 하나가 파일 전체 디코드 실패(→ corrupt
     ///   백업 + 빈 스토어)로 번지지 않게 한다 (실패 기록 13과 같은 클래스의 예방).
+    ///   단 **아는 키의 값 손상은 throw** — try?로 삼키면 손상 파일이 조용히 빈 상태로
+    ///   디코드되고 다음 save가 원본을 덮어써, AccountStore의 corrupt 백업 경로(원본 보존)가
+    ///   무력화된다 (리뷰 지적).
     /// - 구형(JSON 배열): `["claude", …]` — Provider가 CodingKeyRepresentable을 채택하지 않아
     ///   Swift 기본 Dictionary Codable이 배열로 저장하던 초기 v2 파일. 읽기만 지원한다.
     private static func decodeProviderMap<V: Decodable>(
-        _ c: KeyedDecodingContainer<CodingKeys>, _ key: CodingKeys) -> [Provider: V]? {
-        if let raw = (try? c.decodeIfPresent([String: V].self, forKey: key)) ?? nil {
+        _ c: KeyedDecodingContainer<CodingKeys>, _ key: CodingKeys) throws -> [Provider: V]? {
+        // 신형: 항목 단위로 디코드해 "모르는 키 스킵"과 "값 손상 throw"를 구분한다
+        if let nested = try? c.nestedContainer(keyedBy: RawKey.self, forKey: key) {
             var out: [Provider: V] = [:]
-            for (k, v) in raw {
-                if let provider = Provider(rawValue: k) { out[provider] = v }
+            for k in nested.allKeys {
+                guard let provider = Provider(rawValue: k.stringValue) else { continue }
+                out[provider] = try nested.decode(V.self, forKey: k)
             }
             return out
         }
-        return (try? c.decodeIfPresent([Provider: V].self, forKey: key)) ?? nil
+        guard c.contains(key) else { return nil }
+        // 객체가 아니면 구형(배열) — 그마저 아니면 손상이므로 throw (corrupt 백업 경로)
+        return try c.decode([Provider: V].self, forKey: key)
+    }
+
+    /// 임의 문자열 키 (프로바이더 맵의 항목 단위 디코딩용)
+    private struct RawKey: CodingKey {
+        var stringValue: String
+        var intValue: Int? { nil }
+        init?(stringValue: String) { self.stringValue = stringValue }
+        init?(intValue: Int) { return nil }
     }
 
     private static func stringKeyed<V>(_ map: [Provider: V]) -> [String: V] {

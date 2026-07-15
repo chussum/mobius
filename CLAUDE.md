@@ -319,7 +319,8 @@ Sources/MobiusApp/        SwiftUI 메뉴바 앱 + AppState + Views/ + LoginFlow 
     보인다 — 개발 환경(활성만 게이지)에서 재현이 안 됐던 이유. matchedGeometryEffect,
     withAnimation은 무관(각각 제거해도 재현 — 미니 재현 앱으로 성분 분리, 2026-07-15).
     → 풀의 전 계정을 **한 List의 행**으로 두고(primary는 moveDisabled) 전환을 같은 id 집합
-    내 "행 이동"으로 만들면 안 깨진다(프로바이더 풀별 List에 동일 적용 — providerSection).
+    내 "행 이동"으로 만들면 안 깨진다(프로바이더 풀별 List에 동일 적용 —
+    AccountListView.poolCards).
     교훈: (1) 고정 frame List에서 행 삽입+삭제 조합을
     피하라 — 재정렬은 반드시 동일 데이터 집합 내 move로 모델링. (2) 안 잡히는 UI 버그는
     조건(높이 균일 여부)을 제어할 수 있는 미니 재현 앱으로 성분을 분리하면 빠르다.
@@ -367,7 +368,7 @@ Sources/MobiusApp/        SwiftUI 메뉴바 앱 + AppState + Views/ + LoginFlow 
   마지막 선택은 AppStorage `providerTab`으로 재시작 후에도 유지. 전체 탭은 풀 섹션+타이틀,
   풀 탭은 타이틀 없이 그 풀만 + 풀별 자동 전환 토글(구 헤더 토글의 귀환) + 계정 추가
   (Claude 탭=브라우저 로그인, Codex 탭=CLI 안내 팝오버, 전체 탭=선택 팝오버). 카드 시각
-  위계: fallback 카드는 양쪽 12pt 들여 가운데 정렬 — 행 안 스타일 변경이라 이슈 #5(List
+  위계: fallback 카드는 양쪽 8pt 들여 가운데 정렬(12pt는 수축감 커서 축소) — 행 안 스타일 변경이라 이슈 #5(List
   멤버십 불변)와 무관. ★ macOS List(NSTableView)는 행 콘텐츠에 **좌 7pt·우 9pt 자체 여백을
   비대칭으로** 얹어 카드가 List 밖 요소보다 좁고 어긋나 보인다(픽셀 실측) — 음수 패딩으로
   상쇄했고, 세로 스크롤바 거터는 `scrollDisabled(true)`로 제거(풀 List는 높이=내용이라 스크롤
