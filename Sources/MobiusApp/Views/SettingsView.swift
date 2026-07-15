@@ -238,7 +238,7 @@ struct SettingsView: View {
             if !mobiusPaths.isEmpty {
                 Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
                 VStack(alignment: .leading, spacing: 1) {
-                    Text("mobius CLI").font(.system(size: 12, weight: .medium))
+                    Text("Mobius CLI").font(.system(size: 12, weight: .medium))
                     Text(mobiusPaths.joined(separator: "  ·  "))
                         .font(.system(size: 9)).foregroundStyle(.tertiary)
                         .lineLimit(1).truncationMode(.middle)
@@ -248,12 +248,12 @@ struct SettingsView: View {
                 Button(loc("삭제"), role: .destructive) { uninstallMobius() }
             } else if !mobiusChecked {
                 ProgressView().controlSize(.small)
-                Text("mobius CLI").font(.system(size: 12, weight: .medium))
+                Text("Mobius CLI").font(.system(size: 12, weight: .medium))
                 Spacer()
                 Text(loc("확인 중…")).font(.caption).foregroundStyle(.secondary)
             } else {
                 Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
-                Text("mobius CLI").font(.system(size: 12, weight: .medium))
+                Text("Mobius CLI").font(.system(size: 12, weight: .medium))
                 Spacer()
                 Text(loc("설치 안 됨")).font(.system(size: 11)).foregroundStyle(.orange)
                 Button(loc("설치")) { installMobius() }
