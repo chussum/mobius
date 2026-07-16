@@ -224,6 +224,12 @@ Usage gauges are fetched only when the popover opens (4-minute cache) — never 
   the source, so no plaintext tokens are stored.
 - Deleting an account also deletes its secret snapshot and Desktop snapshot.
 
+## Contributors
+
+Thanks to everyone shaping Mobius with issues, reviews, and pull requests 🙏
+
+[![Contributors](https://contrib.rocks/image?repo=chussum/mobius)](https://github.com/chussum/mobius/graphs/contributors)
+
 ## License
 
 Released under the MIT License — see [`LICENSE`](LICENSE) for the full text.

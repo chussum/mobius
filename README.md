@@ -203,6 +203,12 @@ CLI로 전환해도 실행 중인 앱 화면에 즉시 반영됩니다.
   저장됩니다. Cookies는 원본부터 Keychain 키로 암호화되어 있어 평문 유출이 아닙니다.
 - 계정을 삭제하면 해당 비밀 스냅샷과 Desktop 스냅샷도 함께 삭제됩니다.
 
+## 함께 만든 사람들
+
+이슈 제보, 리뷰, PR로 Mobius를 함께 만들어주신 분들입니다 🙏
+
+[![Contributors](https://contrib.rocks/image?repo=chussum/mobius)](https://github.com/chussum/mobius/graphs/contributors)
+
 ## 라이센스
 
 MIT 라이센스로 배포됩니다 — 전문은 [`LICENSE`](LICENSE)를 참고하세요.
