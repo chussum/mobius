@@ -37,7 +37,8 @@ public final class SessionLogWatcher<Event: Sendable>: @unchecked Sendable {
     /// 며칠 지난 옛 폴더의 resume append도 놓치지 않는다.
     let recentDirs: (@Sendable (_ now: Date) -> [URL]?)?
     private var offsets: [String: UInt64] = [:]   // 파일 경로 → 읽은 위치
-    private var primed = false                    // 첫 스캔 여부 (parseFromStart에서만 의미)
+    private var primed = false                    // 첫 스캔 여부 — parseFromStart의 프라이밍 판정
+                                                  // + recentDirs 프루닝 게이트(첫 스캔은 전수 시딩)
     private let lock = NSLock()
     /// 이 시간 안에 수정된 파일만 본다
     public var recentWindow: TimeInterval = 600
