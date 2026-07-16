@@ -368,7 +368,7 @@ struct SettingsView: View {
             supportSection
         }
         .formStyle(.grouped)
-        .frame(width: 580, height: needsFallbackOnboarding ? 820 : 680)
+        .frame(width: 620, height: needsFallbackOnboarding ? 880 : 760)
     }
 
     /// 후원 — Fairy(브라우저 링크)와 카카오페이(QR 팝오버) 두 경로.
