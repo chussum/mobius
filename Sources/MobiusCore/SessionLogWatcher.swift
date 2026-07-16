@@ -65,9 +65,14 @@ public final class SessionLogWatcher<Event: Sendable>: @unchecked Sendable {
         // recentDirs 주입 시(Codex, 날짜 파티션): 최근 창의 폴더만 열거해 수만 파일 전수 walk를
         //   피하고, 추적 중인 파일은 폴더 나이와 무관하게 직접 포함한다(옛 폴더 resume의 append를
         //   놓치지 않도록). 사라진 파일의 오프셋은 함께 정리해 추적 집합이 무한정 커지지 않게 한다.
+        // ★ 단 첫 스캔(프라이밍)은 프루닝하지 않고 root 전체를 열거한다 — offsets가 메모리
+        //   전용이라 앱 재시작(또는 Mobius가 꺼진 채 codex 사용) 후엔 추적이 리셋되는데, 그때
+        //   창 밖 옛 폴더에서 이미 최근 수정된 세션(resume 중)을 시딩해 둬야 이후 direct-stat이
+        //   그 append를 이어 잡는다. 프라이밍은 파싱 없이 오프셋만 기록하므로 부작용 없이 1회
+        //   비용(전수 열거)뿐이고, 스캔은 유틸리티 태스크라 UI를 막지 않는다.
         // 미주입 시(Claude, 프로젝트별 구조): 기존대로 root 전체를 재귀 열거.
         let candidates: [URL]
-        if let recentDirs, let dirs = recentDirs(now) {
+        if let recentDirs, primed, let dirs = recentDirs(now) {
             var seen = Set<String>()
             var urls: [URL] = []
             for dir in dirs {
@@ -190,17 +195,24 @@ extension SessionLogWatcher where Event == CodexRateLimitStatus {
     /// 이보다 오래 전에 마지막으로 본 파일도 한 번 추적되면 recentDirs 밖 직접 확인으로 이어진다.
     static let codexLookbackDays = 7
 
+    /// 날짜 파티션 폴더 경로(root/YYYY/MM/DD) — 로컬 날짜 기준. 테스트도 이 함수를 직접 호출해
+    /// 경로 계산이 프로덕션과 어긋날 여지를 없앤다.
+    static func dateDir(root: URL, for date: Date) -> URL {
+        var cal = Calendar(identifier: .gregorian); cal.timeZone = .current
+        let c = cal.dateComponents([.year, .month, .day], from: date)
+        return root
+            .appendingPathComponent(String(format: "%04d", c.year ?? 0))
+            .appendingPathComponent(String(format: "%02d", c.month ?? 0))
+            .appendingPathComponent(String(format: "%02d", c.day ?? 0))
+    }
+
+    /// 최근 창의 날짜 폴더들. **내일(+1)까지 포함** — 폴더 명명이 로컬 날짜라 타임존 변경·시계
+    /// 스큐로 세션이 '내일' 폴더에 떨어져도 잡히게 하는 공짜 보험(없는 폴더 열거는 no-op).
+    /// 어제~`days`일 전은 옛 세션 resume 지평(실측 7/8→7/12=4일)을 커버한다.
     static func recentDateDirs(root: URL, now: Date, days: Int) -> [URL] {
-        var cal = Calendar(identifier: .gregorian)
-        cal.timeZone = .current
-        return (0...days).compactMap { back -> URL? in
-            guard let day = cal.date(byAdding: .day, value: -back, to: now) else { return nil }
-            let c = cal.dateComponents([.year, .month, .day], from: day)
-            guard let y = c.year, let m = c.month, let d = c.day else { return nil }
-            return root
-                .appendingPathComponent(String(format: "%04d", y))
-                .appendingPathComponent(String(format: "%02d", m))
-                .appendingPathComponent(String(format: "%02d", d))
+        var cal = Calendar(identifier: .gregorian); cal.timeZone = .current
+        return (-1...days).compactMap { back in
+            cal.date(byAdding: .day, value: -back, to: now).map { dateDir(root: root, for: $0) }
         }
     }
 

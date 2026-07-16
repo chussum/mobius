@@ -130,17 +130,21 @@ Sources/MobiusApp/        SwiftUI 메뉴바 앱 + AppState + Views/ + LoginFlow 
 - ★ **`codex resume`는 며칠 지난 원본 rollout 파일에 이어 쓴다**(실측: 7/8 파일이 7/12 갱신).
   세션 로그가 수만 개(실측 49K, 19GB)라 Claude식 전체 프라이밍 불가 →
   SessionLogWatcher **tailOnly 정책**: 오래된 미추적 파일 무시, 처음 본 파일은 끝까지 스킵 후
-  append만 파싱, 오래되면 추적 해제.
+  append만 파싱. **오프셋은 유지한다**(유휴 후 첫 append가 재프라이밍에 삼켜지지 않도록 —
+  `testTrackedFileKeepsOffsetAcrossStaleness`가 보증; 아래 direct-stat 안전망도 이 유지에
+  의존). 삭제된 파일만 추적 해제.
 - ★ **날짜 파티션 프루닝 — 매 틱 전수 walk 금지**: 루트가 `YYYY/MM/DD`인데 전체(49K/19GB)를
   `FileManager.enumerator`로 훑으면 `getattrlistbulk`가 매 3초 틱마다 CPU를 태운다(실측: 유휴
   앱 CPU **19~21%**, `sample` 스택 최다 getattrlistbulk). 로그 스캔은 15초 게이트 밖이라 실제로
   매 3초 돈다 — 디렉토리가 커지며 "0.1s면 허용"이 낡았다(0.25s+, cold면 더). →
-  `SessionLogWatcher.recentDirs` 주입으로 **최근 N일(Codex=7) 날짜 폴더만 열거**(신규 발견) +
-  **추적 중인 파일은 폴더 나이 무관하게 직접 확인**(옛 폴더 resume append 유지). 실측: 열거
-  49,296→7,494개(6.6배↓), 최근 수정분 누락 0, 유휴 CPU 19%→**0.1%**, getattrlistbulk
-  3702→108. 잔여(문서화된 트레이드오프): N일보다 오래 유휴였던 미추적 파일의 resume는 발견
-  못 함 — 계정 한도는 계정 전역이라 활성/최근 세션 이벤트로 교차 반영된다. Claude 워처는
-  프로젝트별 구조라 프루닝 미적용(전체 열거 유지, 부하 작음).
+  `SessionLogWatcher.recentDirs` 주입으로 **최근 N일(Codex=7, +내일까지) 날짜 폴더만 열거**(신규
+  발견) + **추적 중인 파일은 폴더 나이 무관하게 직접 확인**(옛 폴더 resume append 유지).
+  **첫 스캔(프라이밍)은 프루닝 없이 전수 열거**해 창 밖 옛 폴더의 최근 파일까지 시딩한다 —
+  offsets가 메모리 전용이라 재시작/오프라인 후 옛 세션 resume이 끊기지 않게(리뷰 반영, 1회
+  비용). 실측: 열거 49,296→7,494개(6.6배↓), 최근 수정분 누락 0, 유휴 CPU 19%→**0.1%**,
+  getattrlistbulk 3702→108. 잔여(축소된 트레이드오프): **프라이밍 이후 실행 중 처음 resume되는**
+  N일+ 옛 폴더 세션만 못 봄(재시작 시 재시딩) — 계정 한도는 계정 전역이라 활성/최근 세션
+  이벤트로 교차 반영된다. Claude 워처는 프로젝트별 구조라 프루닝 미적용(전체 열거 유지, 부하 작음).
 - `codex login status`는 읽기 전용(해시·mtime 불변 실측), 로그인 시 exit 0 — E2E 검증 프리미티브.
 - `codex login`(브라우저 OAuth)·`codex logout` 존재. `CODEX_HOME`으로 루트 오버라이드 가능.
 - ★ **구 계정 세션의 리프레시가 로그인을 되돌린다(클로버)** — B 계정으로 로그인/전환해도,

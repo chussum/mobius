@@ -22,15 +22,12 @@ final class CodexSessionWatcherTests: XCTestCase {
     }
     override func tearDownWithError() throws { try? FileManager.default.removeItem(at: tmp) }
 
-    /// 기준 시각에서 daysAgo일 전의 날짜 파티션 폴더 (프로덕션 recentDateDirs와 동일 계산).
+    /// 기준 시각에서 daysAgo일 전의 날짜 파티션 폴더. 경로 계산은 프로덕션 헬퍼를 직접 호출해
+    /// (@testable) 테스트와 프로덕션이 어긋날 여지를 없앤다.
     func folder(daysAgo: Int) -> URL {
         var cal = Calendar(identifier: .gregorian); cal.timeZone = .current
         let day = cal.date(byAdding: .day, value: -daysAgo, to: now)!
-        let c = cal.dateComponents([.year, .month, .day], from: day)
-        return env.codexSessionsDir
-            .appendingPathComponent(String(format: "%04d", c.year!))
-            .appendingPathComponent(String(format: "%02d", c.month!))
-            .appendingPathComponent(String(format: "%02d", c.day!))
+        return SessionLogWatcher<CodexRateLimitStatus>.dateDir(root: env.codexSessionsDir, for: day)
     }
 
     func statusLine(pct: Double) -> String {
@@ -153,17 +150,32 @@ final class CodexSessionWatcherTests: XCTestCase {
         XCTAssertEqual(watcher.scan(now: now).map(\.primary?.usedPercent), [99.0])
     }
 
-    /// lookback 창 밖 폴더의 파일이 '한 번도 추적된 적 없이' resume되면 발견되지 않는다.
-    /// 성능(전수 walk 회피)을 위한 의도적 트레이드오프 — 계정 한도는 계정 전역이라
-    /// 활성/최근 세션 이벤트로 교차 반영되며, 이 잔여는 문서화된 선택이다.
-    func testUntrackedFileInAgedOutFolderIsNotDiscovered() throws {
-        let agedDir = folder(daysAgo: 400)
-        let f = agedDir.appendingPathComponent("rollout-cold.jsonl")
-        try append(statusLine(pct: 100.0), to: f)
-        try setMtime(f, now) // 최근 mtime이지만 폴더가 창 밖 + 미추적
+    /// 재시작 시딩(리뷰 반영): 창 밖(수백 일 전) 폴더의 세션이 최근 수정 상태로 이미 있으면,
+    /// 첫 스캔(프라이밍)의 전수 열거가 폴더 나이와 무관하게 시딩한다 → 이후 append를 tail.
+    /// 앱 재시작/오프라인 중 codex 사용 후 옛 세션을 resume해도 신호가 끊기지 않는다.
+    func testPrimingFullWalkSeedsRecentFileInAgedFolder() throws {
+        let f = folder(daysAgo: 400).appendingPathComponent("rollout-warm.jsonl")
+        try append(statusLine(pct: 90.0), to: f)
+        try setMtime(f, now) // 재시작 직전 resume되어 최근 상태
 
         let watcher = SessionLogWatcher.codex(env: env)
-        // 프라이밍 스캔조차 이 파일을 열거하지 않는다 → 이후에도 발견 안 됨.
+        XCTAssertTrue(watcher.scan(now: now).isEmpty) // 프라이밍: 전수 열거로 시딩(파싱 없음)
+        XCTAssertTrue(watcher.trackedFiles.contains { ($0 as NSString).lastPathComponent == "rollout-warm.jsonl" })
+
+        try append(statusLine(pct: 99.0), to: f)
+        XCTAssertEqual(watcher.scan(now: now).map(\.primary?.usedPercent), [99.0]) // direct-stat tail
+    }
+
+    /// 잔여 트레이드오프(축소됨): 프라이밍 이후 처음 resume되는 창 밖 세션은 프루닝이 못 본다.
+    /// 재시작하면 프라이밍 전수 열거가 다시 시딩하므로, 남는 갭은 "실행 중 첫 resume" 뿐이다.
+    /// 계정 한도는 계정 전역이라 활성/최근 세션 이벤트로 교차 반영된다.
+    func testAgedFolderFileResumedAfterPrimingIsNotDiscovered() throws {
+        let watcher = SessionLogWatcher.codex(env: env)
+        XCTAssertTrue(watcher.scan(now: now).isEmpty) // 프라이밍 (창 밖 파일 아직 없음)
+
+        let f = folder(daysAgo: 400).appendingPathComponent("rollout-cold.jsonl")
+        try append(statusLine(pct: 100.0), to: f)
+        try setMtime(f, now) // 프라이밍 후 처음 나타남 + 최근 mtime, 그러나 창 밖 폴더 + 미추적
         XCTAssertTrue(watcher.scan(now: now).isEmpty)
         try append(statusLine(pct: 100.0), to: f)
         XCTAssertTrue(watcher.scan(now: now).isEmpty)
