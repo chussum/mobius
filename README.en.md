@@ -34,6 +34,13 @@ and **time until reset**, and clicking a card switches to that account.
 > **Not supported**: Console/OpenAI API keys / Bedrock / Vertex.
 > **Requirements**: macOS 14+ and the CLI of each provider you switch (`claude` / `codex`).
 
+> [!IMPORTANT]
+> **We recommend one personal account.** Mobius is designed for switching between
+> accounts of a different nature — like work ↔ personal. Running two or more
+> personal accounts to stretch usage limits may violate each service's terms,
+> and Mobius takes no responsibility if an account gets restricted or banned
+> as a result.
+
 ## Install
 
 ### 1. Download

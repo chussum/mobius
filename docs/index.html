@@ -159,6 +159,7 @@ h2 .tag{font-size:12px;vertical-align:middle;position:relative;top:-4px;
 .callout{margin-top:8px;background:var(--accent-dim);border:1px solid rgba(89,166,255,.25);
   border-radius:12px;padding:16px 18px;font-size:13.5px;color:var(--muted)}
 .callout b{color:var(--ink)}
+.callout.warn{background:rgba(245,166,35,.08);border-color:rgba(245,166,35,.25)}
 
 /* contributors */
 .contrib-row{display:flex;flex-wrap:wrap;gap:18px;margin-top:44px}
@@ -426,6 +427,7 @@ footer{border-top:1px solid var(--line);padding:34px 0;color:var(--faint);font-s
       </div>
     </div>
     <div class="callout rv" data-i18n-html="in_note"><b>Open source, and Apple-checked.</b> Every release passes Apple's security checks, so it opens with no warnings. Still curious? Read every line it runs — or build it yourself with <code style="font-family:var(--mono);font-size:12px">Scripts/make-app.sh</code>.</div>
+    <div class="callout warn rv" data-i18n-html="in_warn"><b>One personal account is plenty.</b> Mobius is built for switching between accounts of a different nature — like work ↔ personal. Running multiple personal accounts to stretch limits may violate each service's terms, and Mobius can't take responsibility if an account gets restricted or banned.</div>
   </div>
 </section>
 
@@ -507,6 +509,7 @@ const ko = {
   st2_h:"그냥 열면 끝", st2_p:"Applications에서 Mobius를 더블클릭하면 바로 열려요. Apple의 확인을 거친 정식 서명 앱이라, \"확인되지 않은 개발자\" 같은 경고를 넘길 일이 없습니다.",
   st3_h:"계정 추가", st3_p:"메뉴바 ∞ 아이콘 → <b>계정 추가</b>. 각 Claude 계정에 한 번씩 로그인하면 이후는 Mobius가 알아서 합니다. Codex는 터미널에서 <code>codex login</code> 한 번이면 몇 초 안에 자동 등록됩니다.",
   in_note:"<b>오픈소스인데, Apple 확인까지 받았어요.</b> 모든 배포판은 Apple 보안 검사를 통과해 경고 없이 열립니다. 그래도 궁금하면 실행되는 코드를 직접 읽어보거나 <code style=\"font-family:var(--mono);font-size:12px\">Scripts/make-app.sh</code>로 손수 빌드할 수 있어요.",
+  in_warn:"<b>개인 계정은 1개 사용을 권장해요.</b> Mobius는 회사 ↔ 개인처럼 성격이 다른 계정을 오가도록 만들어졌어요. 한도를 늘리려고 개인 계정을 여러 개 돌려 쓰는 건 각 서비스 약관에 어긋날 수 있고, 그로 인한 계정 제한·차단은 Mobius가 책임질 수 없어요.",
   ct_eb:"함께 만든 사람들", ct_h2:"같이 만들어가고 있어요.",
   ct_lead:"이슈 제보, 코드 리뷰, PR — Mobius는 이런 손길들로 자랍니다.",
   out_h2:"한도 눈치보기는 이제 그만.", out_sub:"계정들을 루프에 올려두고, 여러 개라는 사실을 잊어버리세요.",
