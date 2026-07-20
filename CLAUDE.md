@@ -359,6 +359,28 @@ Sources/MobiusApp/        SwiftUI 메뉴바 앱 + AppState + Views/ + LoginFlow 
   단 라이브 blob에는 refreshTokenExpiresAt가 없어 이 분기는 안전망일 뿐 = 활성의 만료
   401은 사실상 절대 마킹 안 함. 진짜 폐기는 access 유효+401(즉시), 또는 비활성이 된 뒤
   폴백 refresh 기계(invalid_grant)가 잡는다 — 지연 감지를 오탐 제거와 맞바꾼 결정.
+  ★ **그 지연 감지의 실제 대가가 터짐 → 연속 401 누적 신호 추가(2026-07-20)**: 활성 flosdor의
+  라이브 로그인이 죽었는데(CLI가 `Login expired`) 앱은 14시간 동안 완전히 침묵했다. 실측 근거는
+  usage 캐시(`usageCacheV1`)의 fetchedAt — flosdor 08:54:43 vs 같은 팝오버에서 갱신된 fore.st
+  22:52:13. 즉 **매 팝오버마다 401을 받고 `catch`로 조용히 버렸고, 게이지는 마지막 성공
+  스냅샷(5시간 1%)에 얼어붙어 정상처럼 보였다**(리셋 카운트다운만 실시간 계산돼 살아 보임).
+  마킹이 안 된 이유: claude가 refresh에 실패하면 라이브 access가 만료된 채 남고 라이브 blob엔
+  refreshTokenExpiresAt가 없어 shouldMarkReauthAfterAuthError의 두 조건이 모두 false.
+  원인 규명 — accounts.json mtime(7/17)으로 **그 이후 전환 없음**, Desktop 프로필 무변동·미실행,
+  활성은 모든 refresh 경로에서 제외(check 첫 guard/proactive 스윕/usage stale) → Mobius의 토큰
+  회전 흔적 없음. → `AuthSuspicion`: **401/403만** 연속 누적(네트워크 오류·429/5xx는 제외 —
+  오프라인에서 팝오버 몇 번에 오탐 뜨면 안 됨), **연속 3회 AND 첫 실패 30분 경과**면 카드에
+  주황 '인증 확인 필요' 배지 + '다시 로그인' 버튼, 알림은 계정당 1회. 200 성공 시 기록 삭제,
+  UserDefaults(`authFailuresV1`)에 영속(재시작해도 누적 유지), 시간 조건 때문에 tick이 주기적
+  재계산(팝오버 안 열어도 배지가 뜬다). ★ **이 신호를 needsReauth로 승격 금지** —
+  AutoSwitchEngine이 needsReauth를 폴백 후보 제외(:39)·주계정 강등(:93)에 쓰므로 추측성
+  신호를 넣으면 이슈 #4(멀쩡한 주계정 밀어내기)가 재발한다. 표시 전용이라 오탐이 나도 전환은
+  안 건드린다. 같이 고침: **stale 게이지 표시**(`AccountCardView.usageStaleAfter` 15분 —
+  4분 캐시 + 10분 재시도 쿨다운을 감안한 여유값) — 기준 시각이 오래된 스냅샷은 게이지를
+  50% 흐리게 + "N시간 전 값" 캡션. 실패인지 단순 미갱신인지는 **단정하지 않는다**(Codex는
+  "그동안 codex를 안 썼다"는 뜻이기도 하다) — 기준 시각만 밝히고 판단은 사용자에게 맡긴다.
+  ★ 얼어붙은 게이지가 특히 위험했던 이유: **초기화 카운트다운은 resets_at으로 실시간
+  계산돼** 낡은 스냅샷도 살아 있는 것처럼 보인다("초기화 6일 9시간 후").
 - **Codex 지원 구현됨(2026-07-12, A안: 기존 개념 확장 + 프로바이더 어댑터)**:
   프로바이더별 풀(AccountsFile v2 — 구 v1 파일은 Claude 풀로 무손실 흡수, 저장은 첫 변경 때
   v2로 전환), Codex 어댑터/파서/감시, 앱 섹션 UI + CLI `--provider`, 유닛/통합 테스트 92개 green.

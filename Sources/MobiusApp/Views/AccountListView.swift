@@ -268,6 +268,8 @@ struct AccountListView: View {
     private func card(_ p: AccountProfile, isPrimary: Bool) -> some View {
         // Desktop 연결·재로그인 플로우는 Claude 전용 (Codex 재로그인 감지는 미배선)
         let claudeCard = p.provider == .claude
+        // 연속 401 임계값 도달(표시 전용) — Claude 전용 신호다(usage 조회가 Claude만 돈다).
+        let suspect = claudeCard && state.authSuspect.contains(p.id)
         // 낙관적 표시: 수동 전환(Claude) 클릭 직후 pendingSwitchID로 그 카드를 즉시 활성으로
         // 보여줘 UI가 스무스하게 전환된 것처럼 보이게 한다. Codex·평시엔 풀별 isActive.
         let showActive = claudeCard && state.pendingSwitchID != nil
@@ -284,7 +286,8 @@ struct AccountListView: View {
                                 state.setPrimary(p.id)
                             }
                         },
-                        onReauth: p.needsReauth && claudeCard ? { state.addAccount() } : nil)
+                        onReauth: (p.needsReauth || suspect) && claudeCard ? { state.addAccount() } : nil,
+                        authSuspect: suspect)
             .onTapGesture {
                 guard !isActive(p) else { return }
                 withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
@@ -292,7 +295,7 @@ struct AccountListView: View {
                 }
             }
             .contextMenu {
-                if p.needsReauth && claudeCard {
+                if (p.needsReauth || suspect) && claudeCard {
                     Button(loc("다시 로그인")) { state.addAccount() }
                 }
                 if !isPrimary {

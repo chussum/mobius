@@ -51,6 +51,36 @@ final class AppState: ObservableObject {
     /// 게이지 캐시 유효 시간 — 팝오버를 자주 여닫아도 이 간격보다 잦게 조회하지 않는다
     private let usageStaleness: TimeInterval = 240
 
+    private func loadAuthFailuresIfNeeded() {
+        guard !authFailuresLoaded else { return }
+        authFailuresLoaded = true
+        guard let data = UserDefaults.standard.data(forKey: Self.authFailuresKey),
+              let dict = try? JSONDecoder().decode([UUID: AuthFailureRecord].self, from: data)
+        else { return }
+        authFailures = dict
+    }
+
+    /// 앱을 껐다 켜도 누적이 유지돼야 한다 — 재시작마다 0이면 오늘 같은 장시간 폐기를
+    /// 영영 못 잡는다(usage 캐시와 같은 저장 방식).
+    private func saveAuthFailures() {
+        let ids = Set(store.file.accounts.map(\.id))
+        authFailures = authFailures.filter { ids.contains($0.key) }   // 삭제된 계정 정리
+        if let data = try? JSONEncoder().encode(authFailures) {
+            UserDefaults.standard.set(data, forKey: Self.authFailuresKey)
+        }
+    }
+
+    /// 임계값은 시간 조건을 포함하므로 **실패가 없어도 시간이 지나면 켜진다** —
+    /// 팝오버가 닫혀 있어도 tick이 주기적으로 재계산해 배지가 제때 뜨게 한다.
+    private func recomputeAuthSuspect(now: Date = Date()) {
+        loadAuthFailuresIfNeeded()
+        let ids = Set(store.file.accounts.map(\.id))
+        let next = Set(authFailures
+            .filter { ids.contains($0.key) && AuthSuspicion.isSuspect($0.value, now: now) }
+            .map(\.key))
+        if next != authSuspect { authSuspect = next }
+    }
+
     let env: MobiusEnvironment
     let store: AccountStore
     let io: ClaudeConfigIO
@@ -82,6 +112,16 @@ final class AppState: ObservableObject {
     // 때마다 회전 시도가 반복된다. 성공하면 즉시 해제(exp가 미래로 풀려 재진입도 자연히 멈춤).
     private var lastUsageRefreshAttemptAt: [UUID: Date] = [:]
     static let usageRefreshRetryCooldown: TimeInterval = 600
+
+    /// usage 조회의 **연속 401/403** 기록(계정별). 네트워크 오류나 429/5xx는 절대 세지
+    /// 않는다 — 오프라인에서 팝오버를 몇 번 열었다고 멀쩡한 계정에 재로그인 버튼이 뜨면
+    /// 안 된다. 조회 200 성공 시 즉시 삭제.
+    private var authFailures: [UUID: AuthFailureRecord] = [:]
+    private var authFailuresLoaded = false
+    private static let authFailuresKey = "authFailuresV1"
+    /// 임계값에 도달한 계정 — 카드 배지·'다시 로그인' 버튼 노출에만 쓴다(표시 전용).
+    /// ★ 절대 needsReauth로 승격하지 말 것 (AuthSuspicion 주석 참조 — 이슈 #4 재발).
+    @Published private(set) var authSuspect: Set<UUID> = []
 
     init() {
         let env = MobiusEnvironment.live()
@@ -150,6 +190,7 @@ final class AppState: ObservableObject {
     /// 팝오버가 열릴 때 호출 — 캐시가 만료된 계정만 사용량 조회 (상시 폴링 없음)
     func refreshUsageIfStale() {
         loadUsageCacheIfNeeded()
+        loadAuthFailuresIfNeeded()
         guard UserDefaults.standard.object(forKey: "showUsageGauges") == nil
                 || UserDefaults.standard.bool(forKey: "showUsageGauges") else { return }
         guard usageTask == nil else { return }
@@ -219,6 +260,7 @@ final class AppState: ObservableObject {
                     guard let snap = try await UsageFetcher.fetch(keychainBlob: fetchBlob)
                     else { continue }
                     usage[profile.id] = snap
+                    authFailures[profile.id] = nil   // 살아있음 확인 → 연속 401 누적 리셋
                     // 조회 성공 = 토큰 살아있음 → 잘못 남은 재로그인 마킹 자가 해제
                     if profile.needsReauth {
                         try? store.setNeedsReauth(profile.id, false)
@@ -244,20 +286,35 @@ final class AppState: ObservableObject {
                     // 판정 규칙은 UsageFetcher.shouldMarkReauthAfterAuthError 참조.
                     // ★ 판정 대상은 fetchBlob: refresh 성공 시 fetchBlob은 신선한(유효) 토큰이라
                     //   그래도 401이면 폐기로 마킹, refresh를 안 한 경로면 fetchBlob==blob.
-                    if UsageFetcher.shouldMarkReauthAfterAuthError(blob: fetchBlob, isActive: isActive),
-                       !profile.needsReauth {
+                    let marked = UsageFetcher.shouldMarkReauthAfterAuthError(blob: fetchBlob,
+                                                                            isActive: isActive)
+                        && !profile.needsReauth
+                    if marked {
                         try? store.setNeedsReauth(profile.id, true)
                         reauthChanged = true
                         notify(title: loc("재로그인 필요"),
                                body: loc("%@ 계정의 인증이 만료됐어요. 카드의 '다시 로그인'을 눌러주세요.", profile.nickname))
                     }
-                } catch { continue }
+                    // 위 규칙이 못 잡는 죽음(활성 계정의 진짜 폐기 — AuthSuspicion 주석 참조)을
+                    // 위해 401을 누적한다. 임계값(연속 3회 + 첫 실패 30분 경과)에 닿으면
+                    // 카드에 배지·'다시 로그인'을 띄우고 알림을 **계정당 1회만** 보낸다.
+                    var rec = AuthSuspicion.recordFailure(authFailures[profile.id], now: now)
+                    if !marked, !profile.needsReauth, !rec.notified,
+                       AuthSuspicion.isSuspect(rec, now: now) {
+                        rec.notified = true
+                        notify(title: loc("인증 확인 필요"),
+                               body: loc("%@ 계정의 사용량 조회가 계속 거부되고 있어요. 로그인이 만료됐을 수 있으니 카드의 '다시 로그인'을 눌러주세요.", profile.nickname))
+                    }
+                    authFailures[profile.id] = rec
+                } catch { continue }   // 네트워크 오류 — 토큰 문제가 아니므로 누적하지 않는다
             }
             if reauthChanged {
                 MobiusNotification.postAccountsChanged()
                 reload()
             }
             saveUsageCache()
+            saveAuthFailures()
+            recomputeAuthSuspect()
         }
     }
 
@@ -519,6 +576,8 @@ final class AppState: ObservableObject {
         if let at = lastErrorAt, Date().timeIntervalSince(at) >= Self.lastErrorTTL {
             lastError = nil
         }
+        // 인증 의심 배지는 시간 조건을 포함하므로 팝오버 없이도 켜져야 한다(네트워크 0).
+        recomputeAuthSuspect()
         // 로그인 창이 열려 있는 동안은 reconcile/자동 전환이 LoginFlow의
         // 자격증명 변경 감지와 경합하지 않도록 전체를 건너뛴다.
         // Desktop 가이드 캡처 중에도 동일 — 자동 전환이 Desktop을 재실행하면

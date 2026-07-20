@@ -136,6 +136,8 @@
 "%@ 계정의 인증이 만료됐어요. 카드의 '다시 로그인'을 눌러주세요." = "Authentication for %@ has expired. Press 'Sign in again' on its card.";
 "%@ 계정의 로그인이 만료됐어요. 카드의 '다시 로그인'을 눌러주세요." = "%@'s login has expired. Press 'Sign in again' on its card.";
 "%@ 계정의 로그인이 만료돼 전환을 건너뛰었어요. '다시 로그인'을 눌러주세요." = "%@'s login has expired, so the switch was skipped. Press 'Sign in again'.";
+"인증 확인 필요" = "Check sign-in";
+"%@ 계정의 사용량 조회가 계속 거부되고 있어요. 로그인이 만료됐을 수 있으니 카드의 '다시 로그인'을 눌러주세요." = "Usage lookups for %@ keep being rejected. Its login may have expired — press 'Sign in again' on its card.";
 "다운로드 중…" = "Downloading…";
 "Primary 계정으로 설정" = "Set as primary account";
 "Claude Desktop 다시 연결" = "Reconnect Claude Desktop";
@@ -149,6 +151,10 @@
 "%d일 %d시간 후" = "in %dd %dh";
 "%d시간 %d분 후" = "in %dh %dm";
 "%d분 후" = "in %dm";
+"%d일 %d시간 전" = "%dd %dh ago";
+"%d시간 %d분 전" = "%dh %dm ago";
+"%d분 전" = "%dm ago";
+"%@ 값" = "as of %@";
 
 /* AccountListView */
 "뫼비우스" = "";

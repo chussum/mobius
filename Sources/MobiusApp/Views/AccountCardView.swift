@@ -16,8 +16,11 @@ struct AccountCardView: View {
     var onDelete: (() -> Void)? = nil
     /// fallback 카드에만 전달 — ⋯ 메뉴/우클릭에서 primary로 승격
     var onSetPrimary: (() -> Void)? = nil
-    /// needsReauth 카드에만 전달 — 로그인 플로우 재실행 (같은 계정 로그인 = 토큰 갱신)
+    /// needsReauth/authSuspect 카드에만 전달 — 로그인 플로우 재실행 (같은 계정 로그인 = 토큰 갱신)
     var onReauth: (() -> Void)? = nil
+    /// usage 조회가 연속 401로 임계값을 넘긴 계정 — **의심**이지 확정이 아니다(AuthSuspicion).
+    /// needsReauth(확정, 빨강)와 다른 문구·색으로 구분해 띄운다.
+    var authSuspect: Bool = false
 
     private let accent = Color(red: 0.35, green: 0.65, blue: 1.0)
 
@@ -51,11 +54,13 @@ struct AccountCardView: View {
                             .background(accent.opacity(0.18), in: Capsule())
                             .foregroundStyle(accent)
                     }
-                    if profile.needsReauth {
-                        Text(loc("재로그인 필요")).font(.system(size: 9, weight: .medium))
+                    if profile.needsReauth || authSuspect {
+                        let confirmed = profile.needsReauth
+                        Text(confirmed ? loc("재로그인 필요") : loc("인증 확인 필요"))
+                            .font(.system(size: 9, weight: .medium))
                             .padding(.horizontal, 5).padding(.vertical, 2)
-                            .background(.red.opacity(0.15), in: Capsule())
-                            .foregroundStyle(.red)
+                            .background((confirmed ? Color.red : .orange).opacity(0.15), in: Capsule())
+                            .foregroundStyle(confirmed ? Color.red : .orange)
                         if let onReauth {
                             Button(loc("다시 로그인")) { onReauth() }
                                 .buttonStyle(.borderless)
@@ -82,7 +87,7 @@ struct AccountCardView: View {
             }
             if onConnectDesktop != nil || onDelete != nil || onSetPrimary != nil {
                 Menu {
-                    if profile.needsReauth, let onReauth {
+                    if profile.needsReauth || authSuspect, let onReauth {
                         Button(loc("다시 로그인"), systemImage: "arrow.clockwise") { onReauth() }
                     }
                     if let onSetPrimary {
@@ -143,8 +148,24 @@ struct AccountCardView: View {
 
     // MARK: 사용량 게이지 (5시간/주간 + 초기화 남은 시간)
 
+    /// 이 시간을 넘은 스냅샷은 "지금 값"으로 보여주지 않는다(흐리게 + 기준 시각 표기).
+    /// 4분 캐시 + 10분 재시도 쿨다운(AppState.usageRefreshRetryCooldown)을 감안한 여유값이라
+    /// 정상 동작 중에는 뜨지 않는다.
+    /// ★ 실측 2026-07-20: 활성 계정의 usage 조회가 401로 계속 실패하는 동안 게이지가 마지막
+    ///   성공 스냅샷(08:54의 "5시간 1%")에 얼어붙어 14시간 내내 정상처럼 보였다. 초기화
+    ///   카운트다운만 실시간 계산돼 살아 있는 것처럼 보이는 게 특히 위험했다.
+    static let usageStaleAfter: TimeInterval = 15 * 60
+
+    /// 게이지 값의 기준 시각이 오래됐을 때만 문구를 준다(아니면 nil = 표기 없음).
+    private func staleAgeText(_ u: UsageSnapshot) -> String? {
+        let age = now.timeIntervalSince(u.fetchedAt)
+        guard age >= Self.usageStaleAfter else { return nil }
+        return agoText(age)
+    }
+
     private func gauges(_ u: UsageSnapshot) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
+        let stale = staleAgeText(u)
+        return VStack(alignment: .leading, spacing: 3) {
             if let pct = u.fiveHourPercent {
                 gaugeRow(label: loc("5시간"), percent: pct, resetsAt: u.fiveHourResetsAt)
             }
@@ -155,7 +176,16 @@ struct AccountCardView: View {
             ForEach(u.scopedLimits ?? [], id: \.label) { s in
                 gaugeRow(label: s.label, percent: s.percent, resetsAt: s.resetsAt)
             }
+            // 실패인지 단순 미갱신인지는 여기서 단정하지 않는다 — Codex는 "그동안 codex를 안
+            // 썼다"는 뜻이기도 하다. 기준 시각만 정직하게 밝히고 판단은 사용자에게 맡긴다.
+            if let stale {
+                Text(loc("%@ 값", stale))
+                    .font(.system(size: 9.5)).foregroundStyle(.tertiary)
+                    .lineLimit(1).fixedSize()
+            }
         }
+        // 얼어붙은 값을 지금 값처럼 보여주지 않기 위한 시각적 강등.
+        .opacity(stale == nil ? 1 : 0.5)
     }
 
     private func gaugeRow(label: String, percent: Double, resetsAt: Date?) -> some View {
@@ -195,6 +225,15 @@ struct AccountCardView: View {
         case ..<85: return .orange
         default: return .red
         }
+    }
+
+    /// 경과 시간 문구 — remainText("…후")의 과거형 짝.
+    private func agoText(_ interval: TimeInterval) -> String {
+        let mins = max(0, Int(interval / 60))
+        let (d, h, m) = (mins / 1440, (mins % 1440) / 60, mins % 60)
+        if d > 0 { return loc("%d일 %d시간 전", d, h) }
+        if h > 0 { return loc("%d시간 %d분 전", h, m) }
+        return loc("%d분 전", m)
     }
 
     private func remainText(until date: Date) -> String {

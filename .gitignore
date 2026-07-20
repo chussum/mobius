@@ -4,6 +4,7 @@ dist/
 *.xcodeproj
 .DS_Store
 .omc/
+.cat/
 
 # 내부 설계/계획 문서 (비공개)
 docs/superpowers/
