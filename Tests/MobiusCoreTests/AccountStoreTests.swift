@@ -163,4 +163,62 @@ final class AccountStoreTests: XCTestCase {
         XCTAssertTrue(store.file.accounts.isEmpty)
         XCTAssertNil(store.file.activeAccountID)
     }
+
+    // MARK: credential lock (Codex 토큰 자동 갱신 ↔ 전환 상호 배제)
+
+    /// 같은 id의 withCredentialLock은 상호 배제된다 — 락 없이는 read-modify-write가 레이스로
+    /// 카운트를 잃는다. 락이 직렬화하므로 유실이 없어야 한다.
+    func testCredentialLockProvidesMutualExclusion() throws {
+        final class Box: @unchecked Sendable { var n = 0 }
+        let store = try AccountStore(env: env, keychain: kc)
+        let id = UUID()
+        let box = Box()
+        let iterations = 2000
+        DispatchQueue.concurrentPerform(iterations: iterations) { _ in
+            store.withCredentialLock(id) { box.n += 1 }
+        }
+        XCTAssertEqual(box.n, iterations)   // 직렬화 → 유실 0
+    }
+
+    /// 동시 store + read가 credential lock 안에서 돌면, 리더는 항상 **정합한 완전 스냅샷**만
+    /// 관측한다(찢긴 바이트 없음) — 회전본 저장이 진행 중인 스냅샷을 전환이 반쪽으로 읽는 레이스 방지.
+    func testCredentialLockSerializesConcurrentStoreAndRead() throws {
+        let store = try AccountStore(env: env, keychain: kc)
+        let p = try store.upsertProfile(
+            nickname: "cx", provider: .codex,
+            identity: ProviderIdentity(emailAddress: "x@o.com", organizationName: "",
+                                       tierDescription: "Pro"),
+            secretData: CodexFixtures.authJSON(email: "x@o.com", accessToken: "at-0"))
+        let codexIO = CodexConfigIO(env: env)
+        DispatchQueue.concurrentPerform(iterations: 200) { i in
+            if i % 2 == 0 {
+                let bytes = CodexFixtures.authJSON(email: "x@o.com", accessToken: "at-\(i)")
+                store.withCredentialLock(p.id) { try? store.setSecretData(bytes, for: p.id) }
+            } else {
+                let observed: Data? = store.withCredentialLock(p.id) {
+                    try? store.secretData(for: p.id)
+                }
+                if let data = observed {
+                    XCTAssertEqual(CodexConfigIO.email(fromAuthJSON: data), "x@o.com")
+                    XCTAssertTrue(codexIO.recognizesSecret(data))
+                }
+            }
+        }
+        let final = try XCTUnwrap(store.secretData(for: p.id))
+        XCTAssertEqual(CodexConfigIO.email(fromAuthJSON: final), "x@o.com")
+    }
+
+    /// setSecretData는 덮어쓰기 전 기존 스냅샷을 .bak으로 보존한다(회전 저장 복구 여지).
+    func testSetSecretDataKeepsBak() throws {
+        let store = try AccountStore(env: env, keychain: kc)
+        let p = try store.upsertProfile(
+            nickname: "cx", provider: .codex,
+            identity: ProviderIdentity(emailAddress: "x@o.com", organizationName: "",
+                                       tierDescription: "Pro"),
+            secretData: Data("v1".utf8))
+        try store.setSecretData(Data("v2".utf8), for: p.id)   // v1 → .bak, v2가 현재
+        XCTAssertEqual(try store.secretData(for: p.id), Data("v2".utf8))
+        let bak = env.secretFile(for: p.id).appendingPathExtension("bak")
+        XCTAssertEqual(try Data(contentsOf: bak), Data("v1".utf8))
+    }
 }

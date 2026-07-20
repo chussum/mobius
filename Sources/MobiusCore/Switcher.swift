@@ -109,20 +109,26 @@ public final class Switcher: @unchecked Sendable {
         guard let io = ios[profile.provider] else {
             throw SwitcherError.unsupportedProvider(profile.provider)
         }
-        guard let target = try store.secretData(for: id) else { throw SwitcherError.noStoredSecret }
+        // ★ credential lock 안에서 스냅샷을 **읽고** 라이브에 설치한다 — 비활성 계정 토큰 자동 갱신
+        //   (CodexTokenRefresher)이 회전본을 저장하는 시퀀스와 상호 배제되어, 전환이 회전 직전
+        //   스냅샷을 라이브에 설치하는 레이스를 원천 차단한다(락 밖에서 읽으면 방금 회전으로 낡은
+        //   바이트를 install할 수 있다).
+        try store.withCredentialLock(id) {
+            guard let target = try store.secretData(for: id) else { throw SwitcherError.noStoredSecret }
 
-        // 1. 라이브 최신 토큰 되저장 (CLI가 refresh했을 수 있으므로)
-        let before = try io.readLiveSecretData()
-        try resaveLiveIntoMatchingProfile(provider: profile.provider)
+            // 1. 라이브 최신 토큰 되저장 (CLI가 refresh했을 수 있으므로)
+            let before = try io.readLiveSecretData()
+            try resaveLiveIntoMatchingProfile(provider: profile.provider)
 
-        // 2. 대상 기록, 실패 시 롤백
-        do {
-            try io.writeLiveSecretData(target)
-        } catch {
-            if let before { try? io.writeLiveSecretData(before) }
-            throw error
+            // 2. 대상 기록, 실패 시 롤백
+            do {
+                try io.writeLiveSecretData(target)
+            } catch {
+                if let before { try? io.writeLiveSecretData(before) }
+                throw error
+            }
+            try store.setActive(id)
         }
-        try store.setActive(id)
     }
 
     /// 현재 로그인된 계정이 아직 프로필로 등록되지 않았다면 자동 흡수한다 (전 프로바이더).

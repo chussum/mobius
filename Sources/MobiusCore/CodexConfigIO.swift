@@ -77,7 +77,9 @@ public struct CodexConfigIO: ProviderConfigIO {
 
     // MARK: 신원 추출 (auth.json → id_token JWT payload)
 
-    static func email(fromAuthJSON data: Data) -> String? {
+    /// auth.json 바이트의 id_token(JWT)에서 계정 이메일을 추출한다(순수·읽기 전용). 회전본 저장
+    /// 직전 신원 검증(회전 바이트가 대상 계정과 일치하는가)에도 쓰이므로 public.
+    public static func email(fromAuthJSON data: Data) -> String? {
         idTokenPayload(fromAuthJSON: data)?["email"] as? String
     }
 

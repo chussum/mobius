@@ -12,6 +12,15 @@ public final class AccountStore: @unchecked Sendable {
     let env: MobiusEnvironment
     let keychain: KeychainClient
     private let lock = NSLock()
+    /// 비밀 스냅샷(파일) 읽기/쓰기 직렬화 — 메타데이터 `lock`과 별개다(upsertProfile이 `lock`을
+    /// 쥔 채 setSecretData를 호출하므로 같은 락이면 데드락). read/backup/write 시퀀스를 원자로 묶어
+    /// 동시 store + read가 찢긴 바이트를 보지 않게 한다.
+    private let secretLock = NSLock()
+    /// 계정별 credential lock (UUID-keyed mutex). refresher의 read-snapshot→refresh→(recheck-active)
+    /// →store 시퀀스와 Switcher.switchTo(id)가 **같은 id에 대해 둘 다** 이 락 안에서 돌아, 전환이
+    /// 회전 직전(pre-rotation) 스냅샷을 라이브에 설치하는 레이스를 막는다(Codex 토큰 자동 갱신).
+    private var credentialLocks: [UUID: NSLock] = [:]
+    private let credentialLocksGuard = NSLock()
 
     static let secretAccount = "snapshot"
     static func secretService(for id: UUID) -> String { "Mobius-account-\(id.uuidString)" }
@@ -99,6 +108,11 @@ public final class AccountStore: @unchecked Sendable {
     // 내용물은 프로바이더가 정한 직렬화 바이트 (ProviderConfigIO 참조). 스토어는 해석하지 않는다.
 
     public func secretData(for id: UUID) throws -> Data? {
+        secretLock.lock(); defer { secretLock.unlock() }
+        return try secretDataLocked(for: id)
+    }
+
+    private func secretDataLocked(for id: UUID) throws -> Data? {
         // 1순위: 파일. 승인창 없음.
         if let data = try? Data(contentsOf: env.secretFile(for: id)) {
             return data
@@ -117,9 +131,34 @@ public final class AccountStore: @unchecked Sendable {
     }
 
     public func setSecretData(_ data: Data, for id: UUID) throws {
-        try writeSecretFile(data, for: id)
+        secretLock.lock(); defer { secretLock.unlock() }
+        // 덮어쓰기 전 기존 스냅샷을 .bak으로 보존 — 회전 토큰 저장 중 프로세스가 죽거나 새 바이트가
+        // (검증을 통과했더라도) 문제가 있을 때 직전 스냅샷으로 복구할 여지를 남긴다.
+        let url = env.secretFile(for: id)
+        if let existing = try? Data(contentsOf: url) {
+            try? existing.write(to: url.appendingPathExtension("bak"), options: .atomic)
+        }
+        try writeSecretFile(data, for: id)   // 원자(temp→rename) + 0600
         // 혹시 남아 있을 수 있는 구버전 Keychain 항목은 정리 (승인창 재발 방지)
         try? keychain.delete(service: Self.secretService(for: id), account: Self.secretAccount)
+    }
+
+    /// 계정별 credential lock으로 body를 감싼다 (동기 — await를 가로지르지 않는 짧은 구간만).
+    /// refresher 저장 시퀀스와 Switcher.switchTo가 같은 id에서 상호 배제되어, 전환이 회전 직전
+    /// 스냅샷을 라이브에 설치하지 못하게 한다. 락 순서: credential lock → (store lock / secret lock).
+    @discardableResult
+    public func withCredentialLock<T>(_ id: UUID, _ body: () throws -> T) rethrows -> T {
+        let l = credentialLock(for: id)
+        l.lock(); defer { l.unlock() }
+        return try body()
+    }
+
+    private func credentialLock(for id: UUID) -> NSLock {
+        credentialLocksGuard.lock(); defer { credentialLocksGuard.unlock() }
+        if let existing = credentialLocks[id] { return existing }
+        let l = NSLock()
+        credentialLocks[id] = l
+        return l
     }
 
     /// Claude 편의 경로 — 기존 비밀 파일 포맷(CredentialsSnapshot JSON) 그대로.
@@ -265,6 +304,7 @@ public final class AccountStore: @unchecked Sendable {
                 file.accounts.first { $0.provider == profile.provider }?.id
         }
         try? FileManager.default.removeItem(at: env.secretFile(for: id))
+        try? FileManager.default.removeItem(at: env.secretFile(for: id).appendingPathExtension("bak"))
         try? keychain.delete(service: Self.secretService(for: id), account: Self.secretAccount)
         try save()
     }
