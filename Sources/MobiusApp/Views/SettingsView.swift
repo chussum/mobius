@@ -8,7 +8,14 @@ struct SettingsView: View {
     /// 오른쪽으로 밀어 부모-자식 관계를 시각화한다(전환 기준 / 동기화 하위 항목 공용).
     static let labsIndent: CGFloat = 16
     @EnvironmentObject var state: AppState
-    @State private var launchAtLogin = (SMAppService.mainApp.status == .enabled)
+    // ★ 앱 실행 시 씬 그래프가 SettingsView()를 즉시 생성하는데, 이 @State가 init에서
+    //   SMAppService.status(smd로의 **동기 XPC**)를 읽으면 smd가 느리거나 먹통일 때
+    //   **메인 스레드가 통째로 멈춰 메뉴바 아이콘도 안 뜬다**(실측 2026-07-21, hang).
+    //   → init은 false로 두고, Settings를 **열 때 백그라운드로** 실제 상태를 읽는다(onAppear).
+    @State private var launchAtLogin = false
+    /// 초기 백그라운드 로드 완료 플래그 — 그 로드가 튼 값이 onChange(register/unregister)를
+    /// 트리거하지 않게 막는다(사용자 조작만 반영).
+    @State private var launchAtLoginReady = false
     @State private var cliMessage = ""
     @AppStorage("showUsageGauges") private var showUsageGauges = true
     @AppStorage("autoUpdateCheck") private var autoUpdateCheck = true
@@ -37,6 +44,13 @@ struct SettingsView: View {
                 NSApp.setActivationPolicy(.regular)
                 NSApp.activate(ignoringOtherApps: true)
                 checkTools()
+                // 로그인 항목 상태는 smd로의 동기 XPC라 백그라운드에서 읽는다 — 메인 스레드가
+                // smd 지연/먹통에 물리지 않게(실행 경로에서 뺀 이유와 동일). 결과만 반영.
+                Task {
+                    let enabled = await Task.detached { SMAppService.mainApp.status == .enabled }.value
+                    launchAtLogin = enabled
+                    launchAtLoginReady = true
+                }
             }
             .onDisappear { NSApp.setActivationPolicy(.accessory) }
     }
@@ -299,6 +313,7 @@ struct SettingsView: View {
                 }
                 Toggle(loc("로그인 시 자동 시작"), isOn: $launchAtLogin)
                     .onChange(of: launchAtLogin) { _, on in
+                        guard launchAtLoginReady else { return }  // 초기 백그라운드 로드는 무시
                         do {
                             if on { try SMAppService.mainApp.register() }
                             else { try SMAppService.mainApp.unregister() }
