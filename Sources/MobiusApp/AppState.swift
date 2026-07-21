@@ -51,34 +51,95 @@ final class AppState: ObservableObject {
     /// 게이지 캐시 유효 시간 — 팝오버를 자주 여닫아도 이 간격보다 잦게 조회하지 않는다
     private let usageStaleness: TimeInterval = 240
 
-    private func loadAuthFailuresIfNeeded() {
-        guard !authFailuresLoaded else { return }
-        authFailuresLoaded = true
-        guard let data = UserDefaults.standard.data(forKey: Self.authFailuresKey),
-              let dict = try? JSONDecoder().decode([UUID: AuthFailureRecord].self, from: data)
-        else { return }
-        authFailures = dict
+    // MARK: 배지(인증 의심) — 무상태 세션활동×토큰만료 판정 (AuthSuspicion)
+
+    /// 알림을 이미 보낸 의심 계정 id — **알림 중복만** 막는 최소 영속 집합이다(의심 조건
+    /// 자체는 무상태라 저장하지 않는다). 재시작해도 같은 에피소드에 다시 알리지 않고,
+    /// 회복(조건 해제)하면 제거돼 다음 재발엔 다시 알린다.
+    private var notifiedSuspects: Set<UUID> = []
+    private var notifiedSuspectsLoaded = false
+    private static let notifiedSuspectsKey = "authSuspectNotifiedV1"
+
+    private func loadNotifiedSuspectsIfNeeded() {
+        guard !notifiedSuspectsLoaded else { return }
+        notifiedSuspectsLoaded = true
+        guard let data = UserDefaults.standard.data(forKey: Self.notifiedSuspectsKey),
+              let ids = try? JSONDecoder().decode(Set<UUID>.self, from: data) else { return }
+        notifiedSuspects = ids
     }
 
-    /// 앱을 껐다 켜도 누적이 유지돼야 한다 — 재시작마다 0이면 오늘 같은 장시간 폐기를
-    /// 영영 못 잡는다(usage 캐시와 같은 저장 방식).
-    private func saveAuthFailures() {
+    /// 변경 시에만 저장 — 현재 계정 id로 필터해 삭제된 계정의 잔재를 정리한다.
+    private func saveNotifiedSuspects() {
         let ids = Set(store.file.accounts.map(\.id))
-        authFailures = authFailures.filter { ids.contains($0.key) }   // 삭제된 계정 정리
-        if let data = try? JSONEncoder().encode(authFailures) {
-            UserDefaults.standard.set(data, forKey: Self.authFailuresKey)
+        notifiedSuspects = notifiedSuspects.filter { ids.contains($0) }
+        if let data = try? JSONEncoder().encode(notifiedSuspects) {
+            UserDefaults.standard.set(data, forKey: Self.notifiedSuspectsKey)
         }
     }
 
-    /// 임계값은 시간 조건을 포함하므로 **실패가 없어도 시간이 지나면 켜진다** —
-    /// 팝오버가 닫혀 있어도 tick이 주기적으로 재계산해 배지가 제때 뜨게 한다.
-    private func recomputeAuthSuspect(now: Date = Date()) {
-        loadAuthFailuresIfNeeded()
-        let ids = Set(store.file.accounts.map(\.id))
-        let next = Set(authFailures
-            .filter { ids.contains($0.key) && AuthSuspicion.isSuspect($0.value, now: now) }
-            .map(\.key))
-        if next != authSuspect { authSuspect = next }
+    /// 활성 계정의 저장 스냅샷 access 만료 시각 캐시 — 한 계정만 담는다(활성). 값싼 절반이
+    /// 매 틱 호출해도 파일을 다시 읽지 않도록, 캐시가 비었거나 다른 계정 키일 때만 계산·캐싱.
+    /// 5분 fresh sync마다 invalidate돼 다음 조회가 갱신된 스냅샷으로 재계산된다.
+    private var expiryCache: (id: UUID, expiry: Date?)?
+
+    private func cachedStoredExpiry(for id: UUID) -> Date? {
+        if let c = expiryCache, c.id == id { return c.expiry }
+        let exp = (try? store.secret(for: id)).flatMap { UsageFetcher.expiresAt(from: $0.keychainBlob) }
+        expiryCache = (id, exp)
+        return exp
+    }
+
+    private func invalidateExpiryCache() { expiryCache = nil }
+
+    /// 배지 값싼 절반 — **IO 0**(Keychain·네트워크 없음, 만료 캐시 + 워처 인메모리 활동만).
+    /// 로그인 플로우 가드 **아래**에서 매 틱 돈다. 활성 Claude가 없으면 배지를 비운다.
+    /// 조건이 안 성립하면 배지·알림 기록에서 빼고(재발 시 다시 알림), 이미 플래그면
+    /// 라이브 재검증 없이 유지한다(승격은 5분 블록의 라이브 절반이 fresh sync 뒤에만).
+    private func recomputeBadgeCheap(now: Date) {
+        loadNotifiedSuspectsIfNeeded()
+        guard let active = store.file.active(of: .claude) else {
+            if !authSuspect.isEmpty { authSuspect = [] }
+            return
+        }
+        // 배지는 활성 계정 전용 신호 — 활성이 바뀌면 옛 계정의 잔여 배지를 정리한다.
+        let stale = authSuspect.subtracting([active.id])
+        if !stale.isEmpty { authSuspect.subtract(stale) }
+
+        let holds = AuthSuspicion.cheapConditionsHold(
+            lastActivityAt: watcher.lastActivity,
+            storedExpiresAt: cachedStoredExpiry(for: active.id), now: now)
+        guard holds else {
+            if authSuspect.contains(active.id) { authSuspect.remove(active.id) }
+            if notifiedSuspects.contains(active.id) {
+                notifiedSuspects.remove(active.id); saveNotifiedSuspects()
+            }
+            return
+        }
+        // 조건 성립 — 이미 플래그면 여기서 끝(라이브 재검증은 5분 블록에서만).
+        // 아직 미플래그면 아무것도 안 하고 종료(승격은 라이브 절반이 fresh sync 뒤에).
+    }
+
+    /// 배지 라이브 절반 — 이번 사이클에 **fresh sync가 성사된 뒤에만** 호출한다.
+    /// 값싼 조건을 갱신된 캐시로 재확인하고, 여전히 성립하면 저장 secret을 직접 읽어(파일
+    /// 읽기 — subprocess 아님) confirmed로 최종 판정한다. 참이면 배지에 넣고, 알림은
+    /// notified 집합에 없을 때만 1회 보내고 집합에 추가·저장한다.
+    private func recomputeBadgeLive(now: Date) {
+        loadNotifiedSuspectsIfNeeded()
+        guard let active = store.file.active(of: .claude) else { return }
+        guard AuthSuspicion.cheapConditionsHold(
+            lastActivityAt: watcher.lastActivity,
+            storedExpiresAt: cachedStoredExpiry(for: active.id), now: now) else { return }
+        // confirmed = 신선도 단언: 방금 동기화된 그 스냅샷을 그대로 읽는다(독립 라이브 읽기 아님).
+        let liveExpiry = (try? store.secret(for: active.id))
+            .flatMap { UsageFetcher.expiresAt(from: $0.keychainBlob) }
+        guard AuthSuspicion.confirmed(liveExpiresAt: liveExpiry, now: now) else { return }
+        authSuspect.insert(active.id)
+        if !notifiedSuspects.contains(active.id) {
+            notifiedSuspects.insert(active.id)
+            saveNotifiedSuspects()
+            notify(title: loc("인증 확인 필요"),
+                   body: loc("%@ 계정의 세션이 도는데 로그인이 만료된 채예요. 카드의 '다시 로그인'을 눌러주세요.", active.nickname))
+        }
     }
 
     let env: MobiusEnvironment
@@ -113,15 +174,41 @@ final class AppState: ObservableObject {
     private var lastUsageRefreshAttemptAt: [UUID: Date] = [:]
     static let usageRefreshRetryCooldown: TimeInterval = 600
 
-    /// usage 조회의 **연속 401/403** 기록(계정별). 네트워크 오류나 429/5xx는 절대 세지
-    /// 않는다 — 오프라인에서 팝오버를 몇 번 열었다고 멀쩡한 계정에 재로그인 버튼이 뜨면
-    /// 안 된다. 조회 200 성공 시 즉시 삭제.
-    private var authFailures: [UUID: AuthFailureRecord] = [:]
-    private var authFailuresLoaded = false
-    private static let authFailuresKey = "authFailuresV1"
-    /// 임계값에 도달한 계정 — 카드 배지·'다시 로그인' 버튼 노출에만 쓴다(표시 전용).
-    /// ★ 절대 needsReauth로 승격하지 말 것 (AuthSuspicion 주석 참조 — 이슈 #4 재발).
+    /// 배지 의심 계정 — 카드 배지·'다시 로그인' 버튼 노출에만 쓴다(표시 전용).
+    /// 무상태 판정(recomputeBadgeCheap/Live)이 채운다. ★ 절대 needsReauth로 승격하지 말 것
+    /// (AuthSuspicion 주석 참조 — 이슈 #4 재발).
     @Published private(set) var authSuspect: Set<UUID> = []
+
+    // MARK: 임계값 선제 전환 (advisory) 상태 — 전부 인메모리(스냅샷 아님)
+
+    /// 후보 "없음" 마지막 판정 시각 — 엔진의 백오프 창(shouldProbeCandidates)에 넘긴다.
+    /// distantPast로 시작. ★ advisory가 해제돼도 distantPast로 리셋하지 않는다 — 경계에서
+    /// 켜졌다 꺼졌다 하는 오실레이션이 백오프를 매번 무장해제해 폴백을 계속 두드리는 것을 막는다.
+    private var lastNoCandidateAt = Date.distantPast
+    /// 계정별 "마지막으로 경고를 알린 창의 resetsAt". 같은 창에 중복 알림/전환을 막는
+    /// 인트라세션 가드 — 창(resetsAt)이 바뀌면 다시 알린다. **영속하지 않는다.**
+    private var lastAdvisedResetsAt: [UUID: Date] = [:]
+    /// 활성 스냅샷 동기화가 연속으로 실패한 횟수 — 3회 도달 시 푸터 배너 힌트를 띄운다.
+    /// ★ **활성 Claude 프로필이 있을 때만** 증가한다(Codex-only 풀·adopt 대기 오탐 방지).
+    /// true 결과가 나오면 0으로 리셋. 영속하지 않는다.
+    private var consecutiveSyncFailures = 0
+    /// 활성 계정 사용량 **조회**가 연속 실패한 횟수(네트워크/타임아웃/5xx 등) — 위 동기화
+    /// 실패(로컬)와 별개다. `UsagePollBreaker.failureThreshold` 도달 시 배경 폴링을 멈춘다
+    /// (서킷 브레이커). 성공 시 0으로 리셋, 팝오버를 다시 열면(refreshUsageIfStale) 재개.
+    /// 인메모리 — 앱 재시작도 재개 신호(사용자 결정 2026-07-21).
+    private var consecutiveUsagePollFailures = 0
+
+    /// Labs 임계값 선제 전환 기능 토글(기본 꺼짐). 설정 UI(다음 웨이브)가 같은 키를 쓴다.
+    private var advisorySwitchEnabled: Bool {
+        UserDefaults.standard.bool(forKey: "advisorySwitchEnabled")
+    }
+    /// 임계값(%) — 기본 90. 설정 UI 범위 50~95(step 5). Int/Double 저장 모두 관대하게 읽는다.
+    private var advisoryThreshold: Double {
+        let raw = UserDefaults.standard.object(forKey: "advisoryThresholdPercent")
+        if let d = raw as? Double { return d }
+        if let i = raw as? Int { return Double(i) }
+        return 90
+    }
 
     init() {
         let env = MobiusEnvironment.live()
@@ -161,6 +248,12 @@ final class AppState: ObservableObject {
         UNUserNotificationCenter.current()
             .requestAuthorization(options: [.alert, .sound]) { _, _ in }
 
+        // 옛 연속-401 누적 배지 저장키를 1회 제거한다 — 무상태 판정으로 대체됐고, 남겨두면
+        // 구버전 바이너리가 이 키를 읽어 유령 배지를 띄울 수 있다(의심 조건용 대체키는 없다).
+        UserDefaults.standard.removeObject(forKey: "authFailuresV1")
+        // 알림 중복 방지 집합은 한 번만 로드한다.
+        loadNotifiedSuspectsIfNeeded()
+
         // CLI 등 외부 변경 통지 수신
         observer = DistributedNotificationCenter.default().addObserver(
             forName: MobiusNotification.accountsChanged, object: nil, queue: .main
@@ -189,8 +282,10 @@ final class AppState: ObservableObject {
 
     /// 팝오버가 열릴 때 호출 — 캐시가 만료된 계정만 사용량 조회 (상시 폴링 없음)
     func refreshUsageIfStale() {
+        // 임계값 폴 서킷 브레이커 재개 지점 — 사용자가 앱을 다시 열었으니(네트워크가
+        // 돌아왔을 가능성) 연속 실패 카운터를 풀어 배경 폴링을 재개시킨다(사용자 결정).
+        consecutiveUsagePollFailures = 0
         loadUsageCacheIfNeeded()
-        loadAuthFailuresIfNeeded()
         guard UserDefaults.standard.object(forKey: "showUsageGauges") == nil
                 || UserDefaults.standard.bool(forKey: "showUsageGauges") else { return }
         guard usageTask == nil else { return }
@@ -260,7 +355,6 @@ final class AppState: ObservableObject {
                     guard let snap = try await UsageFetcher.fetch(keychainBlob: fetchBlob)
                     else { continue }
                     usage[profile.id] = snap
-                    authFailures[profile.id] = nil   // 살아있음 확인 → 연속 401 누적 리셋
                     // 조회 성공 = 토큰 살아있음 → 잘못 남은 재로그인 마킹 자가 해제
                     if profile.needsReauth {
                         try? store.setNeedsReauth(profile.id, false)
@@ -295,17 +389,9 @@ final class AppState: ObservableObject {
                         notify(title: loc("재로그인 필요"),
                                body: loc("%@ 계정의 인증이 만료됐어요. 카드의 '다시 로그인'을 눌러주세요.", profile.nickname))
                     }
-                    // 위 규칙이 못 잡는 죽음(활성 계정의 진짜 폐기 — AuthSuspicion 주석 참조)을
-                    // 위해 401을 누적한다. 임계값(연속 3회 + 첫 실패 30분 경과)에 닿으면
-                    // 카드에 배지·'다시 로그인'을 띄우고 알림을 **계정당 1회만** 보낸다.
-                    var rec = AuthSuspicion.recordFailure(authFailures[profile.id], now: now)
-                    if !marked, !profile.needsReauth, !rec.notified,
-                       AuthSuspicion.isSuspect(rec, now: now) {
-                        rec.notified = true
-                        notify(title: loc("인증 확인 필요"),
-                               body: loc("%@ 계정의 사용량 조회가 계속 거부되고 있어요. 로그인이 만료됐을 수 있으니 카드의 '다시 로그인'을 눌러주세요.", profile.nickname))
-                    }
-                    authFailures[profile.id] = rec
+                    // 위 규칙이 못 잡는 죽음(활성 계정의 진짜 폐기)은 이제 무상태 배지
+                    // (AuthSuspicion.cheapConditionsHold/confirmed — recomputeBadgeCheap/Live)가
+                    // 세션 활동 × 토큰 만료 상관으로 감지한다. 여기서 401을 누적하지 않는다.
                 } catch { continue }   // 네트워크 오류 — 토큰 문제가 아니므로 누적하지 않는다
             }
             if reauthChanged {
@@ -313,8 +399,6 @@ final class AppState: ObservableObject {
                 reload()
             }
             saveUsageCache()
-            saveAuthFailures()
-            recomputeAuthSuspect()
         }
     }
 
@@ -576,14 +660,18 @@ final class AppState: ObservableObject {
         if let at = lastErrorAt, Date().timeIntervalSince(at) >= Self.lastErrorTTL {
             lastError = nil
         }
-        // 인증 의심 배지는 시간 조건을 포함하므로 팝오버 없이도 켜져야 한다(네트워크 0).
-        recomputeAuthSuspect()
+        let now = Date()
+        // 임계값 기능이 꺼져 있으면 남아있는 advisory를 매 틱 정리한다 — **가드 위**에서 도는
+        // 값싼 로컬 정리라 라이브 자격증명을 안 건드린다(로그인 플로우 감지와 경합 없음).
+        // 토글 off = 잔재 없음을 보장해, off인데 옛 advisory가 primary 복귀를 막는 일이 없게.
+        if !advisorySwitchEnabled { clearAdvisoriesIfFeatureOff() }
         // 로그인 창이 열려 있는 동안은 reconcile/자동 전환이 LoginFlow의
         // 자격증명 변경 감지와 경합하지 않도록 전체를 건너뛴다.
         // Desktop 가이드 캡처 중에도 동일 — 자동 전환이 Desktop을 재실행하면
         // 사용자가 로그인 중인 창을 죽이고 감시 신호를 오염시킨다.
         guard loginFlow == nil, desktopCapture == nil else { return }
-        let now = Date()
+        // 배지 값싼 절반 — 가드 바로 아래(IO 0). 라이브 재검증은 5분 블록에서만.
+        recomputeBadgeCheap(now: now)
         // reconcile/adopt는 15초마다만 — 3초 틱에 매번 돌리면 Keychain 접근이 잦아진다.
         // reconcile은 항상 라이브(실제 자격증명)를 진실로 삼아 active를 맞춘다 — active 마커가
         // 라이브와 어긋나면 UI가 /status와 달라지는 더 나쁜 버그가 된다(유예는 넣지 않는다).
@@ -605,9 +693,32 @@ final class AppState: ObservableObject {
         }
         // 활성 계정 스냅샷을 5분마다 라이브(갱신된 토큰)와 동기화 — 오래 쓰다 크래시해도
         // 스냅샷이 낡지 않게. reconcile은 활성 불변 시 되저장을 건너뛰므로 이 보강이 그 틈을 메운다.
+        // 이 fresh 스냅샷을 배지 라이브 절반과 임계값 폴이 공유한다(5분 창당 라이브 자격증명
+        // subprocess 1회로 묶는 통합 — 실패 기록 3 계열의 승인창 비용 절감).
         if now.timeIntervalSince(lastActiveSnapshotSyncAt) >= Self.activeSnapshotSyncInterval {
-            lastActiveSnapshotSyncAt = now
-            await switcher.refreshActiveSnapshotIfStable()
+            lastActiveSnapshotSyncAt = now   // await 전에 설정 — 이 창 안 재진입 방지
+            if await switcher.refreshActiveSnapshotIfStable() {
+                consecutiveSyncFailures = 0     // 진짜 fresh write — 실패 카운터 리셋
+                invalidateExpiryCache()         // 스냅샷 갱신 → 만료 캐시 재계산 유도
+                recomputeBadgeLive(now: now)    // fresh 스냅샷으로 confirmed 최종 판정
+                // 서킷 브레이커: 사용량 조회가 3연속 실패하면 배경 폴링을 멈춘다(네트워크
+                // 이상 방어 — 이상 중엔 미리 전환 자체가 무의미). 재개는 팝오버 열기/재시작.
+                if advisorySwitchEnabled,
+                   !UsagePollBreaker.isTripped(consecutiveFailures: consecutiveUsagePollFailures) {
+                    await pollThreshold(now: now)
+                }
+            } else {
+                // false = 이른 가드 실패(라이브 이메일이 등록 활성과 불일치) 또는 저장 실패.
+                // ★ 활성 Claude 프로필이 실제로 있을 때만 실패로 센다 — Codex-only 풀이나
+                //   Claude adopt 대기 상태는 첫 가드가 상시/일시적으로 false라, 이 게이트가
+                //   없으면 멀쩡한 사용자에게 매 세션 유령 배너가 뜬다(finding LOW-breadcrumb-scope).
+                if store.file.active(of: .claude) != nil {
+                    consecutiveSyncFailures += 1
+                    if consecutiveSyncFailures >= 3 {
+                        lastError = loc("활성 계정 동기화가 계속 실패하고 있어요 — 자동 전환·배지가 잠시 지연될 수 있어요.")
+                    }
+                }
+            }
         }
         // 만료 임박 폴백 자동 refresh (저빈도 스윕) — 안 쓰던 폴백이 조용히 죽는 것 방지.
         if now.timeIntervalSince(lastProactiveRefreshSweepAt) >= Self.proactiveRefreshSweepInterval {
@@ -730,21 +841,156 @@ final class AppState: ObservableObject {
         }
     }
 
+    // MARK: 임계값 선제 전환 (advisory)
+
+    /// 임계값 기능이 꺼져 있을 때 남은 advisory를 정리한다 — 매 틱(가드 위)에서 값싸게 돈다.
+    /// setAdvisory의 동등성 스킵 덕에 첫 정리 이후 반복 틱은 인메모리 스캔 비용만 든다(재저장 없음).
+    private func clearAdvisoriesIfFeatureOff() {
+        for p in store.file.accounts where p.provider == .claude && p.advisory != nil {
+            try? store.setAdvisory(p.id, nil)
+        }
+    }
+
+    /// 임계값 폴 — **5분 fresh sync 성사 뒤에만** 호출된다(활성 secret이 방금 갱신됨).
+    /// 활성 Claude를 저장 secret으로 조회(라이브 2차 읽기 없음)해 사용률을 얻고, 히스테리시스로
+    /// advisory를 set/clear한 뒤, advisory가 유효하면 후보 탐색→엔진 판정→결정 적용을 한다.
+    private func pollThreshold(now: Date) async {
+        // 재인증 필요/저장 secret 없으면 스킵(secret은 5분 블록이 방금 동기화했다).
+        guard let active = store.file.active(of: .claude), !active.needsReauth,
+              let blob = (try? store.secret(for: active.id))?.keychainBlob else { return }
+        // 저장 secret으로 조회 — 방금 fresh sync됐으므로 라이브를 한 번 더 읽지 않는다.
+        // 실패(네트워크/타임아웃/5xx 등)는 서킷 브레이커 카운터를 올린다. 3연속이면 위
+        // 5분 블록이 다음부터 폴을 건너뛴다. 성공하면 0으로 리셋.
+        guard let snap = try? await UsageFetcher.fetch(keychainBlob: blob) else {
+            consecutiveUsagePollFailures += 1
+            return
+        }
+        consecutiveUsagePollFailures = 0
+        usage[active.id] = snap
+        // await 뒤 활성이 바뀌었을 수 있다 — 재확인.
+        guard let current = store.file.active(of: .claude), current.id == active.id else { return }
+
+        let threshold = advisoryThreshold
+        let util = snap.fiveHourPercent ?? 0
+
+        // 히스테리시스 set/clear. set: 임계값 이상 + 리셋 시각 존재 → detectedAt 보존해 세운다.
+        // clear: 밴드 아래(임계값-5 이하) + 기존 advisory 존재 → 해제하되 백오프·last-advised
+        //        맵은 **건드리지 않는다**(새 창은 resetsAt이 달라 자연히 재알림된다).
+        // 그 사이(밴드 내부)면 그대로 둔다.
+        if AdvisoryRecord.shouldSet(utilization: util, threshold: threshold),
+           let resetsAt = snap.fiveHourResetsAt {
+            let detectedAt = current.advisory?.detectedAt ?? now  // 이미 있었으면 첫 시각 보존
+            try? store.setAdvisory(active.id,
+                AdvisoryRecord(utilization: util, resetsAt: resetsAt, detectedAt: detectedAt))
+        } else if AdvisoryRecord.shouldClear(utilization: util, threshold: threshold),
+                  current.advisory != nil {
+            try? store.setAdvisory(active.id, nil)
+        }
+        // else(밴드 내부 or advisory 없음): advisory 필드는 그대로 둔다.
+
+        // advisory가 여전히 유효한 경우에만 후보 탐색 + 엔진 판정 + 알림/전환.
+        guard let advised = store.file.active(of: .claude), advised.id == active.id,
+              let advisory = advised.advisory else { return }
+
+        let engine = engines[.claude]!
+        var verifiedCandidate: UUID?
+        // 후보 탐색은 "전환 가능(switch-eligible)"할 때만 — 풀 자동 전환이 켜져 있고(스펙 AC3:
+        // 폴백은 switch-eligible probe에서만 읽는다) 백오프 창을 지났을 때. 자동 전환이 꺼져
+        // 있으면 후보는 알림 경로에서 쓰이지 않으므로 탐색(네트워크)도 생략한다.
+        if store.file.isAutoSwitchEnabled(.claude),
+           engine.shouldProbeCandidates(lastNoCandidateAt: lastNoCandidateAt, now: now) {
+            verifiedCandidate = await probeCandidate(now: now)
+            // 후보 있으면 백오프 리셋(distantPast=즉시 재탐색 허용), 없으면 now(백오프 시작).
+            // ★ 여기서만 리셋한다 — advisory clear에서는 절대 리셋하지 않는다(오실레이션 방어).
+            lastNoCandidateAt = verifiedCandidate != nil ? .distantPast : now
+            // 후보 탐색(네트워크) 중 활성이 바뀌었을 수 있다 — 재확인.
+            guard let still = store.file.active(of: .claude), still.id == active.id else { return }
+        }
+
+        // ★★★ 로드-베어링 순서 (finding MEDIUM-notify-ordering) — 절대 재배열 금지.
+        // "맵을 먼저 쓰고 플래그를 계산"하면 비교가 항상 같아져 alreadyAdvised가 영원히 true가
+        // 되고, 토글-off 알림(notifyAdvisoryOnly)이 영구히 삼켜진다(엔진 테스트는 플래그를
+        // 파라미터로 주입받아 초록으로 남는다 — 캡처-비교-호출-쓰기 순서로만 잡힌다).
+        //   1) 직전 last-advised resetsAt을 **맵 쓰기 전에** 지역 변수로 포착한다.
+        let priorAdvised = lastAdvisedResetsAt[active.id]
+        //   2) 포착한 지역 값과 이번 advisory의 resetsAt을 비교해 alreadyAdvised를 계산한다.
+        let alreadyAdvised = priorAdvised == advisory.resetsAt
+        //   3) 엔진 판정을 호출하고 결정을 적용한다.
+        let decision = engine.checkAdvisory(file: store.file, activeID: active.id,
+                                            verifiedCandidate: verifiedCandidate,
+                                            alreadyAdvised: alreadyAdvised, now: now)
+        await apply(decision, provider: .claude, now: now)
+        //   4) **그런 다음에야** 이번 폴의 resetsAt을 맵에 쓴다(토글 상태 무관).
+        lastAdvisedResetsAt[active.id] = advisory.resetsAt
+    }
+
+    /// advisory가 걸린 활성 계정의 폴백 후보를 우선순위대로 검증한다. 임계값 미만인 첫 후보의
+    /// id를 반환(없으면 nil). ★ **네트워크 refresh는 `.escalate`(만료+쿨다운경과)에서만** —
+    /// AppState:225-232의 검증된 가드를 그대로 미러링한다(멀쩡한 폴백 토큰을 회전시켜 벽돌
+    /// 만들지 않도록). 이 메서드는 배지 집합·notified 집합을 절대 건드리지 않고, checker가
+    /// 스스로 하는 것 이상으로 needsReauth를 마킹하지 않는다(추가 알림도 없음 — stale sweep 전담).
+    private func probeCandidate(now: Date) async -> UUID? {
+        let threshold = advisoryThreshold
+        let active = store.file.activeByProvider[.claude]
+        for p in store.file.accounts where p.provider == .claude
+            && p.id != active && !p.isLimited(now: now) && !p.needsReauth {
+            guard let secret = try? store.secret(for: p.id) else { continue }
+            var fetchBlob = secret.keychainBlob
+            switch AutoSwitchEngine.candidateProbeAction(
+                    expiresAt: UsageFetcher.expiresAt(from: fetchBlob),
+                    now: now,
+                    lastRefreshAttemptAt: lastUsageRefreshAttemptAt[p.id],
+                    cooldown: Self.usageRefreshRetryCooldown) {
+            case .skipCooldown:
+                continue   // 만료 + 쿨다운 중 — 판정 없이 스킵(죽었다고 단정 금지)
+            case .useStoredToken:
+                break      // 저장 토큰 유효(또는 만료 정보 없음) — 네트워크 없이 아래서 조회
+            case .escalate:
+                // ★ 만료 + 쿨다운 경과일 때만 네트워크 refresh로 승격한다.
+                lastUsageRefreshAttemptAt[p.id] = now
+                switch await fallbackChecker.check(p.id, activeAccountID: active,
+                                                   now: now, allowNetwork: true) {
+                case .refreshedAlive:
+                    lastUsageRefreshAttemptAt[p.id] = nil   // 성공 — 쿨다운 해제
+                    guard let fresh = (try? store.secret(for: p.id))?.keychainBlob else { continue }
+                    fetchBlob = fresh   // 회전된 신선한 토큰으로 조회
+                default:
+                    continue   // dead/storeFailed/locallyDead/noRefreshToken/transient 등 —
+                               // checker가 이미 마킹, 추가 알림 없이 스킵(stale sweep 전담)
+                }
+            }
+            guard let snap = try? await UsageFetcher.fetch(keychainBlob: fetchBlob) else { continue }
+            usage[p.id] = snap
+            if (snap.fiveHourPercent ?? 0) < threshold { return p.id }   // 임계값 미만 = 검증된 후보
+        }
+        return nil
+    }
+
     private func apply(_ decision: Decision, provider: Provider, now: Date) async {
         switch decision {
         case .none: break
         case .allExhausted:
             notify(title: loc("%@ 모든 계정 한도 소진", provider.displayName),
                    body: loc("전환 가능한 계정이 없습니다. 리셋을 기다려주세요."))
+        case let .notifyAdvisoryOnly(id):
+            // 임계값 선제 경고 알림 — **소진이 아니다**(문구가 섞이면 거짓말). 자동 전환이
+            // 꺼진 풀에서만 온다. 계정+창(resetsAt) 전이당 1회 — 엔진이 alreadyAdvised로
+            // 걸러 이 케이스를 딱 한 번만 돌려주므로(pollThreshold의 last-advised 맵) 여기선
+            // 무조건 알린다.
+            let name = store.file.accounts.first { $0.id == id }?.nickname ?? "?"
+            notify(title: loc("⚠️ %@ 계정 한도가 가까워요", name),
+                   body: loc("%@ 계정이 설정한 임계값에 도달했어요. 자동 전환이 꺼져 있으니 필요하면 직접 전환하세요.", name))
         case let .notifyExhaustedOnly(id):
             let name = store.file.accounts.first { $0.id == id }?.nickname ?? "?"
             notify(title: loc("한도 소진 — 자동 전환이 꺼져 있습니다"),
                    body: loc("%@ 계정이 한도에 도달했습니다. 수동으로 전환하세요.", name))
         case let .switchTo(id, reason):
-            // 전환 직전 검증(Claude 전용): 자동 폴백(activeExhausted)으로 넘어가기 전에 대상
-            // 계정을 실제 OAuth refresh로 확인한다. 죽었으면 취소(마킹됨) → 다음 틱에 엔진이
-            // 다음 폴백을 고른다. (Codex는 OAuth refresh 검증 경로가 없어 스킵한다.)
-            if reason == .activeExhausted, provider == .claude {
+            // 전환 직전 검증(Claude 전용): 자동 폴백(activeExhausted)이나 임계값 선제
+            // 전환(thresholdAdvisory)으로 넘어가기 전에 대상 계정을 실제 OAuth refresh로
+            // 확인한다. 죽었으면 취소(마킹됨) → 다음 틱에 엔진이 다음 폴백을 고른다.
+            // (Codex는 OAuth refresh 검증 경로가 없어 스킵한다.)
+            let autoFromPrimary = reason == .activeExhausted || reason == .thresholdAdvisory
+            if autoFromPrimary, provider == .claude {
                 guard await preflightFallback(id, now: now) else { file = store.file; return }
             }
             let fromID = store.file.activeByProvider[provider]
@@ -752,16 +998,22 @@ final class AppState: ObservableObject {
                 try switcher.switchTo(id)
                 engines[provider]?.noteSwitched(now: now)
                 // 자동 전환의 결과인지 기록 — onTick의 primary 복귀는 이 플래그가
-                // true일 때만 일어난다 (수동 전환 자동 회귀 방지)
-                try? store.setAutoSwitchedFromPrimary(reason == .activeExhausted,
-                                                      provider: provider)
+                // true일 때만 일어난다 (수동 전환 자동 회귀 방지). 임계값 선제 전환도
+                // 자동 전환이므로 소진 전환과 동일하게 플래그를 세운다.
+                try? store.setAutoSwitchedFromPrimary(autoFromPrimary, provider: provider)
                 MobiusNotification.postAccountsChanged()
                 let name = store.file.accounts.first { $0.id == id }?.nickname ?? "?"
                 let fromName = store.file.accounts.first { $0.id == fromID }?.nickname
-                if reason == .primaryRecovered {
+                switch reason {
+                case .primaryRecovered:
                     notify(title: loc("✅ %@ 계정으로 복귀했어요", name),
                            body: loc("한도가 초기화돼 주 계정으로 돌아왔어요."))
-                } else {
+                case .thresholdAdvisory:
+                    // ★ 소진 표현 금지 — 아직 쓸 수 있는데 임계값에 가까워 미리 옮긴 것이다.
+                    notify(title: loc("🔄 %@ 계정으로 미리 전환했어요", name),
+                           body: loc("%@ 계정이 한도에 가까워져 여유 있는 %@(으)로 미리 전환했어요. 새로 시작하는 %@ 세션부터 적용돼요.",
+                                     fromName ?? "?", name, provider.rawValue))
+                case .activeExhausted:
                     notify(title: loc("🔄 %@ 계정으로 전환했어요", name),
                            body: loc("%@ 한도 소진 → %@. 새로 시작하는 %@ 세션부터 적용돼요.",
                                      fromName ?? "?", name, provider.rawValue))

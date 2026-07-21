@@ -21,8 +21,15 @@ struct AccountCardView: View {
     /// usage 조회가 연속 401로 임계값을 넘긴 계정 — **의심**이지 확정이 아니다(AuthSuspicion).
     /// needsReauth(확정, 빨강)와 다른 문구·색으로 구분해 띄운다.
     var authSuspect: Bool = false
+    /// 임계값 선제 경고(advisory) — **소진이 아니라 "곧 참"** 신호다. Claude 카드에서만,
+    /// hasActiveAdvisory가 참일 때 리스트가 넘긴다. 소진(빨강)·재인증(주황)보다 낮은 심각도.
+    var advisory: Bool = false
 
     private let accent = Color(red: 0.35, green: 0.65, blue: 1.0)
+    /// advisory pill 색 — 소진(빨강)·재인증(주황)보다 **한 단계 낮은 심각도**를 표현한다.
+    /// 교통신호에서 노랑은 주황 아래(주의)이고, 이 기능의 알림도 ⚠️(노랑)로 쓴다. 카드
+    /// 어디에도 안 쓰인 색이라 시각적으로도 구분된다("not red and not orange" 요구 충족).
+    private let advisoryColor = Color.yellow
 
     /// 카드 1행이 List에서 차지하는 높이(행 인셋 6pt 포함)의 **초기 추정치** —
     /// AccountListView.poolCards가 첫 프레임에만 쓰고, 이후엔 행별 실측 높이(rowHeights)로
@@ -67,6 +74,15 @@ struct AccountCardView: View {
                                 .font(.system(size: 9, weight: .semibold))
                                 .foregroundStyle(accent)
                         }
+                    }
+                    // 임계값 선제 경고 pill — 소진 카운트다운(statusLine)과 별개다. 재인증
+                    // pill과 같은 행에 두되, 노랑으로 낮은 심각도를 표현한다.
+                    if advisory {
+                        Text(loc("한도 근접"))
+                            .font(.system(size: 9, weight: .medium))
+                            .padding(.horizontal, 5).padding(.vertical, 2)
+                            .background(advisoryColor.opacity(0.18), in: Capsule())
+                            .foregroundStyle(advisoryColor)
                     }
                 }
                 Text(profile.emailAddress)

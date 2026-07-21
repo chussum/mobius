@@ -76,4 +76,36 @@ final class SwitcherTests: XCTestCase {
         try await switcher.reconcile()
         XCTAssertEqual(store.file.activeAccountID, personal.id) // 그대로
     }
+
+    // MARK: refreshActiveSnapshotIfStable — 신선도 계약(반환값)
+    // 호출자는 true를 "저장 secret이 이번 사이클 기준 신선"으로 읽고 라이브 재읽기를 생략한다.
+    // 따라서 세 경로(가드 실패 / 성공 / 저장 throw)가 각각 정직하게 보고되는지 못 박는다.
+
+    func testRefreshActiveSnapshotReturnsFalseOnEmailMismatch() async throws {
+        // 라이브가 등록되지 않은 이메일 → 첫 가드에서 탈락 (쓰기 없음).
+        try io.writeLiveSnapshot(snap(email: "stranger@x.com", tok: "S"))
+        let wrote = await switcher.refreshActiveSnapshotIfStable()
+        XCTAssertFalse(wrote)
+    }
+
+    func testRefreshActiveSnapshotReturnsTrueOnSuccessfulWrite() async throws {
+        // claude가 라이브 토큰을 P1으로 갱신한 상태 — 활성 계정이라 스냅샷에 반영돼야 한다.
+        try io.writeLiveSnapshot(snap(email: "p@x.com", tok: "P1"))
+        let wrote = await switcher.refreshActiveSnapshotIfStable()
+        XCTAssertTrue(wrote)
+        XCTAssertEqual(try store.secret(for: personal.id)?.keychainBlob,
+                       Data(#"{"tok":"P1"}"#.utf8))
+    }
+
+    func testRefreshActiveSnapshotReturnsFalseWhenStoreWriteThrows() async throws {
+        // 모든 가드는 통과시키고 **저장만** 실패시킨다: secrets 디렉토리 자리에 일반 파일을
+        // 놓으면 writeSecretFile의 createDirectory가 throw한다. 구 `try?` 구현은 이 실패를
+        // 삼켜 true(신선)로 보고했을 경로 — 그게 이 테스트가 지키는 지점이다.
+        try io.writeLiveSnapshot(snap(email: "p@x.com", tok: "P1"))
+        try FileManager.default.removeItem(at: env.secretsDir)
+        try Data("not a directory".utf8).write(to: env.secretsDir)
+
+        let wrote = await switcher.refreshActiveSnapshotIfStable()
+        XCTAssertFalse(wrote)
+    }
 }

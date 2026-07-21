@@ -26,7 +26,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>NSHumanReadableCopyright</key><string>© 2026 Mobius Contributors. MIT License.</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
-  <key>CFBundleShortVersionString</key><string>0.3.2</string>
+  <key>CFBundleShortVersionString</key><string>0.4.0</string>
   <key>CFBundleVersion</key><string>1</string>
   <key>LSMinimumSystemVersion</key><string>14.0</string>
   <!-- LSUIElement 미사용: macOS 26 Tahoe에서 LSUIElement 앱의 MenuBarExtra 아이콘이

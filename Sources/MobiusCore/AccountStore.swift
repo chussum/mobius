@@ -219,12 +219,30 @@ public final class AccountStore: @unchecked Sendable {
         try save()
     }
 
+    /// 임계값 선제 경고(advisory) 마킹/해제. **변화 없으면 저장하지 않는다** —
+    /// setNeedsReauth와 같은 모양(락·조회·동등성 스킵·변경·저장)을 그대로 따른다.
+    /// ★ 동등성 스킵은 미세 최적화가 아니라 필수다: 이 setter는 5분 폴링마다 호출되므로
+    ///   무조건 쓰면 accounts.json이 앱이 켜져 있는 내내 다시 쓰인다.
+    public func setAdvisory(_ id: UUID, _ record: AdvisoryRecord?) throws {
+        lock.lock(); defer { lock.unlock() }
+        guard let idx = file.accounts.firstIndex(where: { $0.id == id }) else {
+            throw AccountStoreError.unknownAccount
+        }
+        guard file.accounts[idx].advisory != record else { return }
+        file.accounts[idx].advisory = record
+        try save()
+    }
+
     /// 지정 계정에만 사용자 핀을 세운다(같은 프로바이더 풀의 나머지는 해제). 수동 전환 시 호출 —
     /// 모델 전용 한도(Fable 등)로 이 계정을 자동으로 밀어내지 않게 한다.
     /// ★ 핀 해제는 반드시 같은 풀로 한정한다 — 전역 clear는 Codex 계정을 수동 전환할 때
     ///   사용자가 골라둔 Claude 계정의 핀까지 풀어 modelScoped 한도에서 의도치 않은 자동 전환을
     ///   유발한다(풀은 독립이므로 핀도 풀별 독립이어야 한다).
-    public func setUserPinned(_ id: UUID) throws {
+    /// ★ pinnedAt은 **매 호출 갱신한다 — 이미 핀된 계정을 다시 핀해도 마찬가지.** 핀 플래그만으로는
+    ///   "임계값 경고를 보고 나서 일부러 이 계정으로 돌아왔다"와 "몇 시간 전에 그냥 눌러뒀다"를
+    ///   구분할 수 없다. advisory 전환은 pinnedAt이 advisory.detectedAt보다 **나중일 때만** 거부되므로,
+    ///   갱신을 빠뜨리면 옛 핀이 새 경고까지 영구히 거부해 선제 전환이 죽는다.
+    public func setUserPinned(_ id: UUID, at now: Date = Date()) throws {
         lock.lock(); defer { lock.unlock() }
         guard let provider = file.accounts.first(where: { $0.id == id })?.provider else {
             throw AccountStoreError.unknownAccount
@@ -232,7 +250,12 @@ public final class AccountStore: @unchecked Sendable {
         var changed = false
         for i in file.accounts.indices where file.accounts[i].provider == provider {
             let want = file.accounts[i].id == id
+            // 대상은 항상 now로 스탬프(재핀도 갱신), 나머지는 플래그·타임스탬프를 함께 해제.
+            let wantPinnedAt: Date? = want ? now : nil
             if file.accounts[i].userPinned != want { file.accounts[i].userPinned = want; changed = true }
+            if file.accounts[i].pinnedAt != wantPinnedAt {
+                file.accounts[i].pinnedAt = wantPinnedAt; changed = true
+            }
         }
         if changed { try save() }
     }

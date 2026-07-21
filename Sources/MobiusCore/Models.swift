@@ -34,6 +34,42 @@ public struct RateLimitInfo: Codable, Equatable, Sendable {
     }
 }
 
+/// 임계값 선제 경고 기록 — **소진(rateLimit)이 아니다.** 계정 카드에만 노출되는 "soft" 신호로,
+/// 아직 쓸 수 있지만 곧 찰 것 같은 상태를 뜻한다. rateLimit에 플래그를 얹지 않고 **물리적으로
+/// 분리된 필드**로 둔 이유: isLimited/autoSwitchMayLeave/메뉴바/CLI가 전부 rateLimit만 읽으므로
+/// 이 구조에서는 경고가 소진으로 새어나갈 수 없다 (같은 레코드에 플래그를 얹으면 모든 소비자가
+/// 그 플래그를 각자 알아야 하는 버그 클래스가 된다).
+public struct AdvisoryRecord: Codable, Equatable, Sendable {
+    /// 경고를 유발한 사용률(백분율)
+    public var utilization: Double
+    /// 이 경고가 걸린 창의 리셋 시각 — 이 시각이 지나면 경고는 자동 무효(시간 게이트)
+    public var resetsAt: Date
+    /// 처음 경고가 올라온 시각. 수동 핀이 "경고를 보고 나서 일부러 돌아온 것"인지
+    /// 판정할 때 pinnedAt과 비교된다.
+    public var detectedAt: Date
+
+    public init(utilization: Double, resetsAt: Date, detectedAt: Date) {
+        self.utilization = utilization
+        self.resetsAt = resetsAt
+        self.detectedAt = detectedAt
+    }
+
+    /// 임계값 히스테리시스 폭(포인트) — 경계에서 사용률이 오르내릴 때 경고가 깜빡이며
+    /// 알림·후보 탐색 백오프를 매번 리셋하는 것을 막는다.
+    public static let hysteresis: Double = 5
+
+    /// 경고를 세울 조건 — 임계값 **이상**
+    public static func shouldSet(utilization: Double, threshold: Double) -> Bool {
+        utilization >= threshold
+    }
+
+    /// 경고를 내릴 조건 — 임계값 - 5 **이하**. 둘 사이(밴드 내부)에서는 shouldSet도
+    /// shouldClear도 false라 기존 상태가 그대로 유지된다.
+    public static func shouldClear(utilization: Double, threshold: Double) -> Bool {
+        utilization <= threshold - hysteresis
+    }
+}
+
 public struct AccountProfile: Codable, Equatable, Identifiable, Sendable {
     public var id: UUID
     public var provider: Provider
@@ -48,16 +84,25 @@ public struct AccountProfile: Codable, Equatable, Identifiable, Sendable {
     /// 자동 전환해 밀어내지 않는다 — "1회 자동 전환 후 내가 되돌리면 머문다"는 규칙.
     /// 계정 자체 한도(5시간/주간)가 차면 이 핀은 무시된다(진짜 사용 불가이므로).
     public var userPinned: Bool
+    /// userPinned를 세운 시각. "경고를 보고 나서 일부러 돌아왔는가"를 판정하려면 핀만으로는
+    /// 부족하다 — 몇 시간 전에 눌러둔 핀과 방금 누른 핀을 구분해야 advisory 전환의 거부권을
+    /// 올바른 방향으로 줄 수 있다 (advisory.detectedAt보다 나중인 핀만 거부권을 갖는다).
+    public var pinnedAt: Date?
+    /// 임계값 선제 경고 (소진 아님). **카드 UI와 엔진의 advisory 경로만** 읽는다 —
+    /// isLimited/autoSwitchMayLeave/메뉴바/CLI는 이 필드를 절대 보지 않는다.
+    public var advisory: AdvisoryRecord?
 
     public init(id: UUID, provider: Provider = .claude, nickname: String, emailAddress: String,
                 organizationName: String, tierDescription: String,
                 needsReauth: Bool = false, rateLimit: RateLimitInfo? = nil,
-                hasDesktopSnapshot: Bool = false, userPinned: Bool = false) {
+                hasDesktopSnapshot: Bool = false, userPinned: Bool = false,
+                pinnedAt: Date? = nil, advisory: AdvisoryRecord? = nil) {
         self.id = id; self.provider = provider
         self.nickname = nickname; self.emailAddress = emailAddress
         self.organizationName = organizationName; self.tierDescription = tierDescription
         self.needsReauth = needsReauth; self.rateLimit = rateLimit
         self.hasDesktopSnapshot = hasDesktopSnapshot; self.userPinned = userPinned
+        self.pinnedAt = pinnedAt; self.advisory = advisory
     }
 
     /// 하위호환 디코딩 — 새 키(provider, userPinned 등)가 없는 구버전 파일도 디코드되게.
@@ -74,12 +119,24 @@ public struct AccountProfile: Codable, Equatable, Identifiable, Sendable {
         rateLimit = try c.decodeIfPresent(RateLimitInfo.self, forKey: .rateLimit)
         hasDesktopSnapshot = try c.decodeIfPresent(Bool.self, forKey: .hasDesktopSnapshot) ?? false
         userPinned = try c.decodeIfPresent(Bool.self, forKey: .userPinned) ?? false
+        pinnedAt = try c.decodeIfPresent(Date.self, forKey: .pinnedAt)
+        advisory = try c.decodeIfPresent(AdvisoryRecord.self, forKey: .advisory)
     }
 
     /// 지금 한도에 걸려 있는가 (리셋 시각 전인가)
     public func isLimited(now: Date) -> Bool {
         guard let rl = rateLimit else { return false }
         return now < rl.resetsAt
+    }
+
+    /// 임계값 선제 경고가 지금 유효한가 (경고가 걸린 창의 리셋 전인가). isLimited와 같은
+    /// 시간 게이트 모양이지만 **의미가 다르다 — 소진이 아니라 "곧 찰 것 같다"이다.**
+    /// ★ 이 함수는 isLimited, autoSwitchMayLeave, 메뉴바 상태에서 **절대 읽지 말 것.**
+    /// 그 세 곳은 "이 계정을 지금 쓸 수 없다"는 정직한 신호라서, 경고가 섞이는 순간
+    /// 메뉴바·CLI·알림 문구가 거짓말을 하게 된다. 소비자는 카드 UI와 엔진 advisory 경로뿐.
+    public func hasActiveAdvisory(now: Date) -> Bool {
+        guard let ad = advisory else { return false }
+        return now < ad.resetsAt
     }
 
     /// 자동 전환이 이 계정을 밀어내도 되는가. 모델 전용 한도 + 사용자 핀이면 밀어내지 않는다.

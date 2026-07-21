@@ -201,3 +201,17 @@
 "커피 한 잔의 응원, 고마워요 ☕" = "A coffee's worth of support — thank you ☕";
 "휴대폰 카메라나 카카오페이 앱으로\nQR 코드를 스캔해 주세요." = "Scan the QR code with your phone camera\nor the KakaoPay app.";
 "스캔하면 카카오페이 송금 화면으로 이어져요." = "Scanning opens the KakaoPay transfer screen.";
+
+/* 임계값 선제 알림 (advisory) — 설정/카드/알림 */
+"한도 근접" = "Near limit";
+"한도 차기 전 미리 전환" = "Switch early, before the limit";
+"**꺼도 한도가 100% 차면 평소처럼 다음 계정으로 전환**돼요. 켜면 약 5분마다 사용량을 확인합니다." = "**Even with it off, the moment usage fills to 100% Mobius still moves to the next account as usual.** When on, usage is checked about every 5 minutes.";
+"⚠️ 상단 **'자동 전환'이 꺼져 있어** 지금은 카드에 '한도 근접'만 표시해요. 미리 전환하려면 상단 토글을 켜주세요." = "⚠️ **"Auto-switch" (above) is off**, so for now the card just shows "Near limit." To switch early, turn on the toggle above.";
+"전환 기준" = "Switch at";
+"5시간 사용량이 %d%%에 이르면 미리 전환해요." = "Switches early once 5-hour usage reaches %d%%.";
+"⚠️ %@ 계정 한도가 가까워요" = "⚠️ %@ is nearing its limit";
+"%@ 계정이 설정한 임계값에 도달했어요. 자동 전환이 꺼져 있으니 필요하면 직접 전환하세요." = "%@ reached your threshold. Auto-switch is off, so switch manually if you need to.";
+"🔄 %@ 계정으로 미리 전환했어요" = "🔄 Switched to %@ ahead of time";
+"%@ 계정이 한도에 가까워져 여유 있는 %@(으)로 미리 전환했어요. 새로 시작하는 %@ 세션부터 적용돼요." = "%@ was nearing its limit, so we switched ahead to %@, which has headroom. Applies to newly started %@ sessions.";
+"활성 계정 동기화가 계속 실패하고 있어요 — 자동 전환·배지가 잠시 지연될 수 있어요." = "Active-account sync keeps failing — auto-switch and badges may be briefly delayed.";
+"%@ 계정의 세션이 도는데 로그인이 만료된 채예요. 카드의 '다시 로그인'을 눌러주세요." = "%@ has an active session but its login has expired. Tap \"Sign in again\" on the card.";

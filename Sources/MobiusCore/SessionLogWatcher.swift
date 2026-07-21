@@ -39,6 +39,7 @@ public final class SessionLogWatcher<Event: Sendable>: @unchecked Sendable {
     private var offsets: [String: UInt64] = [:]   // 파일 경로 → 읽은 위치
     private var primed = false                    // 첫 스캔 여부 — parseFromStart의 프라이밍 판정
                                                   // + recentDirs 프루닝 게이트(첫 스캔은 전수 시딩)
+    private var lastActivityAt: Date?             // 스캔에서 본 후보 파일 mtime의 최댓값
     private let lock = NSLock()
     /// 이 시간 안에 수정된 파일만 본다
     public var recentWindow: TimeInterval = 600
@@ -103,6 +104,12 @@ public final class SessionLogWatcher<Event: Sendable>: @unchecked Sendable {
         for url in candidates {
             let mtime = (try? url.resourceValues(forKeys: [.contentModificationDateKey])
                 .contentModificationDate) ?? .distantPast
+            // ★ 최근 활동 시각 갱신은 **필터링보다 먼저** — 아래 recent/tracked guard는 파싱할
+            // 가치가 없는 파일을 걸러내지만, "세션이 방금 돌았다"는 신호는 걸러진 파일에도
+            // 똑같이 들어 있다(예: tailOnly에서 처음 본 파일은 파싱을 건너뛰지만 방금 쓰였다).
+            // mtime은 이 줄 바로 위에서 이미 읽은 값이라 **파일시스템 호출이 늘지 않는다**.
+            // resourceValues 실패분(.distantPast)은 비교에서 자연히 탈락해 nil을 오염시키지 않는다.
+            if mtime > (lastActivityAt ?? .distantPast) { lastActivityAt = mtime }
             let recent = mtime > now.addingTimeInterval(-recentWindow)
             let tracked = offsets[url.path] != nil
             switch policy {
@@ -162,6 +169,20 @@ public final class SessionLogWatcher<Event: Sendable>: @unchecked Sendable {
     public var trackedFiles: Set<String> {
         lock.lock(); defer { lock.unlock() }
         return Set(offsets.keys)
+    }
+
+    /// 이번 인스턴스가 스캔에서 관찰한 세션 파일 수정 시각의 최댓값 — "CLI 세션이 최근에
+    /// 돌았는가"의 근사. 첫 스캔 전에는 nil(관찰 자체가 없었다는 뜻 ≠ "오래 전 활동").
+    ///
+    /// ★ 인스턴스별 값이다. 앱은 Claude 워처와 Codex 워처를 따로 들고 있는데, 이 값을 읽는 쪽은
+    /// **Claude 워처뿐**이다 — 배지(인증 의심)도 임계값 선제 전환도 Claude 전용 기능이라
+    /// Codex 워처의 값은 아무도 읽지 않는다. 두 워처의 값을 합치거나 바꿔 읽지 말 것
+    /// (codex를 쓰는 동안 claude 세션이 도는 것처럼 보여 배지가 오탐한다).
+    ///
+    /// trackedFiles와 동일한 잠금 패턴 — scanBatches가 lock 안에서 갱신한다.
+    public var lastActivity: Date? {
+        lock.lock(); defer { lock.unlock() }
+        return lastActivityAt
     }
 
     /// [start, end) 구간에서 마지막 개행(0x0A)의 다음 오프셋을 찾는다.

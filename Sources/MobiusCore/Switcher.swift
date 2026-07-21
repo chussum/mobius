@@ -87,7 +87,15 @@ public final class Switcher: @unchecked Sendable {
     /// "떠날 때만 되저장" 방식의 틈을 메운다 — 한 계정을 오래 쓰다 크래시해도 스냅샷이
     /// 낡지 않게. 안정 읽기(값 2회 일치)로 토큰/이메일 불일치 레이스를 피한다(실패 기록 2·9).
     /// OAuth 갱신이 아니라 이미 갱신된 라이브 사본을 저장할 뿐이라 안전하다.
-    public func refreshActiveSnapshotIfStable() async {
+    ///
+    /// 반환: **이번 호출에서 실제로 새 스냅샷을 썼는지**. 호출자(AppState)는 이 값을 보고
+    /// "활성 계정의 저장 secret이 이번 사이클 기준으로 신선하다"를 알며, 그 덕에 라이브
+    /// Keychain을 한 번 더 읽지 않는다(승인창·subprocess 비용 절감 — 실패 기록 3 계열).
+    /// 그래서 이 불리언은 **신선도 계약** 그 자체다: 쓰기가 실패했는데 true를 돌려주면
+    /// 호출자가 낡은 스냅샷을 신선하다고 믿고 판단해 조용히 틀린다. 그러므로 저장 실패는
+    /// `try?`로 삼키지 말고 do/catch로 잡아 반드시 false로 보고한다.
+    @discardableResult
+    public func refreshActiveSnapshotIfStable() async -> Bool {
         // 활성 Claude 계정만 — 라이브(~/.claude)가 그 계정일 때 최신 토큰을 스냅샷에 반영.
         // (Codex auth.json은 실행 세션이 수시로 다시 쓰는 "바쁜 파일"이라 이 경로에서 제외.)
         let provider = Provider.claude
@@ -96,10 +104,15 @@ public final class Switcher: @unchecked Sendable {
               let profile = store.file.accounts.first(where: {
                   $0.provider == provider && $0.emailAddress == email
               }),
-              profile.id == store.file.activeByProvider[provider] else { return }
+              profile.id == store.file.activeByProvider[provider] else { return false }
         guard let (data, stableEmail) = await io.readStableLiveSecretData(),
-              stableEmail == email else { return }
-        try? store.setSecretData(data, for: profile.id)
+              stableEmail == email else { return false }
+        do {
+            try store.setSecretData(data, for: profile.id)
+            return true
+        } catch {
+            return false // 디스크 실패 등 — 신선하다고 보고하면 안 된다 (위 계약 참조)
+        }
     }
 
     public func switchTo(_ id: UUID) throws {

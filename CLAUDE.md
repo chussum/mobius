@@ -59,6 +59,10 @@ Sources/MobiusApp/        SwiftUI 메뉴바 앱 + AppState + Views/ + LoginFlow 
   `anthropic-beta: oauth-2025-04-20`. 응답: `five_hour.{utilization, resets_at}`,
   `seven_day.{...}` (utilization=백분율, resets_at=ISO8601 마이크로초).
 - 게이지는 **팝오버 열 때만** 조회(캐시 4분). 상시 폴링 없음 → 계정 리스크 최소화.
+  ★ **예외(옵트인, 2026-07-21)**: Labs '한도 임박 미리 알림'(advisorySwitchEnabled) 토글을 켜면
+  **활성 Claude 계정의 5시간 usage를 약 5분마다** 폴링한다(임계값 선제 알림용, 아래 QA 참조).
+  **기본 꺼짐 — 끄면 폴링 0**(설정 게이트가 첫 검사라 요청 바이트 동일). 폴백 계정은 상시 폴링
+  안 함(전환 후보 검증 때만, 그것도 저장 토큰 만료+쿨다운 경과 시에만 네트워크 refresh).
 
 ### ★ OAuth 토큰 refresh (폴백 로그인 생사 판정 — claude 2.1.207 바이너리 실측)
 - `POST https://platform.claude.com/v1/oauth/token`, `Content-Type: application/json`,
@@ -368,11 +372,18 @@ Sources/MobiusApp/        SwiftUI 메뉴바 앱 + AppState + Views/ + LoginFlow 
   refreshTokenExpiresAt가 없어 shouldMarkReauthAfterAuthError의 두 조건이 모두 false.
   원인 규명 — accounts.json mtime(7/17)으로 **그 이후 전환 없음**, Desktop 프로필 무변동·미실행,
   활성은 모든 refresh 경로에서 제외(check 첫 guard/proactive 스윕/usage stale) → Mobius의 토큰
-  회전 흔적 없음. → `AuthSuspicion`: **401/403만** 연속 누적(네트워크 오류·429/5xx는 제외 —
-  오프라인에서 팝오버 몇 번에 오탐 뜨면 안 됨), **연속 3회 AND 첫 실패 30분 경과**면 카드에
-  주황 '인증 확인 필요' 배지 + '다시 로그인' 버튼, 알림은 계정당 1회. 200 성공 시 기록 삭제,
-  UserDefaults(`authFailuresV1`)에 영속(재시작해도 누적 유지), 시간 조건 때문에 tick이 주기적
-  재계산(팝오버 안 열어도 배지가 뜬다). ★ **이 신호를 needsReauth로 승격 금지** —
+  회전 흔적 없음. → `AuthSuspicion` **재설계(2026-07-21, 연속-401 카운터 폐기)**: 배지는
+  이제 **상태를 세지 않고** 매 평가마다 순수 재계산한다 — **Claude 세션 로그에 10분 내 활동이
+  있고(SessionLogWatcher lastActivity) AND 라이브 access 토큰이 10분 넘게 만료**면 카드에 주황
+  '인증 확인 필요' 배지 + '다시 로그인'. "세션은 도는데 로그인이 죽었다"를 직접 포착하므로
+  (밤새/CLI 미실행이면 활동이 없어 안 뜬다), 팝오버 401을 세던 구 방식의 오탐(오프라인 몇 번)과
+  과소검출을 한 번에 없앤다. 판정은 **cheap-first**: 세션 활동+캐시 만료를 먼저 값싸게 보고,
+  통과할 때만 라이브값으로 confirmed 확인 — 라이브 검사는 **5분 창당 1회로 배지·임계값 폴이
+  공유**(아래 5분 라이브싱크 통합; confirmed도 방금 싱크된 같은 스냅샷을 읽는 신선도 단언일 뿐
+  독립 2차 읽기 아님). **영속은 알림 중복 방지용 id 셋(`authSuspectNotifiedV1`) 하나뿐** —
+  판정 자체는 무상태라 재시작 후 ghost 배지가 없고, 이 셋은 "이미 알린 계정"만 기억해 재실행마다
+  재알림하지 않게 쓴다(회복 시 id 제거 → 재발하면 다시 1회 알림). 구 카운터 키(`authFailuresV1`)는
+  시작 시 1회 삭제. ★ **이 신호를 needsReauth로 승격 금지** —
   AutoSwitchEngine이 needsReauth를 폴백 후보 제외(:39)·주계정 강등(:93)에 쓰므로 추측성
   신호를 넣으면 이슈 #4(멀쩡한 주계정 밀어내기)가 재발한다. 표시 전용이라 오탐이 나도 전환은
   안 건드린다. 같이 고침: **stale 게이지 표시**(`AccountCardView.usageStaleAfter` 15분 —
@@ -381,6 +392,46 @@ Sources/MobiusApp/        SwiftUI 메뉴바 앱 + AppState + Views/ + LoginFlow 
   "그동안 codex를 안 썼다"는 뜻이기도 하다) — 기준 시각만 밝히고 판단은 사용자에게 맡긴다.
   ★ 얼어붙은 게이지가 특히 위험했던 이유: **초기화 카운트다운은 resets_at으로 실시간
   계산돼** 낡은 스냅샷도 살아 있는 것처럼 보인다("초기화 6일 9시간 후").
+- **임계값 선제 알림/전환 (advisory) 구현됨(2026-07-21, Labs 옵트인, 기본 꺼짐)**: 활성 Claude
+  계정의 5시간 usage가 임계값(기본 90, 50~95 step 5)에 도달하면 **카드에만** 노랑 '한도 근접'
+  pill을 띄우고(소진 아님 — isLimited/메뉴바/CLI는 이 신호를 절대 안 본다), 여유 있는 폴백이
+  있으면 자동으로 미리 전환한다. 알림 문구는 소진 표현 금지("미리 전환했어요"). ★ **진실의
+  분리(Option B)**: advisory는 `AccountProfile`의 **별도 옵셔널 필드**(`AdvisoryRecord`)라
+  rate-limit 레코드와 물리적으로 분리 — 소비자(카드 UI + 엔진 advisory 경로)만 읽어 소진 신호에
+  절대 안 샌다. 새 전환 사유 `thresholdAdvisory`(자동 전환 플래그를 activeExhausted와 동일하게
+  세움). ★ **지속 스키마에 두 필드 추가**(`advisory`, `pinnedAt`) — Models.swift의 관대한
+  `init(from:)`가 `decodeIfPresent(...) ?? nil`로 구파일을 읽는다(실패 기록 13 재발 방지 —
+  compat 테스트로 게이트). **읽기 실패가 아니라 쓰기 누락**은 정반대 방향으로 안전하다: **구
+  바이너리가 이 파일을 저장하면 합성 인코더가 두 새 필드를 조용히 생략**하지만, 그건 그냥 advisory=nil
+  로 되돌아가는 것(양성·자가치유) — 실패 기록 13은 *디코드* 실패로 계정 전체가 빈 스토어에
+  덮어써진 사건이라 클래스가 다르다. ★ **비용 절감 — 5분 라이브싱크 통합**: 배지 라이브 절반과
+  임계값 폴이 **같은 5분 활성-스냅샷-싱크 1회**를 공유한다(Switcher의 sync가 이제 fresh write
+  여부를 Bool로 정직 반환 → 두 소비자가 Keychain 재호출 없이 로컬 스토어를 읽음). 5분 창당
+  활성 계정 라이브 자격증명 subprocess는 3회가 아니라 **최대 1회**. ★ **히스테리시스 5포인트
+  밴드**: set=임계값 이상, clear=임계값-5 이하 — 경계에서 사용률이 오르내려도 pill이 깜빡이거나
+  알림·백오프가 매 dip마다 리셋되지 않는다. ★ **쿨다운 게이트 후보 refresh**: 폴백 후보는 저장
+  토큰으로 먼저 확인(candidateProbeAction), **저장 토큰이 이미 만료 + 계정별 쿨다운 경과일 때만**
+  네트워크 refresh로 에스컬레이션(기존 preflight/proactive와 같은 검증 경로 재사용) — 건강한
+  폴백 토큰을 24배 빠른 주기로 회전시켜 bricking하는 것 방지. ★ **last-advised resetsAt 맵의
+  읽기-전-쓰기 순서(로드-베어링)**: pollThreshold는 이 창 알림 여부(alreadyAdvised)를 맵의 **직전
+  값**을 로컬로 캡처해 계산하고, 이번 폴 값은 **엔진 호출·결정 적용 이후에만** 맵에 쓴다. 쓰기를
+  먼저 하면 비교가 항상 같아져 토글-off 알림이 영구히 삼켜진다(AC7). 순서: capture-local →
+  compute-flag → call-engine → write-map. ★ **연속 싱크 실패 배지 = 활성 Claude 프로필 게이트**:
+  refreshActiveSnapshotIfStable가 false를 반환해도 **활성 Claude 프로필이 등록돼 있을 때만** 카운터를
+  올린다 — Codex-only 풀이나 adopt 대기 상태는 첫 guard에서 상시 false라, 게이트 없으면 멀쩡한
+  Codex 사용자에게 매 세션 푸터 배너가 뜬다(false-positive 방지). 3회 연속 진짜 실패면 기존 5분 TTL
+  푸터 배너. **AppState는 XCTest 타깃 없음** — MobiusCore 순수 함수로 결정 로직을 밀어 넣고(모델·
+  엔진·스위처·배지·세션워처 테스트) 오케스트레이션은 리뷰+수동 QA로 검증.
+  ★ **후속(2026-07-21, 리뷰 중 사용자 요청)**: ① **사용량 폴 서킷 브레이커** — 활성 계정
+  사용량 조회가 **3연속 실패(네트워크/타임아웃/5xx)** 하면 배경 폴을 멈춘다(`UsagePollBreaker`
+  순수 함수 + 테스트). 네트워크 이상 중엔 미리 전환 자체가 무의미하므로 낭비만 줄인다. 성공 시
+  카운터 0, 재개는 **팝오버 열기(refreshUsageIfStale)/앱 재시작**만(인메모리, 알림 없음).
+  ② **실험실 UI 문구/레이아웃 정리** — 기능명을 '미리 알림'→**'한도 차기 전 미리 전환'**(전환이
+  헤드라인, 알림 아님). 상단 '자동 전환'이 꺼져 있으면 **조건부 주황 콜아웃**으로 "지금은 표시만"
+  안내(콜아웃 인플레이션 방지 — 항상 띄우지 않고 문제되는 순간에만). 하위 설정(전환 기준)·동기화
+  항목은 **2-depth 들여쓰기**(`SettingsView.labsIndent` 공용). ③ **실험실 전용 탭 제거** —
+  설치 현황의 `settingsProviderTab`이 실험실도 공유 스코프(구 `labsProviderTab` 삭제). '꺼도
+  100% 차면 평소처럼 전환'을 굵게 강조해 "끄면 자동 전환 못 받나?" 오해 방지.
 - **Codex 지원 구현됨(2026-07-12, A안: 기존 개념 확장 + 프로바이더 어댑터)**:
   프로바이더별 풀(AccountsFile v2 — 구 v1 파일은 Claude 풀로 무손실 흡수, 저장은 첫 변경 때
   v2로 전환), Codex 어댑터/파서/감시, 앱 섹션 UI + CLI `--provider`, 유닛/통합 테스트 92개 green.

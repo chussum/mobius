@@ -1,6 +1,9 @@
 import Foundation
 
-/// usage 조회가 **401/403으로만** 연속 실패한 기록. 계정별로 누적한다.
+/// 배지(인증 의심) 판정 — **무상태**. 세션 활동 × 토큰 만료 상관으로 "claude가 라이브 토큰
+/// 갱신을 시도했으나 실패했다"를 감지한다. 옛 연속-401 누적(AuthFailureRecord)은 (a) 팝오버를
+/// 열어야만 신호가 쌓여 감지가 늦고, (b) 폴링이 빨라지면 반대로 오탐하는 양방향 결함이 있어
+/// 제거됐다 (AppState 통합 goal에서 마지막 참조까지 삭제 완료).
 ///
 /// ★ 왜 필요한가 (실측 2026-07-20): 활성 계정의 진짜 폐기는
 /// `UsageFetcher.shouldMarkReauthAfterAuthError`로 잡히지 않는다 — claude가 refresh에
@@ -12,41 +15,61 @@ import Foundation
 /// ★ 이 신호를 `needsReauth`로 승격하지 말 것 — `AutoSwitchEngine`이 needsReauth를 폴백
 /// 후보 제외(`:39`)와 주계정 강등(`:93`)에 쓰므로, 추측성 신호를 넣으면 멀쩡한 주계정을
 /// 밀어내는 이슈 #4가 그대로 재발한다. 이건 **표시 전용**이다.
-public struct AuthFailureRecord: Codable, Equatable {
-    /// 연속 401/403 횟수. 조회 200 성공 시 기록 자체가 삭제된다.
-    public var count: Int
-    /// 이번 연속 실패의 첫 발생 시각 — 경과 시간 조건의 기준.
-    public var firstFailedAt: Date
-    /// 알림을 이미 보냈는지 — 팝오버를 열 때마다 반복 알림이 가지 않게 한다.
-    public var notified: Bool
-
-    public init(count: Int, firstFailedAt: Date, notified: Bool = false) {
-        self.count = count
-        self.firstFailedAt = firstFailedAt
-        self.notified = notified
-    }
-}
-
 public enum AuthSuspicion {
-    /// 연속 401/403 횟수 임계값.
-    public static let threshold = 3
-    /// 첫 실패로부터 최소 경과 시간. 횟수만 쓰면 팝오버를 연달아 여는 것만으로 임계값을
-    /// 넘길 수 있고, 시간만 쓰면 단발성 실패가 방치된다 — 둘 다 만족해야 한다.
-    public static let minElapsed: TimeInterval = 30 * 60
 
-    /// 401/403 1회 기록. 기존 기록이 있으면 횟수만 올리고 첫 실패 시각은 보존한다.
-    public static func recordFailure(_ existing: AuthFailureRecord?, now: Date) -> AuthFailureRecord {
-        guard var r = existing else {
-            return AuthFailureRecord(count: 1, firstFailedAt: now)
-        }
-        r.count += 1
-        return r
+    // MARK: - 무상태 판정 (세션 활동 × 토큰 만료 상관)
+
+    /// 두 조건이 공유하는 창(10분). "방금 세션이 돌았다"의 방금, 그리고 "토큰이 충분히
+    /// 오래 만료돼 있다"의 충분히가 같은 값이다.
+    ///
+    /// ★ 왜 이 조합인가: claude는 **세션이 돌 때만** 라이브 토큰을 갱신한다. 그러므로
+    /// "세션이 최근에 돌았는데도 토큰이 10분 넘게 만료된 채"는 곧 **claude가 갱신을 시도했고
+    /// 실패했다**는 뜻이다(2026-07-20 실패: flosdor의 라이브 로그인이 죽었는데 14시간 침묵).
+    /// 어느 한쪽만으로는 판정이 안 된다 — 밤새 CLI를 안 쓰면 토큰은 당연히 만료돼 있고(오탐),
+    /// 세션이 도는데 토큰이 신선한 건 정상이다.
+    ///
+    /// ★ 이 신호를 `needsReauth`로 승격하지 말 것 — AutoSwitchEngine이 needsReauth를 폴백
+    /// 후보 제외(`:39`)와 주계정 강등(`:93`)에 쓰므로, 추측성 신호를 넣으면 멀쩡한 주계정을
+    /// 밀어내는 이슈 #4가 그대로 재발한다. 이건 **표시 전용**이다.
+    public static let activityWindow: TimeInterval = 10 * 60
+
+    /// 값싼 1차 조건 — **IO 0**. 세션 워처의 인메모리 최근 활동 시각과 이미 캐시된
+    /// 스냅샷 만료 시각만 본다. 매 틱(3초) 돌아도 공짜여야 하므로 여기서 Keychain·네트워크를
+    /// 건드리면 안 된다 (실패 기록 3/3b: 매 틱 Keychain 접근 = 승인창 폭탄).
+    ///
+    /// - Parameters:
+    ///   - lastActivityAt: Claude 세션 워처의 `lastActivity` (nil = 아직 아무것도 못 봄 → false).
+    ///   - storedExpiresAt: 저장 스냅샷에서 뽑은 access 토큰 만료 시각 (nil = 판단 근거 없음 → false).
+    /// - Returns: 최근 활동 **그리고** 충분히 만료됨을 모두 만족할 때만 true.
+    public static func cheapConditionsHold(lastActivityAt: Date?,
+                                           storedExpiresAt: Date?,
+                                           now: Date) -> Bool {
+        guard let lastActivityAt, let storedExpiresAt else { return false }
+        let recentlyActive = now.timeIntervalSince(lastActivityAt) <= activityWindow
+        return recentlyActive && isSufficientlyExpired(storedExpiresAt, now: now)
     }
 
-    /// 표시 임계값 도달 여부 — 횟수 **그리고** 경과 시간을 모두 만족할 때만 true.
-    public static func isSuspect(_ record: AuthFailureRecord?, now: Date) -> Bool {
-        guard let record else { return false }
-        return record.count >= threshold
-            && now.timeIntervalSince(record.firstFailedAt) >= minElapsed
+    /// 2차 확인 — 1차(`cheapConditionsHold`)가 이미 참일 때만 호출한다. 같은 10분 만료
+    /// 조건을 **라이브 기준으로 얻은** 만료 시각에 다시 적용한다.
+    ///
+    /// ★ 이것은 **독립적인 두 번째 읽기가 아니라 신선도 단언**이다 — 호출측은 이번 사이클에
+    /// 방금 동기화된(refreshActiveSnapshotIfStable이 true를 돌려준) 그 스토어 스냅샷을 그대로
+    /// 넘긴다. 1차가 캐시로 읽은 값과 출처가 같고, 다만 "이 값이 이번 5분 블록에 갱신된
+    /// 것임"이 보장된 상태다.
+    ///
+    /// ★ "더 독립적으로 만들자"며 여기에 라이브 Keychain 읽기를 넣지 말 것 — 5분 창당
+    /// 라이브 자격증명 subprocess 1회로 묶은 통합(배지·임계값 폴링·스냅샷 동기화가 한 번을
+    /// 나눠 쓴다)이 통째로 깨지고, 실패 기록 3/3b의 승인창 폭탄으로 되돌아간다.
+    ///
+    /// - Parameter liveExpiresAt: 방금 동기화된 스냅샷에서 뽑은 만료 시각 (nil이면 false).
+    public static func confirmed(liveExpiresAt: Date?, now: Date) -> Bool {
+        guard let liveExpiresAt else { return false }
+        return isSufficientlyExpired(liveExpiresAt, now: now)
+    }
+
+    /// 만료된 지 `activityWindow` **이상** 지났는가. 경계(정확히 10분)는 참 —
+    /// 두 함수가 같은 판정을 쓰도록 한 곳에 둔다.
+    private static func isSufficientlyExpired(_ expiresAt: Date, now: Date) -> Bool {
+        now.timeIntervalSince(expiresAt) >= activityWindow
     }
 }

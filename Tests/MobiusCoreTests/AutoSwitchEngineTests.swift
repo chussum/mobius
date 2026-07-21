@@ -217,4 +217,240 @@ final class AutoSwitchEngineTests: XCTestCase {
         XCTAssertEqual(engine.onTick(file: file, now: t0.addingTimeInterval(24 * 3600 + 61)),
                        .switchTo(primary.id, reason: .primaryRecovered))
     }
+
+    // MARK: 임계값 선제 전환 (advisory)
+
+    /// primary에 경고를 세운 file (기본: 지금 감지, 1시간 뒤 리셋)
+    private func withAdvisory(detectedAt: Date? = nil, resetsAt: Date? = nil) -> AccountsFile {
+        var f = file!
+        f.accounts[0].advisory = AdvisoryRecord(utilization: 92,
+                                                resetsAt: resetsAt ?? t0.addingTimeInterval(3600),
+                                                detectedAt: detectedAt ?? t0)
+        return f
+    }
+
+    func testAdvisorySwitchesToVerifiedCandidate() {
+        let f = withAdvisory()
+        XCTAssertEqual(AutoSwitchEngine().checkAdvisory(file: f, activeID: primary.id,
+                                                        verifiedCandidate: fb1.id,
+                                                        alreadyAdvised: false, now: t0),
+                       .switchTo(fb1.id, reason: .thresholdAdvisory))
+    }
+
+    func testAdvisoryAlreadyAdvisedStillSwitchesWhenEnabled() {
+        // ★ alreadyAdvised는 **알림만** 게이트한다 — 전환은 절대 억제하지 않는다.
+        //   임계값 폴은 매 폴마다 이번 resetsAt을 last-advised에 써서, 한 5시간 창 안에서는
+        //   두 번째 폴부터 이 플래그가 영구히 true다. 이 플래그를 전환 위로 끌어올리면
+        //   (예: guard 2로 `guard !alreadyAdvised else { return .none }`) 첫 폴 이후 임계값
+        //   자동 전환이 통째로 죽는데 기존 테스트는 전부 green으로 남는다 — 이 테스트가 그 구멍을 잠근다.
+        let f = withAdvisory()  // 기본 fixture = 자동 전환 켬
+        XCTAssertEqual(AutoSwitchEngine().checkAdvisory(file: f, activeID: primary.id,
+                                                        verifiedCandidate: fb1.id,
+                                                        alreadyAdvised: true, now: t0),
+                       .switchTo(fb1.id, reason: .thresholdAdvisory))
+    }
+
+    func testAdvisoryNoCandidateStaysQuietRepeatably() {
+        // 후보를 못 찾으면 알림도 전환도 없이 조용히 머문다 — 몇 번을 물어도 같은 답(부작용 없음)
+        let f = withAdvisory()
+        let engine = AutoSwitchEngine()
+        for i in 0..<3 {
+            XCTAssertEqual(engine.checkAdvisory(file: f, activeID: primary.id,
+                                                verifiedCandidate: nil,
+                                                alreadyAdvised: false,
+                                                now: t0.addingTimeInterval(Double(i) * 300)),
+                           .none)
+        }
+    }
+
+    func testAdvisoryNoDecisionWithoutAdvisoryOrWrongActive() {
+        // 경고 없음 → 결정 없음
+        XCTAssertEqual(AutoSwitchEngine().checkAdvisory(file: file, activeID: primary.id,
+                                                        verifiedCandidate: fb1.id,
+                                                        alreadyAdvised: false, now: t0), .none)
+        // 활성이 아닌 id로 물으면 결정 없음
+        let f = withAdvisory()
+        XCTAssertEqual(AutoSwitchEngine().checkAdvisory(file: f, activeID: fb1.id,
+                                                        verifiedCandidate: fb2.id,
+                                                        alreadyAdvised: false, now: t0), .none)
+    }
+
+    func testAdvisoryToggleOffNotifiesOnceThenStaysSilent() {
+        var f = withAdvisory()
+        f.autoSwitchByProvider[.claude] = false
+        let engine = AutoSwitchEngine()
+        // 아직 안 알림 → 알림만
+        XCTAssertEqual(engine.checkAdvisory(file: f, activeID: primary.id,
+                                            verifiedCandidate: fb1.id,
+                                            alreadyAdvised: false, now: t0),
+                       .notifyAdvisoryOnly(primary.id))
+        // 같은 창에서 이미 알림 → 결정 없음 (매 폴링마다 알림 폭풍 금지)
+        XCTAssertEqual(engine.checkAdvisory(file: f, activeID: primary.id,
+                                            verifiedCandidate: fb1.id,
+                                            alreadyAdvised: true, now: t0),
+                       .none)
+    }
+
+    func testAdvisoryNotifyOnlySurvivesCooldown() {
+        // ★ 가드 순서 회귀 테스트: 알림만 하는 결정은 전환을 실행하지 않으므로 쿨다운과 무관하다.
+        //   쿨다운 가드를 먼저 두면 무관한 전환의 쿨다운 창이 이 알림을 영구히 삼킨다.
+        var f = withAdvisory()
+        f.autoSwitchByProvider[.claude] = false
+        let engine = AutoSwitchEngine()
+        engine.noteSwitched(now: t0)  // 방금 전환 → 쿨다운 한복판
+        XCTAssertEqual(engine.checkAdvisory(file: f, activeID: primary.id,
+                                            verifiedCandidate: nil,
+                                            alreadyAdvised: false,
+                                            now: t0.addingTimeInterval(30)),
+                       .notifyAdvisoryOnly(primary.id))
+    }
+
+    func testAdvisoryPinBeforeOrWithoutTimestampDoesNotVeto() {
+        // 경고보다 **앞선** 핀 → "경고를 보고 돌아온 것"이 아니므로 거부권 없음
+        var f = withAdvisory(detectedAt: t0)
+        f.accounts[0].userPinned = true
+        f.accounts[0].pinnedAt = t0.addingTimeInterval(-600)
+        XCTAssertEqual(AutoSwitchEngine().checkAdvisory(file: f, activeID: primary.id,
+                                                        verifiedCandidate: fb1.id,
+                                                        alreadyAdvised: false, now: t0),
+                       .switchTo(fb1.id, reason: .thresholdAdvisory))
+        // 시각 없는 구버전 핀도 거부권 없음
+        f.accounts[0].pinnedAt = nil
+        XCTAssertEqual(AutoSwitchEngine().checkAdvisory(file: f, activeID: primary.id,
+                                                        verifiedCandidate: fb1.id,
+                                                        alreadyAdvised: false, now: t0),
+                       .switchTo(fb1.id, reason: .thresholdAdvisory))
+    }
+
+    func testAdvisoryPinAfterDetectionVetoesSwitch() {
+        // 경고를 본 **뒤** 수동으로 돌아온 핀 → 후보가 있어도 밀어내지 않는다
+        var f = withAdvisory(detectedAt: t0)
+        f.accounts[0].userPinned = true
+        f.accounts[0].pinnedAt = t0.addingTimeInterval(60)
+        XCTAssertEqual(AutoSwitchEngine().checkAdvisory(file: f, activeID: primary.id,
+                                                        verifiedCandidate: fb1.id,
+                                                        alreadyAdvised: false,
+                                                        now: t0.addingTimeInterval(120)),
+                       .none)
+    }
+
+    func testAdvisoryAndExhaustionShareCooldown() {
+        // 소진 전환 직후 → 임계값 전환은 쿨다운에 막힌다
+        let engine = AutoSwitchEngine()
+        XCTAssertEqual(engine.onRateLimitHit(file: file,
+                                             hit: RateLimitHit(resetsAt: t0.addingTimeInterval(3600)),
+                                             now: t0),
+                       .switchTo(fb1.id, reason: .activeExhausted))
+        engine.noteSwitched(now: t0)
+        let f = withAdvisory()
+        XCTAssertEqual(engine.checkAdvisory(file: f, activeID: primary.id,
+                                            verifiedCandidate: fb2.id,
+                                            alreadyAdvised: false,
+                                            now: t0.addingTimeInterval(60)),
+                       .none)
+        // 쿨다운 후엔 전환
+        XCTAssertEqual(engine.checkAdvisory(file: f, activeID: primary.id,
+                                            verifiedCandidate: fb2.id,
+                                            alreadyAdvised: false,
+                                            now: t0.addingTimeInterval(121)),
+                       .switchTo(fb2.id, reason: .thresholdAdvisory))
+
+        // 반대 방향: 임계값 전환 직후 → 소진 hit도 쿨다운에 막힌다
+        let engine2 = AutoSwitchEngine()
+        XCTAssertEqual(engine2.checkAdvisory(file: f, activeID: primary.id,
+                                             verifiedCandidate: fb1.id,
+                                             alreadyAdvised: false, now: t0),
+                       .switchTo(fb1.id, reason: .thresholdAdvisory))
+        engine2.noteSwitched(now: t0)
+        XCTAssertEqual(engine2.onRateLimitHit(file: file,
+                                              hit: RateLimitHit(resetsAt: t0.addingTimeInterval(3600)),
+                                              now: t0.addingTimeInterval(60)),
+                       .none)
+    }
+
+    // MARK: 후보 탐색 백오프 / 조회 방식
+
+    func testCandidateProbeBackoffPredicate() {
+        let engine = AutoSwitchEngine()
+        XCTAssertTrue(engine.shouldProbeCandidates(lastNoCandidateAt: nil, now: t0))
+        XCTAssertFalse(engine.shouldProbeCandidates(lastNoCandidateAt: t0,
+                                                    now: t0.addingTimeInterval(14 * 60)))
+        XCTAssertTrue(engine.shouldProbeCandidates(lastNoCandidateAt: t0,
+                                                   now: t0.addingTimeInterval(15 * 60)))
+        XCTAssertTrue(engine.shouldProbeCandidates(lastNoCandidateAt: t0,
+                                                   now: t0.addingTimeInterval(16 * 60)))
+    }
+
+    func testCandidateProbeActionMatrix() {
+        let cooldown: TimeInterval = 6 * 3600
+        // 만료 정보 없음 / 아직 유효 → 저장 토큰 그대로 (네트워크 refresh 0회)
+        XCTAssertEqual(AutoSwitchEngine.candidateProbeAction(expiresAt: nil, now: t0,
+                                                             lastRefreshAttemptAt: nil,
+                                                             cooldown: cooldown),
+                       .useStoredToken)
+        XCTAssertEqual(AutoSwitchEngine.candidateProbeAction(expiresAt: t0.addingTimeInterval(3600),
+                                                             now: t0,
+                                                             lastRefreshAttemptAt: t0,
+                                                             cooldown: cooldown),
+                       .useStoredToken)
+        // 만료 + 첫 시도 → 승격
+        XCTAssertEqual(AutoSwitchEngine.candidateProbeAction(expiresAt: t0.addingTimeInterval(-60),
+                                                             now: t0,
+                                                             lastRefreshAttemptAt: nil,
+                                                             cooldown: cooldown),
+                       .escalate)
+        // 만료 + 쿨다운 경과 → 승격
+        XCTAssertEqual(AutoSwitchEngine.candidateProbeAction(
+            expiresAt: t0.addingTimeInterval(-60), now: t0,
+            lastRefreshAttemptAt: t0.addingTimeInterval(-cooldown), cooldown: cooldown),
+                       .escalate)
+        // 만료 + 쿨다운 안 → 판정 없이 스킵
+        XCTAssertEqual(AutoSwitchEngine.candidateProbeAction(
+            expiresAt: t0.addingTimeInterval(-60), now: t0,
+            lastRefreshAttemptAt: t0.addingTimeInterval(-60), cooldown: cooldown),
+                       .skipCooldown)
+    }
+
+    // MARK: primary 복귀 게이트 (advisory 포함)
+
+    func testRecoveryGateBlocksOnAdvisoryOnlyDeparture() {
+        // advisory만 보고 떠난 경우 primary에는 rateLimit이 없다 — 예전 가드는 이때 통째로
+        // 스킵돼 쿨다운(120초)만 지나면 복귀 → 2분 주기 핑퐁이 났다.
+        file.activeAccountID = fb1.id
+        file.autoSwitchedFromPrimary = true
+        file.accounts[0].advisory = AdvisoryRecord(utilization: 95,
+                                                   resetsAt: t0.addingTimeInterval(1800),
+                                                   detectedAt: t0)
+        let engine = AutoSwitchEngine()
+        XCTAssertEqual(engine.onTick(file: file, now: t0.addingTimeInterval(300)), .none)
+        XCTAssertEqual(engine.onTick(file: file, now: t0.addingTimeInterval(1830)), .none) // margin 전
+        XCTAssertEqual(engine.onTick(file: file, now: t0.addingTimeInterval(1861)),
+                       .switchTo(primary.id, reason: .primaryRecovered))
+    }
+
+    func testRecoveryGateWaitsForBothGates() {
+        // 둘 다 있으면 **늦은 쪽**을 지나야 복귀한다
+        file.activeAccountID = fb1.id
+        file.autoSwitchedFromPrimary = true
+        file.accounts[0].rateLimit = RateLimitInfo(resetsAt: t0.addingTimeInterval(600), recordedAt: t0)
+        file.accounts[0].advisory = AdvisoryRecord(utilization: 95,
+                                                   resetsAt: t0.addingTimeInterval(1800),
+                                                   detectedAt: t0)
+        let engine = AutoSwitchEngine()
+        XCTAssertEqual(engine.onTick(file: file, now: t0.addingTimeInterval(700)), .none) // rateLimit만 지남
+        XCTAssertEqual(engine.onTick(file: file, now: t0.addingTimeInterval(1861)),
+                       .switchTo(primary.id, reason: .primaryRecovered))
+    }
+
+    func testRecoveryGateUnchangedWhenAdvisoryAbsent() {
+        // 토글 끄기 등으로 advisory가 지워진 뒤엔 기존 rateLimit 전용 게이트와 완전히 동일
+        file.activeAccountID = fb1.id
+        file.autoSwitchedFromPrimary = true
+        file.accounts[0].rateLimit = RateLimitInfo(resetsAt: t0.addingTimeInterval(100), recordedAt: t0)
+        file.accounts[0].advisory = nil
+        let engine = AutoSwitchEngine()
+        XCTAssertEqual(engine.onTick(file: file, now: t0.addingTimeInterval(110)), .none)
+        XCTAssertEqual(engine.onTick(file: file, now: t0.addingTimeInterval(161)),
+                       .switchTo(primary.id, reason: .primaryRecovered))
+    }
 }

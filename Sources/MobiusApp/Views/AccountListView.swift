@@ -274,6 +274,9 @@ struct AccountListView: View {
         // 보여줘 UI가 스무스하게 전환된 것처럼 보이게 한다. Codex·평시엔 풀별 isActive.
         let showActive = claudeCard && state.pendingSwitchID != nil
             ? (p.id == state.pendingSwitchID) : isActive(p)
+        // 임계값 선제 경고 pill — Claude 전용, 경고 창이 아직 유효할 때만. 소진 카운트다운과
+        // 같은 `now` 틱을 공유해 별도 타이머 없이 같은 주기로 나타나고 사라진다.
+        let advisory = claudeCard && p.hasActiveAdvisory(now: now)
         return AccountCardView(profile: p, isActive: showActive,
                         isPrimary: isPrimary,
                         autoSwitchOn: state.file.isAutoSwitchEnabled(p.provider),
@@ -287,7 +290,7 @@ struct AccountListView: View {
                             }
                         },
                         onReauth: (p.needsReauth || suspect) && claudeCard ? { state.addAccount() } : nil,
-                        authSuspect: suspect)
+                        authSuspect: suspect, advisory: advisory)
             .onTapGesture {
                 guard !isActive(p) else { return }
                 withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {

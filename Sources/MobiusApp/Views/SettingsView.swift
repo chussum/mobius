@@ -4,6 +4,9 @@ import CoreImage
 import MobiusCore
 
 struct SettingsView: View {
+    /// 실험실 하위 옵션(2-depth) 들여쓰기 폭 — 부모 토글을 켰을 때만 나오는 세부 설정을
+    /// 오른쪽으로 밀어 부모-자식 관계를 시각화한다(전환 기준 / 동기화 하위 항목 공용).
+    static let labsIndent: CGFloat = 16
     @EnvironmentObject var state: AppState
     @State private var launchAtLogin = (SMAppService.mainApp.status == .enabled)
     @State private var cliMessage = ""
@@ -21,13 +24,11 @@ struct SettingsView: View {
     @State private var mobiusPaths: [String] = []
     @State private var mobiusChecked = false
     @State private var showSupportQR = false
-    /// 설치 현황의 프로바이더 탭 — 팝오버와 같은 필 탭, 마지막 선택 유지.
+    /// 설치 현황·실험실 공용 프로바이더 탭 — 팝오버와 같은 필 탭, 마지막 선택 유지.
+    /// (구 labsProviderTab 제거 — 실험실이 이 탭을 공유한다, 2026-07-21.)
     @AppStorage("settingsProviderTab") private var settingsTabRaw = Provider.claude.rawValue
-    /// 실험실의 프로바이더 탭 (설치 현황과 독립).
-    @AppStorage("labsProviderTab") private var labsTabRaw = Provider.claude.rawValue
 
     private var settingsTab: Provider { Provider(rawValue: settingsTabRaw) ?? .claude }
-    private var labsTab: Provider { Provider(rawValue: labsTabRaw) ?? .claude }
 
     var body: some View {
         settingsForm
@@ -368,7 +369,7 @@ struct SettingsView: View {
             supportSection
         }
         .formStyle(.grouped)
-        .frame(width: 620, height: needsFallbackOnboarding ? 880 : 760)
+        .frame(width: 620, height: needsFallbackOnboarding ? 920 : 800)
     }
 
     /// 후원 — Fairy(브라우저 링크)와 카카오페이(QR 팝오버) 두 경로.
@@ -493,6 +494,11 @@ struct SettingsView: View {
 
     // MARK: 실험실 — 여러 Mac 동기화
 
+    /// 임계값 선제 전환 (advisory) — 기계 로컬 설정, 기본 꺼짐. AppState가 같은 키를 읽는다
+    /// (advisorySwitchEnabled / advisoryThresholdPercent — 새 키 만들지 말 것).
+    @AppStorage("advisorySwitchEnabled") private var advisorySwitchEnabled = false
+    @AppStorage("advisoryThresholdPercent") private var advisoryThresholdPercent = 90
+
     @AppStorage("syncEnabled") private var syncEnabled = false
     @AppStorage("syncProvider") private var syncProvider = "icloud"
     @AppStorage("syncCustomPath") private var syncCustomPath = ""
@@ -548,10 +554,11 @@ struct SettingsView: View {
 
     private var labsSection: some View {
         Section(loc("실험실")) {
-            PillPicker(options: Provider.allCases.map {
-                .init(value: $0.rawValue, label: $0.displayName)
-            }, selection: $labsTabRaw, fillsWidth: true)
-            switch labsTab {
+            // 실험실 전용 탭 제거 — 바로 위 '설치 현황'의 Claude/Codex 탭(settingsTab)이
+            // 이 섹션도 함께 스코프한다(중복 탭 제거, 사용자 요청 2026-07-21). Codex 쪽은
+            // 아직 기능이 없어 별도 탭이 절반 빈 상태였다. 코덱스 선택 시 빈 화면이 "고장"
+            // 처럼 보이지 않게 아래 안내를 확실히 띄운다.
+            switch settingsTab {
             case .claude:
                 claudeLabs
             case .codex:
@@ -562,8 +569,62 @@ struct SettingsView: View {
         }
     }
 
-    /// Claude 실험 기능 — 멀티 Mac 동기화 (~/.claude 작업 데이터 미러).
+    /// 임계값 선제 알림 (advisory) — 활성 Claude 계정의 5시간 사용량을 약 5분마다 폴링해
+    /// 한도가 100% 차기 전에 미리 폴백으로 자동 전환한다. **상단 '자동 전환' 토글이 켜져
+    /// 있어야** 실제 전환하고, 꺼져 있으면 카드에 '한도 근접'만 표시한다(스펙 f22). 기본 꺼짐.
+    /// 켠 경우에만 퍼센트 픽커(50~95, step 5, 기본 90)를 노출한다.
+    /// ★ 문구는 '자동 전환'을 헤드라인으로 — 구 '미리 알림' 라벨이 전환 기능을 알림으로
+    ///   오인하게 했다(사용자 피드백 2026-07-21). 상단 토글 의존성도 명시해 재발 방지.
+    @ViewBuilder private var advisoryLabs: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Toggle(loc("한도 차기 전 미리 전환"), isOn: $advisorySwitchEnabled)
+            // 중복 캡션 제거(사용자 요청) — 토글 라벨 + 아래 ℹ️ 줄 + '전환 기준'의
+            // "90%에 이르면 미리 전환해요"가 이미 무슨 기능인지 충분히 설명한다.
+            // "끄면 자동 전환을 아예 못 받나?" 오해 방지 — 회색 캡션 꼬리에 묻히면 안 읽혀서
+            // (사용자 지적) 독립 줄 + ℹ️ 마커 + 핵심 어구 굵게로 끌어올린다. 박스는 안 쓴다
+            //  — 아래 콜아웃(주황 조건부 / 파랑 동기화)과 경쟁하면 셋 다 약해진다(A안 원칙).
+            //  운영 정보('5분마다 확인')는 이 줄 끝에 함께 둔다.
+            Text(.init(loc("**꺼도 한도가 100% 차면 평소처럼 다음 계정으로 전환**돼요. 켜면 약 5분마다 사용량을 확인합니다.")))
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.top, 1)
+            // ★ 의존성 경고는 **문제되는 순간에만** 콜아웃으로 — 상단 '자동 전환'이 꺼져
+            //   있어 이 기능이 전환 대신 표시만 하는 상태일 때만 뜬다(동기화 콜아웃이
+            //   동기화 ON일 때만 뜨는 것과 같은 조건부 원리). 항상 띄우면 동기화 콜아웃과
+            //   경쟁해 둘 다 약해지고 폼 리듬이 깨진다(사용자 피드백 2026-07-21, A안).
+            if advisorySwitchEnabled, !state.file.isAutoSwitchEnabled(.claude) {
+                Text(.init(loc("⚠️ 상단 **'자동 전환'이 꺼져 있어** 지금은 카드에 '한도 근접'만 표시해요. 미리 전환하려면 상단 토글을 켜주세요.")))
+                    .font(.system(size: 11)).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(10)
+                    .background(RoundedRectangle(cornerRadius: 8)
+                        .fill(Color.orange.opacity(0.12)))
+                    .padding(.top, 2)
+            }
+        }
+        if advisorySwitchEnabled {
+            // '전환 기준'은 위 토글을 켰을 때만 나오는 하위 설정 → 2-depth로 들여써서
+            // 부모-자식 관계를 시각화한다(사용자 요청). 순수 들여쓰기로 통일 — macOS 시스템
+            // 설정의 하위 옵션 방식이고, 동기화 하위 항목들(여러 행)과도 일관된다(labsIndent).
+            VStack(alignment: .leading, spacing: 3) {
+                Picker(loc("전환 기준"), selection: $advisoryThresholdPercent) {
+                    ForEach(Array(stride(from: 50, through: 95, by: 5)), id: \.self) { pct in
+                        Text("\(pct)%").tag(pct)
+                    }
+                }
+                Text(loc("5시간 사용량이 %d%%에 이르면 미리 전환해요.", advisoryThresholdPercent))
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(.leading, Self.labsIndent)
+        }
+    }
+
+    /// Claude 실험 기능 — 임계값 선제 알림 + 멀티 Mac 동기화 (~/.claude 작업 데이터 미러).
     @ViewBuilder private var claudeLabs: some View {
+            advisoryLabs
+            // 구 Divider() 제거 — Form 안에 홀로 둔 Divider는 빈 인셋 행으로 렌더돼
+            // 빈 밴드처럼 보인다(사용자 지적 2026-07-21). Form 행 간격이 이미 구분한다.
             VStack(alignment: .leading, spacing: 3) {
                 Toggle(loc("다른 Mac과 동기화"), isOn: $syncEnabled)
                 Text(loc("이 Mac에서 켠 항목만 동기화에 참여해요. 끄면 이 Mac은 아무 영향도 받지 않아요."))
@@ -571,18 +632,23 @@ struct SettingsView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             if syncEnabled {
+                // 동기화 하위 항목들도 모두 위 토글의 자식 → 전환 기준과 같은 2-depth
+                // 들여쓰기(labsIndent). 각 행을 개별로 들여써 Form 행 밴딩(구분)을 보존한다
+                // (하나의 VStack으로 묶으면 밴딩이 사라진다 — 사용자 요청 2026-07-21).
                 Text(.init(loc("🔒 **로그인 정보는 옮기지 않아요** — 계정 자격증명, 계정 목록, 비밀 토큰은 어떤 경우에도 동기화되지 않습니다. 옮겨지는 건 대화 기록·플랜·스킬 같은 작업 데이터뿐이에요.")))
                     .font(.system(size: 11)).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(10)
                     .background(RoundedRectangle(cornerRadius: 8)
                         .fill(Color(red: 0.35, green: 0.65, blue: 1).opacity(0.10)))
+                    .padding(.leading, Self.labsIndent)
 
                 Picker(loc("보관 위치"), selection: $syncProvider) {
                     if SyncSupport.icloudRoot() != nil { Text("iCloud Drive").tag("icloud") }
                     if SyncSupport.gdriveRoot() != nil { Text("Google Drive").tag("gdrive") }
                     Text(loc("직접 선택한 폴더")).tag("custom")
                 }
+                .padding(.leading, Self.labsIndent)
                 if syncProvider == "custom" {
                     HStack {
                         Text(syncCustomPath.isEmpty ? loc("폴더가 선택되지 않았어요") : syncCustomPath)
@@ -591,6 +657,7 @@ struct SettingsView: View {
                         Spacer()
                         Button(loc("다른 폴더 선택…")) { pickSyncFolder() }
                     }
+                    .padding(.leading, Self.labsIndent)
                 }
 
                 categoryRow(SyncCategory.sessions.rawValue,
@@ -604,14 +671,19 @@ struct SettingsView: View {
                             await MainActor.run { sessionsSizeText = size }
                         }
                     }
+                    .padding(.leading, Self.labsIndent)
                 categoryRow(SyncCategory.plans.rawValue, loc("플랜 문서"),
                             loc("작성해 둔 계획 파일을 함께 봐요."))
+                    .padding(.leading, Self.labsIndent)
                 categoryRow(SyncCategory.skills.rawValue, loc("스킬"),
                             loc("직접 만든 스킬을 모든 Mac에서 써요."))
+                    .padding(.leading, Self.labsIndent)
                 categoryRow(SyncCategory.globalMemory.rawValue, loc("글로벌 메모리 (CLAUDE.md)"),
                             loc("Claude가 배워 둔 내용을 함께 써서, 어느 Mac에서든 똑같이 똑똑해져요."))
+                    .padding(.leading, Self.labsIndent)
                 categoryRow(SyncCategory.pluginConfig.rawValue, loc("플러그인 목록"),
                             loc("어떤 플러그인을 쓰는지 목록만 맞춰요. 실제 파일은 각 Mac이 알아서 다시 내려받아요."))
+                    .padding(.leading, Self.labsIndent)
 
                 VStack(alignment: .leading, spacing: 3) {
                     Picker(loc("한쪽 Mac에서 지우면"), selection: $syncPropagateDeletes) {
@@ -624,6 +696,7 @@ struct SettingsView: View {
                         .font(.caption).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
+                .padding(.leading, Self.labsIndent)
 
                 HStack {
                     Button(loc("지금 동기화")) { state.syncNow(manual: true) }
@@ -631,9 +704,11 @@ struct SettingsView: View {
                     Spacer()
                     syncStatusRow
                 }
+                .padding(.leading, Self.labsIndent)
                 Text(loc("홈 폴더 안 프로젝트는 Mac마다 사용자명이 달라도 대화를 이어 쓸 수 있어요. 홈 밖 경로는 두 Mac의 경로가 같아야 해요."))
                     .font(.caption).foregroundStyle(.tertiary)
                     .fixedSize(horizontal: false, vertical: true)
+                    .padding(.leading, Self.labsIndent)
             }
     }
 
