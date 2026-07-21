@@ -174,9 +174,10 @@ Sources/MobiusApp/        SwiftUI 메뉴바 앱 + AppState + Views/ + LoginFlow 
   원자 저장 필수, 못 하면 brick), 401/400 `error.code=refresh_token_invalidated|
   invalid_grant`→죽음(재로그인 필요, refresh로 복구 불가). **활성 계정은 절대 refresh
   안 함**(실행 세션 클로버). 죽은 토큰은 게이지-only 방화벽(AutoSwitchEngine·persisted
-  needsReauth 미접촉, 긴 쿨다운+비영속 힌트만). 전환↔refresh는
-  `AccountStore.withCredentialLock`(UUID-keyed)로 상호 배제 — 회전 직전 스냅샷이 라이브에
-  install되는 레이스 방지.
+  needsReauth 미접촉, 긴 쿨다운(codexRefreshDeadUntil 백오프)만). 전환↔refresh는
+  `AccountStore.withCredentialLock`(UUID-keyed)이 **저장 상호배제**만 담당한다 — 전환↔회전
+  HTTP 창은 락이 아니라 **AppState 게이트**(비활성 게이지 refresh 시 활성 계정 fresh-read
+  제외 + 전환 진입 시 codexUsageTask 정지·완료대기)로 닫는다.
 
 ### macOS 26 (Tahoe) 환경
 - 메뉴바 아이콘은 Control Center가 호스팅 — CGWindowList의 layer/owner로 존재 확인이 어려움.

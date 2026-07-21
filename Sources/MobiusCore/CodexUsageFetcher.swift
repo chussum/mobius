@@ -33,7 +33,7 @@ public enum CodexUsageFetcher {
 
     /// 방어적 UA — codex CLI와 동일 형태로 실어 서버가 봇으로 차단하지 않게 한다. URLRequest
     /// setValue만으로는 CFNetwork가 무시할 수 있어(TokenRefresher 실패 기록 14) 세션 레벨로 못박는다.
-    public static let userAgent = "codex_cli_rs/0.144.6 (macOS)"
+    public static let userAgent = CodexTokenRefresher.userAgent
     static let session: URLSession = {
         let cfg = URLSessionConfiguration.ephemeral
         cfg.httpAdditionalHeaders = ["User-Agent": CodexUsageFetcher.userAgent]

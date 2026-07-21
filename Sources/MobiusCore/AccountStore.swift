@@ -136,7 +136,9 @@ public final class AccountStore: @unchecked Sendable {
         // (검증을 통과했더라도) 문제가 있을 때 직전 스냅샷으로 복구할 여지를 남긴다.
         let url = env.secretFile(for: id)
         if let existing = try? Data(contentsOf: url) {
-            try? existing.write(to: url.appendingPathExtension("bak"), options: .atomic)
+            let bak = url.appendingPathExtension("bak")
+            try? existing.write(to: bak, options: .atomic)
+            try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: bak.path)
         }
         try writeSecretFile(data, for: id)   // 원자(temp→rename) + 0600
         // 혹시 남아 있을 수 있는 구버전 Keychain 항목은 정리 (승인창 재발 방지)

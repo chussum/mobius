@@ -33,10 +33,6 @@ final class AppState: ObservableObject {
     // 이므로 이 시각 전까지 refresh/probe를 아예 건너뛴다(게이지는 마지막 값에 둔다).
     private var codexRefreshDeadUntil: [UUID: Date] = [:]
     static let codexDeadRefreshCooldown: TimeInterval = 24 * 3600
-    /// 죽은 refresh 토큰이 감지된 비활성 codex 계정 — **비영속·엔진 불가시 UI 힌트**다(게이지 전용
-    /// 방화벽: setNeedsReauth·AutoSwitchEngine 미접촉, CLAUDE.md의 Codex 재인증 자동 감지 미구현과
-    /// 정합). 재시작하면 사라지고, 계정이 다시 활성/재로그인되면 자연 해소된다.
-    @Published private(set) var codexDeadRefresh: Set<UUID> = []
     private var usageCacheLoaded = false
     private static let usageCacheKey = "usageCacheV1"
 
@@ -277,6 +273,14 @@ final class AppState: ObservableObject {
         }
     }
 
+    /// codex 전환 직전, 진행 중인 비활성 게이지 refresh를 정지·완료대기시킨다 — 전환↔회전 HTTP
+    /// 창(케이스2: 왕복 중 전환)을 닫는다. cancel()은 루프의 다음 계정 진입을 막아, 대기를 현재 처리
+    /// 중인 계정의 진행 중 HTTP(refresh 후 probe까지 최대 2회 순차) 완료까지로 바운드한다.
+    private func quiesceCodexUsageTask() async {
+        codexUsageTask?.cancel()
+        await codexUsageTask?.value
+    }
+
     /// 팝오버가 열릴 때 호출 — **비활성 codex** 계정의 게이지를 네트워크로 조회한다(Claude의
     /// refreshUsageIfStale와 대칭). 활성 codex 계정은 세션 로그 in-band 경로(tick의
     /// processCodexBatches)가 그대로 담당하므로 제외한다 — processCodexBatches는 손대지 않는다.
@@ -304,6 +308,7 @@ final class AppState: ObservableObject {
             defer { codexUsageTask = nil }
             var updated = false
             for profile in stale {
+                if Task.isCancelled { break }
                 // 죽은 토큰 계정은 긴 백오프 동안 refresh/probe를 아예 건너뛴다(어차피 401 → 무의미).
                 if let deadUntil = codexRefreshDeadUntil[profile.id], now < deadUntil { continue }
                 // 저장된 auth.json 스냅샷 바이트를 읽는다. refresh 성공 시 아래에서 회전본으로 교체.
@@ -312,8 +317,9 @@ final class AppState: ObservableObject {
 
                 // 저장 access 토큰이 이미 만료됐으면 게이지를 못 읽어 얼어붙는다(GET엔 회전이 없어
                 // 만료 토큰으로 조회하면 401만 받는다) → refresh로 미리 되살린다. **활성 계정은 절대
-                // refresh하지 않는다**(stale 필터가 이미 codexActiveID를 제외하지만 재확인).
-                if profile.id != codexActiveID,
+                // refresh하지 않는다**(락 밖 fresh-read로 활성/전환중 계정을 재확인).
+                let liveActiveID = store.file.activeByProvider[.codex]
+                if profile.id != liveActiveID, profile.id != pendingSwitchID,
                    let exp = CodexAuthBlob.accessTokenExpiry(fromAuthJSON: authJSON), exp <= now {
                     // 계정당 쿨다운: 최근 시도가 있으면 이번 라운드는 건너뛴다(만료 토큰이라 게이지도
                     // 어차피 못 읽는다). 첫 시도는 게이팅 안 됨(distantPast)이라 프리즈 해소는 유지.
@@ -329,25 +335,31 @@ final class AppState: ObservableObject {
                         //   스냅샷을 보존한다(덮어쓰지 않음).
                         let stored: Data? = store.withCredentialLock(profile.id) { () -> Data? in
                             guard profile.id != store.file.activeByProvider[.codex] else { return nil }
+                            // 락 안에서 스냅샷을 다시 읽는다 — HTTP 왕복 중 adopt/재로그인이 끼면
+                            // 신규 로그인 스냅샷을 구 세션 회전본으로 덮는 edge를 차단(회전본 폐기).
+                            guard let current = try? store.secretData(for: profile.id),
+                                  current == authJSON else { return nil }
                             guard codexIO.recognizesSecret(rotated),
                                   CodexConfigIO.email(fromAuthJSON: rotated) == profile.emailAddress,
                                   CodexTokenRefresher.refreshToken(fromAuthJSON: rotated)?.isEmpty == false
                             else { return nil }
-                            try? store.setSecretData(rotated, for: profile.id)
+                            do { try store.setSecretData(rotated, for: profile.id) } catch { return nil }
                             return rotated
                         }
                         guard let stored else { continue }   // 활성이 됨 / 검증 실패 — 이번 라운드 스킵
                         probeBytes = stored
                         lastCodexRefreshAttemptAt[profile.id] = nil   // 성공 — 쿨다운 해제
                         codexRefreshDeadUntil[profile.id] = nil
-                        if codexDeadRefresh.remove(profile.id) != nil { updated = true }
                     case .invalidated:
                         // 죽은 refresh 토큰(세션 종료) — 게이지 전용 방화벽: 엔진/persisted reauth를
-                        // 절대 건드리지 않고, 긴 백오프 + 비영속 UI 힌트만 남기고 stale로 둔다.
+                        // 절대 건드리지 않고, 긴 백오프(codexRefreshDeadUntil)만 남기고 stale로 둔다.
                         codexRefreshDeadUntil[profile.id] = now.addingTimeInterval(Self.codexDeadRefreshCooldown)
-                        if codexDeadRefresh.insert(profile.id).inserted { updated = true }
                         continue
                     case .transient:
+                        // 우리 자신의 취소(전환 quiesce)로 인한 transient면 진짜 실패가 아니므로 방금
+                        // 찍은 쿨다운 스탬프를 되돌린다 — 안 그러면 이 계정 게이지가 최대
+                        // usageRefreshRetryCooldown 동안 프리즈된다(곧 루프 상단에서 break).
+                        if Task.isCancelled { lastCodexRefreshAttemptAt[profile.id] = nil }
                         continue   // 네트워크/5xx — 쿨다운 뒤 재시도(게이지는 마지막 값 유지)
                     }
                 }
@@ -793,6 +805,7 @@ final class AppState: ObservableObject {
                 guard await preflightFallback(id, now: now) else { file = store.file; return }
             }
             let fromID = store.file.activeByProvider[provider]
+            if provider == .codex { await quiesceCodexUsageTask() }
             do {
                 try switcher.switchTo(id)
                 engines[provider]?.noteSwitched(now: now)
@@ -829,7 +842,20 @@ final class AppState: ObservableObject {
         let alreadyFlagged = store.file.accounts.first { $0.id == id }?.needsReauth ?? false
         // Codex는 OAuth refresh 검증 경로가 없고, 이미 재로그인 필요로 마킹된 계정은 사용자가
         // 의도적으로 고른 것이므로 — 두 경우 모두 preflight 없이 바로 전환한다.
-        guard provider == .claude, !alreadyFlagged else { performSwitch(to: id); return }
+        guard provider == .claude, !alreadyFlagged else {
+            if provider == .codex {
+                // 낙관적 표시 + ①a fresh-read 가드 강화(전환 대상 계정의 게이지 refresh를 스킵시킴).
+                pendingSwitchID = id
+                Task { @MainActor in
+                    defer { pendingSwitchID = nil }
+                    await quiesceCodexUsageTask()
+                    performSwitch(to: id)
+                }
+            } else {
+                performSwitch(to: id)   // 이미 재인증 필요로 마킹된 claude — preflight 없이 전환
+            }
+            return
+        }
         // 낙관적 표시: 클릭 즉시 이 계정을 활성으로 보여줘 UI가 스무스하게 전환된 것처럼 보이게 한다.
         // 실제 refresh(대상이 아직 폴백일 때 — 안전) + 자격증명 스왑은 백그라운드에서.
         pendingSwitchID = id

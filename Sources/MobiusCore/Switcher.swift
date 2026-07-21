@@ -109,10 +109,10 @@ public final class Switcher: @unchecked Sendable {
         guard let io = ios[profile.provider] else {
             throw SwitcherError.unsupportedProvider(profile.provider)
         }
-        // ★ credential lock 안에서 스냅샷을 **읽고** 라이브에 설치한다 — 비활성 계정 토큰 자동 갱신
-        //   (CodexTokenRefresher)이 회전본을 저장하는 시퀀스와 상호 배제되어, 전환이 회전 직전
-        //   스냅샷을 라이브에 설치하는 레이스를 원천 차단한다(락 밖에서 읽으면 방금 회전으로 낡은
-        //   바이트를 install할 수 있다).
+        // ★ credential lock 안에서 스냅샷을 **읽고** 라이브에 설치한다 — 이 락은 비활성 계정 토큰
+        //   자동 갱신(CodexTokenRefresher)의 저장과 상호 배제되어 **저장 단계**만 보장한다. 전환↔
+        //   회전 HTTP 창(회전 직전 스냅샷 install 레이스)은 이 락이 아니라 AppState 게이트(비활성
+        //   게이지 refresh의 활성 fresh-read 가드 + 전환 진입 시 codexUsageTask 정지·완료대기)가 닫는다.
         try store.withCredentialLock(id) {
             guard let target = try store.secretData(for: id) else { throw SwitcherError.noStoredSecret }
 
