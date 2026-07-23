@@ -4,9 +4,16 @@ import CoreImage
 import MobiusCore
 
 struct SettingsView: View {
-    /// 하위 옵션 들여쓰기 폭(1단계당) — 부모 토글에 딸린 세부 설정을 오른쪽으로 밀어
-    /// 부모-자식 관계를 시각화한다(동기화 하위 항목 공용).
+    /// 하위 옵션 들여쓰기 폭 — 마커 없이 정렬만 필요한 깊은 세부 행(보관 위치의 폴더 경로 등)에만 사용.
     static let labsIndent: CGFloat = 16
+
+    /// ↳ 하위 항목 마커 — 들여쓰기 대신 명시 글리프로 부모-자식 위계를 표현한다
+    /// (사용자 확정 2026-07-24: 화살표가 있으니 들여쓰기 불필요). 미리 전환·동기화 하위 공용.
+    private var childMarker: some View {
+        Image(systemName: "arrow.turn.down.right")
+            .font(.system(size: 9, weight: .semibold))
+            .foregroundStyle(.tertiary)
+    }
     @EnvironmentObject var state: AppState
     // ★ 앱 실행 시 씬 그래프가 SettingsView()를 즉시 생성하는데, 이 @State가 init에서
     //   SMAppService.status(smd로의 **동기 XPC**)를 읽으면 smd가 느리거나 먹통일 때
@@ -548,16 +555,22 @@ struct SettingsView: View {
     }
 
     private func categoryRow(_ raw: String, _ title: String, _ desc: String) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
-            Toggle(title, isOn: categoryBinding(raw))
-            Text(desc).font(.caption).foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+        // ↳ 마커는 제목 줄에만 — 캡션은 마커 폭만큼 따라 들여져 제목과 정렬된다.
+        HStack(alignment: .top, spacing: 5) {
+            childMarker.padding(.top, 3)
+            VStack(alignment: .leading, spacing: 3) {
+                Toggle(title, isOn: categoryBinding(raw))
+                Text(desc).font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
     }
 
     /// Claude Desktop 동시 전환 토글 2종 — 설치 현황의 Claude 탭에 표시
     /// (Claude 전용 기능이라 실험실보다 프로바이더 탭이 제자리다).
     @ViewBuilder private var desktopToggles: some View {
+        // ★ .frame(height:17)+.offset(y:-1.5): 커스텀 뷰 라벨 Toggle은 스위치가 라벨
+        //   잉크보다 ~3px 떠 보인다(픽셀 실측 — advisory 행과 동일 결함, 문자열 라벨은 정상).
         Toggle(isOn: Binding(
             get: { state.file.desktopSyncEnabled },
             set: { state.setDesktopSync($0) })) {
@@ -569,6 +582,8 @@ struct SettingsView: View {
                     does: loc("Claude Desktop도 같은 계정으로 재시작해요 (2~5초)"),
                     note: loc("자동 전환일 때는 '자동 전환 시에도 Claude Desktop 전환'이 담당해요. Desktop에 연결해 둔 계정에서만 동작해요."))
             }
+            .frame(height: 17)
+            .offset(y: -1.5)
         }
         Divider()
         Toggle(isOn: Binding(
@@ -582,6 +597,8 @@ struct SettingsView: View {
                     does: loc("Claude Desktop도 같은 계정으로 재시작해요 (2~5초)"),
                     note: loc("카드를 눌러 직접 바꿀 때는 '계정 전환 시 Claude Desktop도 전환'이 담당해요."))
             }
+            .frame(height: 17)
+            .offset(y: -1.5)
         }
     }
 
@@ -625,7 +642,11 @@ struct SettingsView: View {
         Toggle(isOn: Binding(
             get: { autoOn && advisorySwitchEnabled },
             set: { advisorySwitchEnabled = $0 })) {
+            // ★ .frame(height:) 필수 — 커스텀 뷰 라벨 Toggle은 라벨 프레임이 잉크보다 위로
+            //   부풀어 스위치가 ~3px 떠 보인다(픽셀 실측; 문자열 라벨 Toggle은 정상).
+            //   명시 높이로 프레임 중심=잉크 중심을 강제한다. Desktop 토글 2종도 동일 픽스.
             HStack(spacing: 5) {
+                childMarker
                 Text(loc("한도 차기 전 미리 전환"))
                 infoButton(
                     isPresented: $showAdvisoryInfo,
@@ -634,20 +655,22 @@ struct SettingsView: View {
                     note: loc("꺼도 한도가 100% 차면 평소처럼 자동 전환돼요. 켜면 약 5분마다 사용량을 확인합니다."))
                 Spacer()
                 if autoOn, advisorySwitchEnabled {
+                    // .small: 기본 크기 팝업은 프레임 위쪽 여백이 커서 라벨 HStack의 중심을
+                    // 아래로 밀어 토글이 ~3px 떠 보인다(픽셀 실측) — 작은 컨트롤이 11.5pt
+                    // 텍스트와 비례도 맞는다.
                     Picker("", selection: $advisoryThresholdPercent) {
                         ForEach(Array(stride(from: 50, through: 95, by: 5)), id: \.self) { pct in
                             Text("\(pct)%").tag(pct)
                         }
                     }
-                    .labelsHidden().fixedSize()
+                    .labelsHidden().fixedSize().controlSize(.small)
                 }
             }
+            .frame(height: 17)
+            // 잔여 1.5pt는 프레임 높이와 무관한 상수(베이스라인 정렬 특성) — 시각 보정.
+            .offset(y: -1.5)
         }
         .disabled(!autoOn)
-        // 하위 뎁스 표현(사용자 확정): 자식이 캡션 없는 한 줄이라 이제 들여쓰기가 깔끔하게
-        // 읽힌다 — 실험실 동기화 하위 항목들과 같은 폭(labsIndent). 부모-자식 사이에
-        // Divider는 두지 않는다(구분선은 Desktop 토글 2형제처럼 '형제' 신호).
-        .padding(.leading, Self.labsIndent)
     }
 
     /// Claude 실험 기능 — 멀티 Mac 동기화 (~/.claude 작업 데이터 미러).
@@ -662,23 +685,24 @@ struct SettingsView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             if syncEnabled {
-                // 동기화 하위 항목들도 모두 위 토글의 자식 → 전환 기준과 같은 2-depth
-                // 들여쓰기(labsIndent). 각 행을 개별로 들여써 Form 행 밴딩(구분)을 보존한다
-                // (하나의 VStack으로 묶으면 밴딩이 사라진다 — 사용자 요청 2026-07-21).
+                // 동기화 하위 항목들은 모두 위 토글의 자식 → ↳ 마커(childMarker)로 위계 표시
+                // (들여쓰기 폐지 — 사용자 확정 2026-07-24). 각 행을 개별 행으로 두어
+                // Form 행 밴딩(구분)을 보존한다(하나의 VStack으로 묶으면 밴딩이 사라진다).
                 Text(.init(loc("🔒 **로그인 정보는 옮기지 않아요** — 계정 자격증명, 계정 목록, 비밀 토큰은 어떤 경우에도 동기화되지 않습니다. 옮겨지는 건 대화 기록·플랜·스킬 같은 작업 데이터뿐이에요.")))
                     .font(.system(size: 11)).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(10)
                     .background(RoundedRectangle(cornerRadius: 8)
                         .fill(Color(red: 0.35, green: 0.65, blue: 1).opacity(0.10)))
-                    .padding(.leading, Self.labsIndent)
 
-                Picker(loc("보관 위치"), selection: $syncProvider) {
-                    if SyncSupport.icloudRoot() != nil { Text("iCloud Drive").tag("icloud") }
-                    if SyncSupport.gdriveRoot() != nil { Text("Google Drive").tag("gdrive") }
-                    Text(loc("직접 선택한 폴더")).tag("custom")
+                HStack(spacing: 5) {
+                    childMarker
+                    Picker(loc("보관 위치"), selection: $syncProvider) {
+                        if SyncSupport.icloudRoot() != nil { Text("iCloud Drive").tag("icloud") }
+                        if SyncSupport.gdriveRoot() != nil { Text("Google Drive").tag("gdrive") }
+                        Text(loc("직접 선택한 폴더")).tag("custom")
+                    }
                 }
-                .padding(.leading, Self.labsIndent)
                 if syncProvider == "custom" {
                     HStack {
                         Text(syncCustomPath.isEmpty ? loc("폴더가 선택되지 않았어요") : syncCustomPath)
@@ -701,44 +725,44 @@ struct SettingsView: View {
                             await MainActor.run { sessionsSizeText = size }
                         }
                     }
-                    .padding(.leading, Self.labsIndent)
+
                 categoryRow(SyncCategory.plans.rawValue, loc("플랜 문서"),
                             loc("작성해 둔 계획 파일을 함께 봐요."))
-                    .padding(.leading, Self.labsIndent)
+
                 categoryRow(SyncCategory.skills.rawValue, loc("스킬"),
                             loc("직접 만든 스킬을 모든 Mac에서 써요."))
-                    .padding(.leading, Self.labsIndent)
+
                 categoryRow(SyncCategory.globalMemory.rawValue, loc("글로벌 메모리 (CLAUDE.md)"),
                             loc("Claude가 배워 둔 내용을 함께 써서, 어느 Mac에서든 똑같이 똑똑해져요."))
-                    .padding(.leading, Self.labsIndent)
+
                 categoryRow(SyncCategory.pluginConfig.rawValue, loc("플러그인 목록"),
                             loc("어떤 플러그인을 쓰는지 목록만 맞춰요. 실제 파일은 각 Mac이 알아서 다시 내려받아요."))
-                    .padding(.leading, Self.labsIndent)
 
-                VStack(alignment: .leading, spacing: 3) {
-                    Picker(loc("한쪽 Mac에서 지우면"), selection: $syncPropagateDeletes) {
-                        Text(loc("다른 Mac에는 남겨두기")).tag(false)
-                        Text(loc("다른 Mac에서도 지우기")).tag(true)
+                HStack(alignment: .top, spacing: 5) {
+                    childMarker.padding(.top, 3)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Picker(loc("한쪽 Mac에서 지우면"), selection: $syncPropagateDeletes) {
+                            Text(loc("다른 Mac에는 남겨두기")).tag(false)
+                            Text(loc("다른 Mac에서도 지우기")).tag(true)
+                        }
+                        Text(syncPropagateDeletes
+                             ? loc("다른 Mac에서는 바로 지워지지 않고 휴지통 폴더로 옮겨져 30일간 보관돼요.")
+                             : loc("지운 파일이 다른 Mac에서는 그대로 유지돼요. 가장 안전한 선택이에요."))
+                            .font(.caption).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
-                    Text(syncPropagateDeletes
-                         ? loc("다른 Mac에서는 바로 지워지지 않고 휴지통 폴더로 옮겨져 30일간 보관돼요.")
-                         : loc("지운 파일이 다른 Mac에서는 그대로 유지돼요. 가장 안전한 선택이에요."))
-                        .font(.caption).foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
                 }
-                .padding(.leading, Self.labsIndent)
 
-                HStack {
+                HStack(spacing: 5) {
+                    childMarker
                     Button(loc("지금 동기화")) { state.syncNow(manual: true) }
                         .disabled(state.syncStatus == .running)
                     Spacer()
                     syncStatusRow
                 }
-                .padding(.leading, Self.labsIndent)
                 Text(loc("홈 폴더 안 프로젝트는 Mac마다 사용자명이 달라도 대화를 이어 쓸 수 있어요. 홈 밖 경로는 두 Mac의 경로가 같아야 해요."))
                     .font(.caption).foregroundStyle(.tertiary)
                     .fixedSize(horizontal: false, vertical: true)
-                    .padding(.leading, Self.labsIndent)
             }
     }
 
