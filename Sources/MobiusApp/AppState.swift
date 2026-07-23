@@ -498,11 +498,9 @@ final class AppState: ObservableObject {
                         codexRefreshDeadUntil[profile.id] = now.addingTimeInterval(Self.codexDeadRefreshCooldown)
                         continue
                     case .transient:
-                        // refresh POST는 위 Task {}로 취소 비전파라 여기 도달한 transient는 probe GET
-                        // 취소/네트워크/5xx 쪽이다. 우리 자신의 취소면 방금 찍은 쿨다운 스탬프를 되돌린다
-                        // — 안 그러면 이 계정 게이지가 최대 usageRefreshRetryCooldown 동안 프리즈된다.
-                        if Task.isCancelled { lastCodexRefreshAttemptAt[profile.id] = nil }
-                        continue   // 네트워크/5xx — 쿨다운 뒤 재시도(게이지는 마지막 값 유지)
+                        // refresh POST는 위 Task {} 쉴드로 취소 비전파라 여기는 순수 네트워크/5xx다
+                        // (우리 자신의 취소로 인한 transient는 이 분기에 도달할 수 없다).
+                        continue   // 쿨다운 뒤 재시도(게이지는 마지막 값 유지)
                     }
                 }
 
