@@ -326,7 +326,8 @@ final class AppState: ObservableObject {
                     guard now.timeIntervalSince(lastCodexRefreshAttemptAt[profile.id] ?? .distantPast)
                             >= Self.usageRefreshRetryCooldown else { continue }
                     lastCodexRefreshAttemptAt[profile.id] = now
-                    switch await codexRefresher.refresh(authJSON: authJSON) {
+                    let refreshOutcome = await Task { await codexRefresher.refresh(authJSON: authJSON) }.value
+                    switch refreshOutcome {
                     case .refreshed(let rotated):
                         // ★ 원자 capture: credential lock 안에서 (1) 활성 재확인(TOCTOU — 그 사이
                         //   자동/수동 전환으로 활성이 됐으면 라이브 ~/.codex가 authoritative이므로
@@ -356,9 +357,9 @@ final class AppState: ObservableObject {
                         codexRefreshDeadUntil[profile.id] = now.addingTimeInterval(Self.codexDeadRefreshCooldown)
                         continue
                     case .transient:
-                        // 우리 자신의 취소(전환 quiesce)로 인한 transient면 진짜 실패가 아니므로 방금
-                        // 찍은 쿨다운 스탬프를 되돌린다 — 안 그러면 이 계정 게이지가 최대
-                        // usageRefreshRetryCooldown 동안 프리즈된다(곧 루프 상단에서 break).
+                        // refresh POST는 위 Task {}로 취소 비전파라 여기 도달한 transient는 probe GET
+                        // 취소/네트워크/5xx 쪽이다. 우리 자신의 취소면 방금 찍은 쿨다운 스탬프를 되돌린다
+                        // — 안 그러면 이 계정 게이지가 최대 usageRefreshRetryCooldown 동안 프리즈된다.
                         if Task.isCancelled { lastCodexRefreshAttemptAt[profile.id] = nil }
                         continue   // 네트워크/5xx — 쿨다운 뒤 재시도(게이지는 마지막 값 유지)
                     }
