@@ -4,8 +4,8 @@ import CoreImage
 import MobiusCore
 
 struct SettingsView: View {
-    /// 실험실 하위 옵션(2-depth) 들여쓰기 폭 — 부모 토글을 켰을 때만 나오는 세부 설정을
-    /// 오른쪽으로 밀어 부모-자식 관계를 시각화한다(전환 기준 / 동기화 하위 항목 공용).
+    /// 하위 옵션 들여쓰기 폭(1단계당) — 부모 토글에 딸린 세부 설정을 오른쪽으로 밀어
+    /// 부모-자식 관계를 시각화한다(미리 전환·전환 기준 / 동기화 하위 항목 공용).
     static let labsIndent: CGFloat = 16
     @EnvironmentObject var state: AppState
     // ★ 앱 실행 시 씬 그래프가 SettingsView()를 즉시 생성하는데, 이 @State가 init에서
@@ -173,6 +173,12 @@ struct SettingsView: View {
                 set: { state.setAutoSwitch($0, provider: provider) }))
             Text(loc("한도가 차면 다음 계정으로 자동으로 이어집니다"))
                 .font(.caption).foregroundStyle(.secondary)
+        }
+        // '미리 전환'은 자동 전환의 하위 옵션(언제 전환하나: 100% vs 임계값) — 들여쓰기로
+        // 종속을 구조로 보여준다. Claude 전용(Codex는 해당 기능 없음). 구 실험실에서 승격
+        // (2026-07-24, 키·기본값 불변 — 켜면 5분 폴링이 생기므로 여전히 옵트인).
+        if provider == .claude {
+            advisoryControls
         }
         let accounts = state.file.accounts(of: provider)
         VStack(alignment: .leading, spacing: 6) {
@@ -584,13 +590,16 @@ struct SettingsView: View {
         }
     }
 
-    /// 임계값 선제 알림 (advisory) — 활성 Claude 계정의 5시간 사용량을 약 5분마다 폴링해
-    /// 한도가 100% 차기 전에 미리 폴백으로 자동 전환한다. **상단 '자동 전환' 토글이 켜져
+    /// 임계값 선제 전환 (advisory) — 활성 Claude 계정의 5시간 사용량을 약 5분마다 폴링해
+    /// 한도가 100% 차기 전에 미리 폴백으로 자동 전환한다. **위 '자동 전환' 토글이 켜져
     /// 있어야** 실제 전환하고, 꺼져 있으면 카드에 '한도 근접'만 표시한다(스펙 f22). 기본 꺼짐.
     /// 켠 경우에만 퍼센트 픽커(50~95, step 5, 기본 90)를 노출한다.
+    /// 설치 현황 Claude 탭의 '자동 전환' 하위 옵션(1-depth 들여쓰기)으로 렌더된다 —
+    /// 구 실험실에서 승격(2026-07-24). 부모 토글이 꺼져 있어도 숨기지 않는다(표시 전용
+    /// 모드도 유효한 상태) — 대신 조건부 콜아웃이 그 상태를 설명한다.
     /// ★ 문구는 '자동 전환'을 헤드라인으로 — 구 '미리 알림' 라벨이 전환 기능을 알림으로
-    ///   오인하게 했다(사용자 피드백 2026-07-21). 상단 토글 의존성도 명시해 재발 방지.
-    @ViewBuilder private var advisoryLabs: some View {
+    ///   오인하게 했다(사용자 피드백 2026-07-21). 부모 토글 의존성도 명시해 재발 방지.
+    @ViewBuilder private var advisoryControls: some View {
         VStack(alignment: .leading, spacing: 3) {
             Toggle(loc("한도 차기 전 미리 전환"), isOn: $advisorySwitchEnabled)
             // 중복 캡션 제거(사용자 요청) — 토글 라벨 + 아래 ℹ️ 줄 + '전환 기준'의
@@ -603,12 +612,12 @@ struct SettingsView: View {
                 .font(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.top, 1)
-            // ★ 의존성 경고는 **문제되는 순간에만** 콜아웃으로 — 상단 '자동 전환'이 꺼져
+            // ★ 의존성 경고는 **문제되는 순간에만** 콜아웃으로 — 위 '자동 전환'이 꺼져
             //   있어 이 기능이 전환 대신 표시만 하는 상태일 때만 뜬다(동기화 콜아웃이
             //   동기화 ON일 때만 뜨는 것과 같은 조건부 원리). 항상 띄우면 동기화 콜아웃과
             //   경쟁해 둘 다 약해지고 폼 리듬이 깨진다(사용자 피드백 2026-07-21, A안).
             if advisorySwitchEnabled, !state.file.isAutoSwitchEnabled(.claude) {
-                Text(.init(loc("⚠️ 상단 **'자동 전환'이 꺼져 있어** 지금은 카드에 '한도 근접'만 표시해요. 미리 전환하려면 상단 토글을 켜주세요.")))
+                Text(.init(loc("⚠️ 위 **'자동 전환'이 꺼져 있어** 지금은 카드에 '한도 근접'만 표시해요. 미리 전환하려면 위 토글을 켜주세요.")))
                     .font(.system(size: 11)).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(10)
@@ -617,10 +626,11 @@ struct SettingsView: View {
                     .padding(.top, 2)
             }
         }
+        .padding(.leading, Self.labsIndent)
         if advisorySwitchEnabled {
-            // '전환 기준'은 위 토글을 켰을 때만 나오는 하위 설정 → 2-depth로 들여써서
-            // 부모-자식 관계를 시각화한다(사용자 요청). 순수 들여쓰기로 통일 — macOS 시스템
-            // 설정의 하위 옵션 방식이고, 동기화 하위 항목들(여러 행)과도 일관된다(labsIndent).
+            // '전환 기준'은 위 토글을 켰을 때만 나오는 하위 설정 → 부모(이미 1-depth)보다
+            // 한 단계 더 들여써서(2-depth) 부모-자식 관계를 시각화한다 — macOS 시스템
+            // 설정의 하위 옵션 방식이고, 동기화 하위 항목들과도 일관된다(labsIndent).
             VStack(alignment: .leading, spacing: 3) {
                 Picker(loc("전환 기준"), selection: $advisoryThresholdPercent) {
                     ForEach(Array(stride(from: 50, through: 95, by: 5)), id: \.self) { pct in
@@ -631,13 +641,13 @@ struct SettingsView: View {
                     .font(.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            .padding(.leading, Self.labsIndent)
+            .padding(.leading, Self.labsIndent * 2)
         }
     }
 
-    /// Claude 실험 기능 — 임계값 선제 알림 + 멀티 Mac 동기화 (~/.claude 작업 데이터 미러).
+    /// Claude 실험 기능 — 멀티 Mac 동기화 (~/.claude 작업 데이터 미러).
+    /// (임계값 선제 전환은 설치 현황 Claude 탭의 '자동 전환' 하위로 승격, 2026-07-24.)
     @ViewBuilder private var claudeLabs: some View {
-            advisoryLabs
             // 구 Divider() 제거 — Form 안에 홀로 둔 Divider는 빈 인셋 행으로 렌더돼
             // 빈 밴드처럼 보인다(사용자 지적 2026-07-21). Form 행 간격이 이미 구분한다.
             VStack(alignment: .leading, spacing: 3) {
