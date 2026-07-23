@@ -205,8 +205,9 @@
 /* 임계값 선제 알림 (advisory) — 설정/카드/알림 */
 "한도 근접" = "Near limit";
 "한도 차기 전 미리 전환" = "Switch early, before the limit";
-"**꺼도 한도가 100% 차면 평소처럼 다음 계정으로 전환**돼요. 켜면 약 5분마다 사용량을 확인합니다." = "**Even with it off, the moment usage fills to 100% Mobius still moves to the next account as usual.** When on, usage is checked about every 5 minutes.";
-"⚠️ 위 **'자동 전환'이 꺼져 있어** 지금은 카드에 '한도 근접'만 표시해요. 미리 전환하려면 위 토글을 켜주세요." = "⚠️ **"Auto-switch" (above) is off**, so for now the card just shows "Near limit." To switch early, turn on the toggle above.";
+"5시간 사용량이 '전환 기준'에 이르면" = "When 5-hour usage reaches the 'Switch at' level";
+"한도가 다 차기 전에 여유 있는 다음 계정으로 미리 전환해요" = "Moves to the next account with headroom before the limit fills up";
+"꺼도 한도가 100% 차면 평소처럼 자동 전환돼요. 켜면 약 5분마다 사용량을 확인합니다." = "Even with this off, Mobius still auto-switches the moment usage fills to 100%. When on, usage is checked about every 5 minutes.";
 "전환 기준" = "Switch at";
 "5시간 사용량이 %d%%에 이르면 미리 전환해요." = "Switches early once 5-hour usage reaches %d%%.";
 "⚠️ %@ 계정 한도가 가까워요" = "⚠️ %@ is nearing its limit";

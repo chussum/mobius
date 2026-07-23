@@ -21,6 +21,7 @@ struct SettingsView: View {
     @AppStorage("autoUpdateCheck") private var autoUpdateCheck = true
     @State private var showDesktopAutoInfo = false
     @State private var showDesktopSyncInfo = false
+    @State private var showAdvisoryInfo = false
     @State private var claudeInfo: ClaudeCLI.Info?
     @State private var codexInfo: ToolInventory.CLIInfo?
     @State private var claudeDesktop: ToolInventory.AppInfo?
@@ -481,9 +482,10 @@ struct SettingsView: View {
         .padding(16)
     }
 
-    /// Desktop 토글 2종의 차이를 설명하는 ⓘ 팝오버 — "언제 / 하는 일 / 나머지는 누가"
-    private func desktopInfoButton(isPresented: Binding<Bool>,
-                                   when: String, note: String) -> some View {
+    /// 토글 하나를 "언제 / 하는 일 / 참고" 세 줄로 설명하는 ⓘ 팝오버 —
+    /// Desktop 토글 2종과 '미리 전환'이 공용(행을 한 줄로 유지하는 이 앱의 설명 패턴).
+    private func infoButton(isPresented: Binding<Bool>,
+                            when: String, does: String, note: String) -> some View {
         Button { isPresented.wrappedValue.toggle() } label: {
             Image(systemName: "info.circle")
                 .font(.system(size: 11)).foregroundStyle(.secondary)
@@ -500,7 +502,7 @@ struct SettingsView: View {
                 HStack(alignment: .top, spacing: 7) {
                     Text(loc("하는 일")).font(.system(size: 10.5, weight: .semibold))
                         .foregroundStyle(.secondary)
-                    Text(loc("Claude Desktop도 같은 계정으로 재시작해요 (2~5초)"))
+                    Text(does)
                         .font(.system(size: 11.5))
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -553,9 +555,10 @@ struct SettingsView: View {
             set: { state.setDesktopSync($0) })) {
             HStack(spacing: 5) {
                 Text(loc("계정 전환 시 Claude Desktop도 전환"))
-                desktopInfoButton(
+                infoButton(
                     isPresented: $showDesktopSyncInfo,
                     when: loc("카드를 눌러 직접 계정을 바꿀 때"),
+                    does: loc("Claude Desktop도 같은 계정으로 재시작해요 (2~5초)"),
                     note: loc("자동 전환일 때는 '자동 전환 시에도 Claude Desktop 전환'이 담당해요. Desktop에 연결해 둔 계정에서만 동작해요."))
             }
         }
@@ -565,9 +568,10 @@ struct SettingsView: View {
             set: { state.setDesktopAutoSwitch($0) })) {
             HStack(spacing: 5) {
                 Text(loc("자동 전환 시에도 Claude Desktop 전환"))
-                desktopInfoButton(
+                infoButton(
                     isPresented: $showDesktopAutoInfo,
                     when: loc("한도가 차서 Mobius가 알아서 계정을 바꿀 때"),
+                    does: loc("Claude Desktop도 같은 계정으로 재시작해요 (2~5초)"),
                     note: loc("카드를 눌러 직접 바꿀 때는 '계정 전환 시 Claude Desktop도 전환'이 담당해요."))
             }
         }
@@ -591,43 +595,33 @@ struct SettingsView: View {
     }
 
     /// 임계값 선제 전환 (advisory) — 활성 Claude 계정의 5시간 사용량을 약 5분마다 폴링해
-    /// 한도가 100% 차기 전에 미리 폴백으로 자동 전환한다. **위 '자동 전환' 토글이 켜져
-    /// 있어야** 실제 전환하고, 꺼져 있으면 카드에 '한도 근접'만 표시한다(스펙 f22). 기본 꺼짐.
-    /// 켠 경우에만 퍼센트 픽커(50~95, step 5, 기본 90)를 노출한다.
-    /// 설치 현황 Claude 탭의 '자동 전환' 하위 옵션(1-depth 들여쓰기)으로 렌더된다 —
-    /// 구 실험실에서 승격(2026-07-24). 부모 토글이 꺼져 있어도 숨기지 않는다(표시 전용
-    /// 모드도 유효한 상태) — 대신 조건부 콜아웃이 그 상태를 설명한다.
+    /// 한도가 100% 차기 전에 미리 폴백으로 자동 전환한다. 기본 꺼짐.
+    /// 설치 현황 Claude 탭의 '자동 전환' 하위 옵션(1-depth 들여쓰기) — 구 실험실에서 승격
+    /// (2026-07-24). ★ **한 줄 행 + ⓘ 팝오버**: 캡션 달린 토글 행을 부모 바로 아래 또
+    /// 쌓으면 들여쓰기가 묻혀 형제처럼 읽힌다(사용자 피드백 2026-07-24 — 구 독립 설명 줄은
+    /// ⓘ로 이동, Desktop 토글 2종과 같은 패턴). ★ **부모 '자동 전환'이 꺼져 있으면 강제
+    /// off 표시 + disabled**(사용자 결정 2026-07-24, 구 "표시만" 모드·주황 콜아웃 제거) —
+    /// 저장값은 보존해 부모를 다시 켜면 이전 선택이 돌아온다. 실제 동작 게이트는
+    /// AppState.advisoryEffectivelyEnabled가 동일 조건으로 막는다.
     /// ★ 문구는 '자동 전환'을 헤드라인으로 — 구 '미리 알림' 라벨이 전환 기능을 알림으로
-    ///   오인하게 했다(사용자 피드백 2026-07-21). 부모 토글 의존성도 명시해 재발 방지.
+    ///   오인하게 했다(사용자 피드백 2026-07-21).
     @ViewBuilder private var advisoryControls: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            Toggle(loc("한도 차기 전 미리 전환"), isOn: $advisorySwitchEnabled)
-            // 중복 캡션 제거(사용자 요청) — 토글 라벨 + 아래 ℹ️ 줄 + '전환 기준'의
-            // "90%에 이르면 미리 전환해요"가 이미 무슨 기능인지 충분히 설명한다.
-            // "끄면 자동 전환을 아예 못 받나?" 오해 방지 — 회색 캡션 꼬리에 묻히면 안 읽혀서
-            // (사용자 지적) 독립 줄 + ℹ️ 마커 + 핵심 어구 굵게로 끌어올린다. 박스는 안 쓴다
-            //  — 아래 콜아웃(주황 조건부 / 파랑 동기화)과 경쟁하면 셋 다 약해진다(A안 원칙).
-            //  운영 정보('5분마다 확인')는 이 줄 끝에 함께 둔다.
-            Text(.init(loc("**꺼도 한도가 100% 차면 평소처럼 다음 계정으로 전환**돼요. 켜면 약 5분마다 사용량을 확인합니다.")))
-                .font(.caption).foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(.top, 1)
-            // ★ 의존성 경고는 **문제되는 순간에만** 콜아웃으로 — 위 '자동 전환'이 꺼져
-            //   있어 이 기능이 전환 대신 표시만 하는 상태일 때만 뜬다(동기화 콜아웃이
-            //   동기화 ON일 때만 뜨는 것과 같은 조건부 원리). 항상 띄우면 동기화 콜아웃과
-            //   경쟁해 둘 다 약해지고 폼 리듬이 깨진다(사용자 피드백 2026-07-21, A안).
-            if advisorySwitchEnabled, !state.file.isAutoSwitchEnabled(.claude) {
-                Text(.init(loc("⚠️ 위 **'자동 전환'이 꺼져 있어** 지금은 카드에 '한도 근접'만 표시해요. 미리 전환하려면 위 토글을 켜주세요.")))
-                    .font(.system(size: 11)).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(10)
-                    .background(RoundedRectangle(cornerRadius: 8)
-                        .fill(Color.orange.opacity(0.12)))
-                    .padding(.top, 2)
+        let autoOn = state.file.isAutoSwitchEnabled(.claude)
+        Toggle(isOn: Binding(
+            get: { autoOn && advisorySwitchEnabled },
+            set: { advisorySwitchEnabled = $0 })) {
+            HStack(spacing: 5) {
+                Text(loc("한도 차기 전 미리 전환"))
+                infoButton(
+                    isPresented: $showAdvisoryInfo,
+                    when: loc("5시간 사용량이 '전환 기준'에 이르면"),
+                    does: loc("한도가 다 차기 전에 여유 있는 다음 계정으로 미리 전환해요"),
+                    note: loc("꺼도 한도가 100% 차면 평소처럼 자동 전환돼요. 켜면 약 5분마다 사용량을 확인합니다."))
             }
         }
+        .disabled(!autoOn)
         .padding(.leading, Self.labsIndent)
-        if advisorySwitchEnabled {
+        if autoOn, advisorySwitchEnabled {
             // '전환 기준'은 위 토글을 켰을 때만 나오는 하위 설정 → 부모(이미 1-depth)보다
             // 한 단계 더 들여써서(2-depth) 부모-자식 관계를 시각화한다 — macOS 시스템
             // 설정의 하위 옵션 방식이고, 동기화 하위 항목들과도 일관된다(labsIndent).

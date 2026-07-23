@@ -59,8 +59,10 @@ Sources/MobiusApp/        SwiftUI 메뉴바 앱 + AppState + Views/ + LoginFlow 
   `anthropic-beta: oauth-2025-04-20`. 응답: `five_hour.{utilization, resets_at}`,
   `seven_day.{...}` (utilization=백분율, resets_at=ISO8601 마이크로초).
 - 게이지는 **팝오버 열 때만** 조회(캐시 4분). 상시 폴링 없음 → 계정 리스크 최소화.
-  ★ **예외(옵트인, 2026-07-21)**: '한도 차기 전 미리 전환'(advisorySwitchEnabled) 토글을 켜면
-  **활성 Claude 계정의 5시간 usage를 약 5분마다** 폴링한다(임계값 선제 알림용, 아래 QA 참조).
+  ★ **예외(옵트인, 2026-07-21)**: '한도 차기 전 미리 전환'(advisorySwitchEnabled) 토글과
+  **'자동 전환'(Claude)이 둘 다 켜져 있으면**(2026-07-24부터 하위 옵션 종속 —
+  advisoryEffectivelyEnabled) **활성 Claude 계정의 5시간 usage를 약 5분마다** 폴링한다
+  (임계값 선제 알림용, 아래 QA 참조).
   **기본 꺼짐 — 끄면 폴링 0**(설정 게이트가 첫 검사라 요청 바이트 동일). 폴백 계정은 상시 폴링
   안 함(전환 후보 검증 때만, 그것도 저장 토큰 만료+쿨다운 경과 시에만 네트워크 refresh).
 
@@ -415,7 +417,13 @@ Sources/MobiusApp/        SwiftUI 메뉴바 앱 + AppState + Views/ + LoginFlow 
 - **임계값 선제 알림/전환 (advisory) 구현됨(2026-07-21, 옵트인, 기본 꺼짐; 2026-07-24 실험실
   → 정식 승격 — 설정 > 설치 현황 > Claude 탭 '자동 전환'의 하위 옵션으로 이동. 키
   (advisorySwitchEnabled/advisoryThresholdPercent)·기본값 불변, 여전히 옵트인 — 켜면 5분
-  폴링이 생기는 기능이라 기본 켬으로 바꾸지 않았다. 실험실에는 멀티 Mac 동기화만 남음)**: 활성 Claude
+  폴링이 생기는 기능이라 기본 켬으로 바꾸지 않았다. 실험실에는 멀티 Mac 동기화만 남음.
+  ★ 같은 날 UX 확정(사용자 결정): **부모 '자동 전환'(Claude) off면 미리 전환도 강제 off 표시
+  + disabled** — 구 "표시만" 모드(f22)와 주황 의존성 콜아웃 삭제. 저장값은 보존해 부모 재켬
+  시 이전 선택 복귀. 동작 게이트는 AppState.advisoryEffectivelyEnabled(폴링·pill 정리 공용,
+  부모 off면 잔여 advisory pill도 다음 틱에 정리). 행 UI는 캡션 없는 **한 줄 + ⓘ 팝오버**
+  (Desktop 토글과 같은 infoButton 패턴) — 캡션 달린 토글 행을 부모 아래 또 쌓으면 16pt
+  들여쓰기가 묻혀 형제처럼 읽힌다)**: 활성 Claude
   계정의 5시간 usage가 임계값(기본 90, 50~95 step 5)에 도달하면 **카드에만** 노랑 '한도 근접'
   pill을 띄우고(소진 아님 — isLimited/메뉴바/CLI는 이 신호를 절대 안 본다), 여유 있는 폴백이
   있으면 자동으로 미리 전환한다. 알림 문구는 소진 표현 금지("미리 전환했어요"). ★ **진실의

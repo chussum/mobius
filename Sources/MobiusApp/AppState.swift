@@ -210,9 +210,16 @@ final class AppState: ObservableObject {
     /// 인메모리 — 앱 재시작도 재개 신호(사용자 결정 2026-07-21).
     private var consecutiveUsagePollFailures = 0
 
-    /// Labs 임계값 선제 전환 기능 토글(기본 꺼짐). 설정 UI(다음 웨이브)가 같은 키를 쓴다.
+    /// 임계값 선제 전환 기능 토글(기본 꺼짐). 설정 UI가 같은 키를 쓴다.
     private var advisorySwitchEnabled: Bool {
         UserDefaults.standard.bool(forKey: "advisorySwitchEnabled")
+    }
+    /// ★ 유효 게이트 — 미리 전환은 '자동 전환(Claude)'의 하위 옵션이라 **부모가 켜져 있을
+    /// 때만** 동작한다(사용자 결정 2026-07-24: 부모 off면 UI도 강제 off+disabled — 구 "표시만"
+    /// 모드 제거). 폴링·pill 셋/클리어 모두 이 게이트를 본다 — 부모를 끄면 5분 폴링이 서고,
+    /// 남은 advisory pill은 아래 정리 경로가 다음 틱에 걷어간다.
+    private var advisoryEffectivelyEnabled: Bool {
+        advisorySwitchEnabled && store.file.isAutoSwitchEnabled(.claude)
     }
     /// 임계값(%) — 기본 90. 설정 UI 범위 50~95(step 5). Int/Double 저장 모두 관대하게 읽는다.
     private var advisoryThreshold: Double {
@@ -776,10 +783,11 @@ final class AppState: ObservableObject {
             lastError = nil
         }
         let now = Date()
-        // 임계값 기능이 꺼져 있으면 남아있는 advisory를 매 틱 정리한다 — **가드 위**에서 도는
-        // 값싼 로컬 정리라 라이브 자격증명을 안 건드린다(로그인 플로우 감지와 경합 없음).
-        // 토글 off = 잔재 없음을 보장해, off인데 옛 advisory가 primary 복귀를 막는 일이 없게.
-        if !advisorySwitchEnabled { clearAdvisoriesIfFeatureOff() }
+        // 임계값 기능이 유효하지 않으면(토글 off 또는 부모 '자동 전환' off) 남아있는 advisory를
+        // 매 틱 정리한다 — **가드 위**에서 도는 값싼 로컬 정리라 라이브 자격증명을 안 건드린다
+        // (로그인 플로우 감지와 경합 없음). 잔재 없음을 보장해, 꺼져 있는데 옛 advisory가
+        // primary 복귀를 막거나 pill이 얼어붙는 일이 없게.
+        if !advisoryEffectivelyEnabled { clearAdvisoriesIfFeatureOff() }
         // 로그인 창이 열려 있는 동안은 reconcile/자동 전환이 LoginFlow의
         // 자격증명 변경 감지와 경합하지 않도록 전체를 건너뛴다.
         // Desktop 가이드 캡처 중에도 동일 — 자동 전환이 Desktop을 재실행하면
@@ -818,7 +826,7 @@ final class AppState: ObservableObject {
                 recomputeBadgeLive(now: now)    // fresh 스냅샷으로 confirmed 최종 판정
                 // 서킷 브레이커: 사용량 조회가 3연속 실패하면 배경 폴링을 멈춘다(네트워크
                 // 이상 방어 — 이상 중엔 미리 전환 자체가 무의미). 재개는 팝오버 열기/재시작.
-                if advisorySwitchEnabled,
+                if advisoryEffectivelyEnabled,
                    !UsagePollBreaker.isTripped(consecutiveFailures: consecutiveUsagePollFailures) {
                     await pollThreshold(now: now)
                 }
