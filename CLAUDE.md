@@ -162,6 +162,26 @@ Sources/MobiusApp/        SwiftUI 메뉴바 앱 + AppState + Views/ + LoginFlow 
 - ★ **인증 실패(401/revoked)는 rollout 로그에 안 남는다** — 웹소켓 연결 단계에서 실패해
   세션 파일 자체가 생성되지 않음(실측). 세션 로그 기반 재인증 감지는 이 에러 클래스에
   불가능 — 후속 설계는 다른 신호(전환 직후 프로브, exit code 등)가 필요.
+- ★ **비활성 codex 계정 게이지는 네트워크 GET으로 얻는다(B1, CodexUsageFetcher/Prober)**:
+  `GET https://chatgpt.com/backend-api/wham/usage` (헤더 `Authorization: Bearer
+  <tokens.access_token>`, `ChatGPT-Account-Id: <tokens.account_id>`, 세션 UA
+  `codex_cli_rs/...`를 httpAdditionalHeaders로). 응답 `rate_limit.primary_window/
+  secondary_window`(used_percent/limit_window_seconds/reset_at)를 CodexRateLimitStatus로
+  매핑, `additional_rate_limits[]`(limit_name 있음)은 모델 전용이라 제외. 게이지 전용 —
+  refresh/마킹/엔진 호출 없음, 저장 스냅샷 읽기 전용. 활성 계정은 세션 로그 경로 유지
+  (processCodexBatches 불변). Claude가 usage 엔드포인트로 비활성 계정을 보여주는 것과 대칭.
+- ★ **비활성 codex 토큰 자동 갱신(게이지 전용, CodexTokenRefresher)**: `POST
+  https://auth.openai.com/oauth/token`, JSON `{client_id:"app_EMoamEEZ73f0CkXaXp7hrann",
+  grant_type:"refresh_token", refresh_token, scope:"openid profile email offline_access"}`,
+  UA를 httpAdditionalHeaders로. client_id(=aud)·issuer(`https://auth.openai.com`, =iss)는
+  codex id_token JWT 클레임에서 추출(진실의 원천). 200→토큰 **회전**(refresh_token 회전 —
+  원자 저장 필수, 못 하면 brick), 401/400 `error.code=refresh_token_invalidated|
+  invalid_grant`→죽음(재로그인 필요, refresh로 복구 불가). **활성 계정은 절대 refresh
+  안 함**(실행 세션 클로버). 죽은 토큰은 게이지-only 방화벽(AutoSwitchEngine·persisted
+  needsReauth 미접촉, 긴 쿨다운(codexRefreshDeadUntil 백오프)만). 전환↔refresh는
+  `AccountStore.withCredentialLock`(UUID-keyed)이 **저장 상호배제**만 담당한다 — 전환↔회전
+  HTTP 창은 락이 아니라 **AppState 게이트**(비활성 게이지 refresh 시 활성 계정 fresh-read
+  제외 + 전환 진입 시 codexUsageTask 정지·완료대기)로 닫는다.
 
 ### macOS 26 (Tahoe) 환경
 - 메뉴바 아이콘은 Control Center가 호스팅 — CGWindowList의 layer/owner로 존재 확인이 어려움.
