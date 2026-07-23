@@ -5,7 +5,7 @@ import MobiusCore
 
 struct SettingsView: View {
     /// 하위 옵션 들여쓰기 폭(1단계당) — 부모 토글에 딸린 세부 설정을 오른쪽으로 밀어
-    /// 부모-자식 관계를 시각화한다(미리 전환·전환 기준 / 동기화 하위 항목 공용).
+    /// 부모-자식 관계를 시각화한다(동기화 하위 항목 공용).
     static let labsIndent: CGFloat = 16
     @EnvironmentObject var state: AppState
     // ★ 앱 실행 시 씬 그래프가 SettingsView()를 즉시 생성하는데, 이 @State가 init에서
@@ -175,12 +175,6 @@ struct SettingsView: View {
             Text(loc("한도가 차면 다음 계정으로 자동으로 이어집니다"))
                 .font(.caption).foregroundStyle(.secondary)
         }
-        // '미리 전환'은 자동 전환의 하위 옵션(언제 전환하나: 100% vs 임계값) — 들여쓰기로
-        // 종속을 구조로 보여준다. Claude 전용(Codex는 해당 기능 없음). 구 실험실에서 승격
-        // (2026-07-24, 키·기본값 불변 — 켜면 5분 폴링이 생기므로 여전히 옵트인).
-        if provider == .claude {
-            advisoryControls
-        }
         let accounts = state.file.accounts(of: provider)
         VStack(alignment: .leading, spacing: 6) {
             VStack(alignment: .leading, spacing: 0) {
@@ -223,6 +217,15 @@ struct SettingsView: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.04)))
+            // '미리 전환'은 자동 전환의 하위 옵션(언제 전환하나: 100% vs 임계값) — Claude 전용,
+            // 구 실험실에서 승격(2026-07-24, 키·기본값 불변 — 5분 폴링이 생기므로 여전히 옵트인).
+            // ★ 위치는 계정 박스 **아래** 전폭 행: '자동 전환 토글 → 계정 박스'는 원래 한
+            //   덩어리라 그 사이에 행을 끼우면 어디에도 소속 안 된 줄이 된다. 들여쓰기도 안
+            //   한다 — macOS 설정은 종속을 들여쓰기가 아니라 근접+disabled로 표현하고, 왼쪽
+            //   시작점이 어긋나면 위계가 아니라 '삐뚤어짐'으로 읽힌다(사용자 피드백 3회 반영).
+            if provider == .claude {
+                advisoryControls
+            }
             if provider == .codex {
                 Text(loc("터미널에서 `codex logout` 후 `codex login`으로 추가할 계정에 로그인하면, Mobius가 몇 초 안에 자동으로 등록합니다."))
                     .font(.caption).foregroundStyle(.secondary)
@@ -607,6 +610,13 @@ struct SettingsView: View {
     ///   오인하게 했다(사용자 피드백 2026-07-21).
     @ViewBuilder private var advisoryControls: some View {
         let autoOn = state.file.isAutoSwitchEnabled(.claude)
+        // ★ 최종형(사용자 피드백 3회, 2026-07-24): 기능명이 왼쪽(설정 행 스캔 문법 — 왼쪽은
+        //   항상 이름), 켜져 있을 때만 [90%▾] 픽커가 토글 옆에 인라인, 들여쓰기 없음. 임계값
+        //   의미('5시간 사용량이 이 비율에 이르면')는 ⓘ 팝오버가 설명한다. 구 문장형(픽커를
+        //   문장에 심기)은 행 왼쪽이 기능명이 아닌 문장 중간부터 시작돼 스캔이 어색했다.
+        // ★ Toggle("")+labelsHidden 금지 — 빈 라벨 토글은 AX role이 switch가 아니라
+        //   toggle button으로 잡히고 클릭에도 반응하지 않았다(실측). Desktop 토글과 같은
+        //   라벨-클로저형 Toggle로 구성 — 라벨 안 컨트롤(ⓘ·픽커)도 개별 클릭을 받는다.
         Toggle(isOn: Binding(
             get: { autoOn && advisorySwitchEnabled },
             set: { advisorySwitchEnabled = $0 })) {
@@ -614,29 +624,21 @@ struct SettingsView: View {
                 Text(loc("한도 차기 전 미리 전환"))
                 infoButton(
                     isPresented: $showAdvisoryInfo,
-                    when: loc("5시간 사용량이 '전환 기준'에 이르면"),
+                    when: loc("5시간 사용량이 설정한 비율에 이르면"),
                     does: loc("한도가 다 차기 전에 여유 있는 다음 계정으로 미리 전환해요"),
                     note: loc("꺼도 한도가 100% 차면 평소처럼 자동 전환돼요. 켜면 약 5분마다 사용량을 확인합니다."))
+                Spacer()
+                if autoOn, advisorySwitchEnabled {
+                    Picker("", selection: $advisoryThresholdPercent) {
+                        ForEach(Array(stride(from: 50, through: 95, by: 5)), id: \.self) { pct in
+                            Text("\(pct)%").tag(pct)
+                        }
+                    }
+                    .labelsHidden().fixedSize()
+                }
             }
         }
         .disabled(!autoOn)
-        .padding(.leading, Self.labsIndent)
-        if autoOn, advisorySwitchEnabled {
-            // '전환 기준'은 위 토글을 켰을 때만 나오는 하위 설정 → 부모(이미 1-depth)보다
-            // 한 단계 더 들여써서(2-depth) 부모-자식 관계를 시각화한다 — macOS 시스템
-            // 설정의 하위 옵션 방식이고, 동기화 하위 항목들과도 일관된다(labsIndent).
-            VStack(alignment: .leading, spacing: 3) {
-                Picker(loc("전환 기준"), selection: $advisoryThresholdPercent) {
-                    ForEach(Array(stride(from: 50, through: 95, by: 5)), id: \.self) { pct in
-                        Text("\(pct)%").tag(pct)
-                    }
-                }
-                Text(loc("5시간 사용량이 %d%%에 이르면 미리 전환해요.", advisoryThresholdPercent))
-                    .font(.caption).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            .padding(.leading, Self.labsIndent * 2)
-        }
     }
 
     /// Claude 실험 기능 — 멀티 Mac 동기화 (~/.claude 작업 데이터 미러).
