@@ -181,8 +181,11 @@ struct SettingsView: View {
         }
         // '미리 전환'은 자동 전환의 하위 옵션(언제 전환하나: 100% vs 임계값) — Claude 전용,
         // 구 실험실에서 승격(2026-07-24, 키·기본값 불변 — 5분 폴링이 생기므로 여전히 옵트인).
-        // 들여쓰기 없이 부모 바로 아래 — macOS 설정은 종속을 근접+disabled로 표현한다.
-        if provider == .claude {
+        // 부모 바로 아래 + 하위 뎁스(labsIndent) + 앞뒤 Divider, **부모를 켰을 때만 노출**
+        // (동기화 하위 항목과 같은 표시 규칙 — 사용자 확정 2026-07-24). 저장값은 보존되어
+        // 부모를 다시 켜면 이전 선택이 그대로 돌아온다.
+        if provider == .claude, state.file.isAutoSwitchEnabled(.claude) {
+            Divider()
             advisoryControls
         }
         Divider()
@@ -641,6 +644,10 @@ struct SettingsView: View {
             }
         }
         .disabled(!autoOn)
+        // 하위 뎁스 표현(사용자 확정): 자식이 캡션 없는 한 줄이라 이제 들여쓰기가 깔끔하게
+        // 읽힌다 — 실험실 동기화 하위 항목들과 같은 폭(labsIndent). 부모-자식 사이에
+        // Divider는 두지 않는다(구분선은 Desktop 토글 2형제처럼 '형제' 신호).
+        .padding(.leading, Self.labsIndent)
     }
 
     /// Claude 실험 기능 — 멀티 Mac 동기화 (~/.claude 작업 데이터 미러).

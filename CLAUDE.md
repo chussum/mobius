@@ -421,11 +421,14 @@ Sources/MobiusApp/        SwiftUI 메뉴바 앱 + AppState + Views/ + LoginFlow 
   ★ 같은 날 UX 확정(사용자 결정): **부모 '자동 전환'(Claude) off면 미리 전환도 강제 off 표시
   + disabled** — 구 "표시만" 모드(f22)와 주황 의존성 콜아웃 삭제. 저장값은 보존해 부모 재켬
   시 이전 선택 복귀. 동작 게이트는 AppState.advisoryEffectivelyEnabled(폴링·pill 정리 공용,
-  부모 off면 잔여 advisory pill도 다음 틱에 정리). 행 UI 최종형(반복 3회): **계정 박스 아래
-  전폭 행, 들여쓰기 없음** — "기능명 ⓘ … [90%▾ 켰을 때만] [토글]", Desktop 토글 행들과 같은
-  infoButton 패턴. 교훈 둘: ① 종속 설정은 macOS처럼 근접+disabled로 — 들여쓰기는 왼쪽
-  시작점만 어긋나게 해 위계가 아니라 '삐뚤어짐'으로 읽히고, '토글→계정 박스' 덩어리 사이에
-  행을 끼우면 소속 없는 줄이 된다. ② **`Toggle("", …)`+labelsHidden 금지** — AX role이
+  부모 off면 잔여 advisory pill도 다음 틱에 정리). 행 UI 최종형(반복 5회, 사용자 확정):
+  **자동 전환+캡션 ─Divider─ 미리 전환(하위 뎁스 labsIndent, 부모 켰을 때만 노출)
+  ─Divider─ 계정 박스**
+  — 행은 "기능명 ⓘ … [90%▾ 켰을 때만] [토글]", Desktop 토글 행들과 같은 infoButton 패턴.
+  교훈 둘: ① 컨트롤 행 사이에 데이터 박스가 끼면(자동 전환/박스/미리 전환 샌드위치) 소속
+  없는 줄이 된다 — 토글들은 붙이고 리스트는 구분선 아래 자기 구역으로. 들여쓰기는 자식이
+  **캡션 없는 한 줄일 때만** 깔끔하다(캡션 달린 토글 행을 들여쓰면 왼쪽 시작점이 어긋나
+  '삐뚤어짐'으로 읽힘 — 초기 반복의 실패 원인). ② **`Toggle("", …)`+labelsHidden 금지** — AX role이
   switch가 아닌 toggle button으로 잡히고 클릭에도 무반응(실측). 라벨-클로저형
   `Toggle(isOn:){ HStack{…} }`로 구성할 것(라벨 안 ⓘ·픽커도 개별 클릭을 받는다))**: 활성 Claude
   계정의 5시간 usage가 임계값(기본 90, 50~95 step 5)에 도달하면 **카드에만** 노랑 '한도 근접'
