@@ -421,9 +421,13 @@ Sources/MobiusApp/        SwiftUI 메뉴바 앱 + AppState + Views/ + LoginFlow 
   ★ 같은 날 UX 확정(사용자 결정): **부모 '자동 전환'(Claude) off면 미리 전환도 강제 off 표시
   + disabled** — 구 "표시만" 모드(f22)와 주황 의존성 콜아웃 삭제. 저장값은 보존해 부모 재켬
   시 이전 선택 복귀. 동작 게이트는 AppState.advisoryEffectivelyEnabled(폴링·pill 정리 공용,
-  부모 off면 잔여 advisory pill도 다음 틱에 정리). 행 UI는 캡션 없는 **한 줄 + ⓘ 팝오버**
-  (Desktop 토글과 같은 infoButton 패턴) — 캡션 달린 토글 행을 부모 아래 또 쌓으면 16pt
-  들여쓰기가 묻혀 형제처럼 읽힌다)**: 활성 Claude
+  부모 off면 잔여 advisory pill도 다음 틱에 정리). 행 UI 최종형(반복 3회): **계정 박스 아래
+  전폭 행, 들여쓰기 없음** — "기능명 ⓘ … [90%▾ 켰을 때만] [토글]", Desktop 토글 행들과 같은
+  infoButton 패턴. 교훈 둘: ① 종속 설정은 macOS처럼 근접+disabled로 — 들여쓰기는 왼쪽
+  시작점만 어긋나게 해 위계가 아니라 '삐뚤어짐'으로 읽히고, '토글→계정 박스' 덩어리 사이에
+  행을 끼우면 소속 없는 줄이 된다. ② **`Toggle("", …)`+labelsHidden 금지** — AX role이
+  switch가 아닌 toggle button으로 잡히고 클릭에도 무반응(실측). 라벨-클로저형
+  `Toggle(isOn:){ HStack{…} }`로 구성할 것(라벨 안 ⓘ·픽커도 개별 클릭을 받는다))**: 활성 Claude
   계정의 5시간 usage가 임계값(기본 90, 50~95 step 5)에 도달하면 **카드에만** 노랑 '한도 근접'
   pill을 띄우고(소진 아님 — isLimited/메뉴바/CLI는 이 신호를 절대 안 본다), 여유 있는 폴백이
   있으면 자동으로 미리 전환한다. 알림 문구는 소진 표현 금지("미리 전환했어요"). ★ **진실의

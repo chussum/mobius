@@ -168,6 +168,10 @@ struct SettingsView: View {
     /// 활성은 초록 점 + '사용 중'). 계정 추가 진입점: Claude는 로그인 플로우 버튼,
     /// Codex는 터미널 안내(adopt 방식).
     @ViewBuilder private func poolControls(_ provider: Provider) -> some View {
+        // ★ 구역 순서(사용자 확정 2026-07-24): [설정 구역: 자동 전환 + 미리 전환] ─Divider─
+        //   [데이터 구역: 계정 박스]. 두 토글을 붙여 종속을 근접으로 읽히게 하고, 계정
+        //   박스는 구분선 아래 자기 구역을 갖는다 — 컨트롤 사이에 데이터 박스가 끼는
+        //   샌드위치(자동 전환/박스/미리 전환)가 '소속 없는 줄' 어색함의 뿌리였다.
         VStack(alignment: .leading, spacing: 3) {
             Toggle(loc("자동 전환"), isOn: Binding(
                 get: { state.file.isAutoSwitchEnabled(provider) },
@@ -175,6 +179,13 @@ struct SettingsView: View {
             Text(loc("한도가 차면 다음 계정으로 자동으로 이어집니다"))
                 .font(.caption).foregroundStyle(.secondary)
         }
+        // '미리 전환'은 자동 전환의 하위 옵션(언제 전환하나: 100% vs 임계값) — Claude 전용,
+        // 구 실험실에서 승격(2026-07-24, 키·기본값 불변 — 5분 폴링이 생기므로 여전히 옵트인).
+        // 들여쓰기 없이 부모 바로 아래 — macOS 설정은 종속을 근접+disabled로 표현한다.
+        if provider == .claude {
+            advisoryControls
+        }
+        Divider()
         let accounts = state.file.accounts(of: provider)
         VStack(alignment: .leading, spacing: 6) {
             VStack(alignment: .leading, spacing: 0) {
@@ -217,15 +228,6 @@ struct SettingsView: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.04)))
-            // '미리 전환'은 자동 전환의 하위 옵션(언제 전환하나: 100% vs 임계값) — Claude 전용,
-            // 구 실험실에서 승격(2026-07-24, 키·기본값 불변 — 5분 폴링이 생기므로 여전히 옵트인).
-            // ★ 위치는 계정 박스 **아래** 전폭 행: '자동 전환 토글 → 계정 박스'는 원래 한
-            //   덩어리라 그 사이에 행을 끼우면 어디에도 소속 안 된 줄이 된다. 들여쓰기도 안
-            //   한다 — macOS 설정은 종속을 들여쓰기가 아니라 근접+disabled로 표현하고, 왼쪽
-            //   시작점이 어긋나면 위계가 아니라 '삐뚤어짐'으로 읽힌다(사용자 피드백 3회 반영).
-            if provider == .claude {
-                advisoryControls
-            }
             if provider == .codex {
                 Text(loc("터미널에서 `codex logout` 후 `codex login`으로 추가할 계정에 로그인하면, Mobius가 몇 초 안에 자동으로 등록합니다."))
                     .font(.caption).foregroundStyle(.secondary)
