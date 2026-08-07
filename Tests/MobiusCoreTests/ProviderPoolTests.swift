@@ -67,6 +67,21 @@ final class ProviderPoolTests: XCTestCase {
         XCTAssertNil(file.active(of: .codex))
     }
 
+    /// 팝오버 탭 노출의 근거 — 계정이 있는 풀만 센다. 빈 풀 탭을 숨기고(계정 0개인
+    /// 프로바이더는 고를 것이 없다) 풀이 하나뿐이면 탭 바 자체를 없애는 판단에 쓰인다.
+    func testProvidersWithAccountsListsOnlyNonEmptyPoolsInDeclarationOrder() {
+        XCTAssertEqual(AccountsFile(accounts: []).providersWithAccounts, [])
+        XCTAssertEqual(AccountsFile(accounts: [profile("c1", .claude)])
+            .providersWithAccounts, [.claude])
+        // Claude가 비어도 Codex만 잡힌다 (한쪽 풀만 쓰는 사용자)
+        XCTAssertEqual(AccountsFile(accounts: [profile("x1", .codex)])
+            .providersWithAccounts, [.codex])
+        // 계정이 섞인 순서로 들어와도 Provider.allCases 순서를 따른다 —
+        // 탭 순서가 계정 추가 순서에 따라 흔들리면 안 된다
+        XCTAssertEqual(AccountsFile(accounts: [profile("x1", .codex), profile("c1", .claude)])
+            .providersWithAccounts, Provider.allCases)
+    }
+
     // MARK: AccountStore — (provider, email) 매칭과 풀별 상태
 
     func makeStore() throws -> AccountStore {
