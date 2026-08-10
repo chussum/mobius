@@ -60,6 +60,23 @@ public enum UsageFetcherError: Error, Equatable {
 public enum UsageFetcher {
     public static let endpoint = URL(string: "https://api.anthropic.com/api/oauth/usage")!
 
+    /// ★ `URLSession.shared`를 쓰면 안 된다 — 공유 세션은 **디스크 URLCache**를 물고 있어
+    ///   요청이 직렬화되어 `~/Library/Caches/dev.chussum.mobius/Cache.db`에 저장되고,
+    ///   거기에 `Authorization: Bearer <액세스 토큰>` 헤더가 **평문으로 남는다**.
+    ///   실측 2026-08-10: `Cache.db-wal`에서 실제 액세스 토큰 13개 발견(파일 0644,
+    ///   디렉터리 0755). 그중 1개는 당시 유효한 토큰이었고, 나머지는 회전·전환으로
+    ///   밀려난 과거 계정 토큰들이었다.
+    ///   키체인은 접근 시 ACL 승인을 요구하지만 `~/Library/Caches`는 TCC 보호 대상이
+    ///   아니라, 같은 사용자로 실행되는 아무 프로세스나 승인 없이 읽어간다 —
+    ///   앱이 키체인으로 지키던 것을 캐시가 우회로로 흘리는 셈이다.
+    ///   → TokenRefresher·CodexUsageFetcher·CodexTokenRefresher와 동일하게
+    ///   ephemeral 세션을 쓴다(디스크에 아무것도 안 남음).
+    static let session: URLSession = {
+        let cfg = URLSessionConfiguration.ephemeral
+        cfg.urlCache = nil
+        return URLSession(configuration: cfg)
+    }()
+
     /// Claude Code 자격증명 blob(JSON)에서 access token 추출
     public static func accessToken(from keychainBlob: Data) -> String? {
         guard let obj = try? JSONSerialization.jsonObject(with: keychainBlob) as? [String: Any]
@@ -149,7 +166,7 @@ public enum UsageFetcher {
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         req.setValue("oauth-2025-04-20", forHTTPHeaderField: "anthropic-beta")
         req.timeoutInterval = 10
-        let (data, resp) = try await URLSession.shared.data(for: req)
+        let (data, resp) = try await session.data(for: req)
         guard let http = resp as? HTTPURLResponse else { return nil }
         if http.statusCode == 401 || http.statusCode == 403 {
             throw UsageFetcherError.unauthorized
