@@ -118,4 +118,20 @@ final class UsageFetcherTests: XCTestCase {
                        Date(timeIntervalSince1970: 1_783_785_648))
         XCTAssertNil(UsageFetcher.expiresAt(from: Data("{}".utf8)))
     }
+
+    /// usage 요청에는 `Authorization: Bearer <액세스 토큰>` 헤더가 실린다. 세션에 디스크
+    /// URLCache가 붙어 있으면 그 요청이 직렬화되어 `~/Library/Caches/<번들ID>/Cache.db`에
+    /// 저장되고 토큰이 평문으로 남는다(실측 2026-08-10: 액세스 토큰 13개, 파일 0644).
+    /// 이 테스트는 그 회귀를 막는다.
+    func testSessionKeepsNothingOnDisk() {
+        let cfg = UsageFetcher.session.configuration
+        XCTAssertNil(cfg.urlCache,
+                     "URLCache가 붙으면 Authorization 헤더가 디스크 Cache.db에 평문으로 남는다")
+        // ephemeral 세션의 쿠키 저장소는 nil이 아니라 **메모리 전용 인스턴스**다.
+        // 따라서 nil 여부가 아니라 공유 저장소와 다른지로 확인해야 한다.
+        XCTAssertFalse(cfg.httpCookieStorage === HTTPCookieStorage.shared,
+                       "공유 쿠키 저장소를 쓰면 디스크에 남는다")
+        // URLSession.shared는 디스크 캐시를 물고 있으므로 절대 쓰면 안 된다.
+        XCTAssertFalse(UsageFetcher.session === URLSession.shared)
+    }
 }
