@@ -215,6 +215,19 @@ Sources/MobiusApp/        SwiftUI 메뉴바 앱 + AppState + Views/ + LoginFlow 
   `apple-tool:`로 찍혀 유지되고, 파티션 밖인 Mobius 자신도 창 없이 접근한다 (실패 기록 12).
 - 파티션 리스트 실제 값 확인은 SecAccessCopyACLList의 `ACLAuthorizationPartitionID`
   ACL desc(hex plist)를 디코드하면 승인창 없이 볼 수 있다.
+- ★ **`security … -w` 읽기는 값에 비출력 바이트가 하나라도 있으면 원본이 아니라 소문자
+  16진수 문자열을 준다** (실측 2026-08-10: 개행·탭·0x80 이상 UTF-8 바이트 전부 해당 —
+  `{"email":"한글@x.com"}` → `7b22656d61696c223a22ed959ceab88040782e636f6d227d`).
+  그대로 반환하면 hex ASCII가 자격증명 blob이 되어 프로필에 스냅샷되고 다음 전환에서
+  Keychain·.credentials.json에 되쓰여 **라이브 로그인이 에러 없이 파괴된다**(실패 기록 1과
+  같은 클래스). MCP OAuth 등록의 서버 이름·URL에 비ASCII 한 글자만 섞여도 발동.
+  ★ **출력 모양만으로는 판별 불가** — 값이 진짜 ASCII `"deadbeef"`여도 `-w`는 똑같이
+  `deadbeef`를 준다. 모양으로 디코드하면 멀쩡한 평문이 이진값으로 손상된다. → `-w` 출력이
+  hex 모양일 때**만** `-g`로 되묻는다: stderr가 이진이면 `password: 0x7B22…`, 평문이면
+  `password: "deadbeef"`로 **0x 접두사 유무가 갈리는 게 유일한 확실한 신호**
+  (`readViaSecurityCLI` → `isHexShaped`/`binaryPasswordFromSecurityDump`).
+  흔한 경로(출력 가능한 JSON blob)는 hex 모양이 될 수 없어 확인 호출이 안 붙는다.
+  단일 고바이트면 인용 부분 없이 `password: 0xFF ` 로만 오므로 hex 토큰은 첫 비-hex에서 끊는다.
 
 ### Claude Desktop은 Squirrel(ShipIt) 자동업데이트 — 앱 종료 순간 번들 통째 교체
 - 업데이트가 스테이징되어 있으면 **Desktop이 종료되는 순간** ShipIt이
