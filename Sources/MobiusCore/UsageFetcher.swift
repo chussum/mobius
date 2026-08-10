@@ -77,6 +77,13 @@ public enum UsageFetcher {
         return URLSession(configuration: cfg)
     }()
 
+    /// HTTP 전송(주입식) — 기본값은 위 ephemeral 세션. OAuthTokenRefresher.transport와 같은 패턴.
+    /// ★ 이 이음매가 있어야 **fetch가 실제로 어느 경로로 나가는지**를 테스트가 관찰할 수 있다.
+    ///   `session` 속성만 검사하는 테스트는 호출부가 `URLSession.shared`로 되돌아가도
+    ///   (안 쓰이는 속성은 그대로 남으므로) 초록불이라 회귀를 못 잡는다.
+    public typealias Transport = @Sendable (URLRequest) async throws -> (Data, URLResponse)
+    public static let defaultTransport: Transport = { try await session.data(for: $0) }
+
     /// Claude Code 자격증명 blob(JSON)에서 access token 추출
     public static func accessToken(from keychainBlob: Data) -> String? {
         guard let obj = try? JSONSerialization.jsonObject(with: keychainBlob) as? [String: Any]
@@ -160,13 +167,14 @@ public enum UsageFetcher {
                              scopedLimits: scoped.isEmpty ? nil : scoped, fetchedAt: now)
     }
 
-    public static func fetch(keychainBlob: Data) async throws -> UsageSnapshot? {
+    public static func fetch(keychainBlob: Data,
+                             transport: Transport = defaultTransport) async throws -> UsageSnapshot? {
         guard let token = accessToken(from: keychainBlob) else { return nil }
         var req = URLRequest(url: endpoint)
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         req.setValue("oauth-2025-04-20", forHTTPHeaderField: "anthropic-beta")
         req.timeoutInterval = 10
-        let (data, resp) = try await session.data(for: req)
+        let (data, resp) = try await transport(req)
         guard let http = resp as? HTTPURLResponse else { return nil }
         if http.statusCode == 401 || http.statusCode == 403 {
             throw UsageFetcherError.unauthorized

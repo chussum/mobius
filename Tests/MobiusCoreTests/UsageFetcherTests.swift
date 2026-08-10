@@ -122,7 +122,9 @@ final class UsageFetcherTests: XCTestCase {
     /// usage 요청에는 `Authorization: Bearer <액세스 토큰>` 헤더가 실린다. 세션에 디스크
     /// URLCache가 붙어 있으면 그 요청이 직렬화되어 `~/Library/Caches/<번들ID>/Cache.db`에
     /// 저장되고 토큰이 평문으로 남는다(실측 2026-08-10: 액세스 토큰 13개, 파일 0644).
-    /// 이 테스트는 그 회귀를 막는다.
+    /// 여기서는 **기본 전송 경로가 물고 있는 세션**의 설정만 본다 — 이 검사만으로는
+    /// 회귀를 못 잡는다(호출부가 URLSession.shared로 돌아가도 이 속성은 그대로다).
+    /// 실제 방어는 아래 testFetchGoesThroughInjectedTransport.
     func testSessionKeepsNothingOnDisk() {
         let cfg = UsageFetcher.session.configuration
         XCTAssertNil(cfg.urlCache,
@@ -131,7 +133,36 @@ final class UsageFetcherTests: XCTestCase {
         // 따라서 nil 여부가 아니라 공유 저장소와 다른지로 확인해야 한다.
         XCTAssertFalse(cfg.httpCookieStorage === HTTPCookieStorage.shared,
                        "공유 쿠키 저장소를 쓰면 디스크에 남는다")
-        // URLSession.shared는 디스크 캐시를 물고 있으므로 절대 쓰면 안 된다.
-        XCTAssertFalse(UsageFetcher.session === URLSession.shared)
+    }
+
+    /// ★ 유출 회귀를 실제로 막는 테스트 — fetch가 **주입된 전송 경로로만** 나가는지 본다.
+    /// 누군가 호출부를 `URLSession.shared.data(for: req)`로 되돌리면(= 디스크 캐시에 토큰이
+    /// 다시 평문으로 남으면) 주입한 spy가 호출되지 않아 이 테스트가 빨간불이 된다.
+    /// 세션 속성만 보는 검사로는 잡히지 않던 구멍이다.
+    func testFetchGoesThroughInjectedTransport() async throws {
+        let calls = Spy()
+        let body = Data(#"{"five_hour":{"utilization":42}}"#.utf8)
+        let snap = try await UsageFetcher.fetch(
+            keychainBlob: Data(#"{"claudeAiOauth":{"accessToken":"tok-abc"}}"#.utf8),
+            transport: { req in
+                await calls.record(req)
+                let resp = HTTPURLResponse(url: UsageFetcher.endpoint, statusCode: 200,
+                                           httpVersion: nil, headerFields: nil)!
+                return (body, resp)
+            })
+
+        let seen = await calls.requests
+        XCTAssertEqual(seen.count, 1,
+                       "fetch가 주입 전송 경로를 안 탔다 — 호출부가 다른 세션을 직접 쓰고 있다")
+        // 이 요청이 캐시에 남으면 안 되는 이유 자체를 고정해 둔다.
+        XCTAssertEqual(seen.first?.value(forHTTPHeaderField: "Authorization"), "Bearer tok-abc")
+        XCTAssertEqual(seen.first?.url, UsageFetcher.endpoint)
+        XCTAssertEqual(snap?.fiveHourPercent, 42)
+    }
+
+    /// 주입 전송 경로가 받은 요청을 모으는 액터(동시성 안전).
+    private actor Spy {
+        var requests: [URLRequest] = []
+        func record(_ req: URLRequest) { requests.append(req) }
     }
 }

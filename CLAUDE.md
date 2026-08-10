@@ -367,6 +367,26 @@ Sources/MobiusApp/        SwiftUI 메뉴바 앱 + AppState + Views/ + LoginFlow 
     (3) UserDefaults 게이트는 `-키 값` 실행 인자(NSArgumentDomain)로 영구 설정 오염 없이
     프로세스별 오버라이드해 테스트할 수 있다.
 
+18. **`URLSession.shared`가 Authorization 헤더를 디스크 캐시에 평문으로 흘림 (PR #12)** —
+    공유 세션은 **디스크 URLCache**를 물고 있어 요청/응답이 직렬화되어
+    `~/Library/Caches/dev.chussum.mobius/Cache.db`에 저장되고, 거기에
+    `Authorization: Bearer <액세스 토큰>`이 평문으로 남는다. 실측 2026-08-10:
+    `Cache.db-wal`에서 액세스 토큰 13개 발견(파일 0644, 디렉터리 0755 — 앱 비밀 스냅샷의
+    0600보다 느슨해 같은 Mac의 **다른 로컬 사용자도 읽는다**). 키체인은 ACL 승인을
+    요구하는데 `~/Library/Caches`는 TCC 보호 밖이라, 앱이 키체인으로 지키던 것을 캐시가
+    우회로로 흘리는 셈. → **자격증명이 실리는 요청은 전부 ephemeral 세션**
+    (UsageFetcher.session / TokenRefresher.uaSession / CodexUsageFetcher / CodexTokenRefresher).
+    ★ **다음 재발 후보는 `UpdateChecker.fetchLatest`** — 지금은 토큰을 안 실어 안전하지만
+    `URLSession.shared`를 쓰고 있어, GitHub rate limit 때문에 토큰을 붙이는 날 그대로 재현된다.
+    피해 범위 평가(과잉 대응 방지): 이 헤더에 실리는 건 **액세스 토큰뿐이고 수명 ≈1시간**
+    이라 발견된 13개는 곧 죽은 문자열이 된다. 장기 위험한 **리프레시 토큰은 POST 본문**
+    으로 가고 그 경로는 원래 ephemeral이었다 → 이미 새어나간 캐시의 사후 삭제는 불필요.
+    교훈: (1) 자격증명 실린 요청에 `URLSession.shared`는 금지 — 새 HTTP 호출부를 추가할 때
+    세션부터 정하라. (2) **"세션 속성이 올바른가"를 보는 테스트는 회귀를 못 막는다** —
+    호출부가 다른 세션으로 되돌아가도 안 쓰이는 속성은 그대로 남아 초록불이다. 전송 경로를
+    주입(`UsageFetcher.Transport` / `OAuthTokenRefresher.transport`)하고 **fetch가 그 경로를
+    실제로 탔는지**를 단언할 것(호출부를 되돌려 빨간불이 되는지 실제로 확인하고 넣었다).
+
 ## QA / 진행 상황
 
 - `docs/qa/m1-checklist.md` 수동 QA: 2·3·6·7·9·10 완료(2026-07-11). 남은 항목: 1·4·5·8.
