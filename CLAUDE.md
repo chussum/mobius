@@ -541,6 +541,14 @@ Sources/MobiusApp/        SwiftUI 메뉴바 앱 + AppState + Views/ + LoginFlow 
   `AccountCardView.estimatedHeight`는 첫 프레임 초기값으로만 쓴다 — scrollDisabled List라
   과소추정이 잘림으로 이어지던 클래스를 제거(리뷰 반영). CLI heal은 변경 명령
   (switch/capture/auto)에서만 실행(list/status는 스킵 — 리뷰 반영).
+  ★ **계정이 있는 풀이 하나뿐이면 탭 바도 섹션 헤더도 없다(2026-08-15, PR #9 후속)** —
+  탭은 고를 것이 없고 풀 이름 줄은 구분할 대상이 없어 군더더기다(사용자 피드백). 그 풀의
+  자동 전환 토글만 **맨 위 타이틀 줄 오른쪽**으로 올라간다(`headerToggleProvider`가
+  `tab.provider ?? 유일한 풀`을 반환 — Codex 단독이면 "Codex CLI 자동 전환"). 토글은
+  늘 한 곳에만: 풀이 둘 이상인 전체 탭에서만 섹션 헤더의 미니 토글이 담당한다.
+  계정이 0개면 이 분기 전에 온보딩 화면으로 빠져 탭·토글 모두 없다(기존 동작).
+  PR #9의 "탭 자리에 섹션 헤더를 남겨 레이아웃 유지" 규칙은 이 변경으로 폐기 —
+  줄이 사라져 팝오버가 그만큼 짧아지는 게 의도다.
 - **설정 UI 재구성 + 자동 전환 풀별 분리(2026-07-12,
   `docs/design/settings-ui-restructure-prep.md` R1~R6 구현)**: autoSwitchEnabled(전역) →
   `autoSwitchByProvider`(풀별, 구 키는 디코드 시 양쪽 풀 적용 + encode 시 Claude 값 병행

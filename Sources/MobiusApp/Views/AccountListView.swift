@@ -80,15 +80,13 @@ struct AccountListView: View {
                 if state.file.accounts.isEmpty {
                     emptyView
                 } else {
-                    // ★ 이 줄은 항상 존재한다 — 풀이 여럿이면 탭 바, 하나뿐이면 그 자리에
-                    // 섹션 헤더. 탭 바를 그냥 없애면 아래 카드가 위로 밀려 팝오버 레이아웃이
-                    // 흔들린다(사용자 피드백). 풀이 하나뿐일 때 탭은 고를 것이 없지만
-                    // "지금 어느 풀을 보고 있는가 + 그 풀의 자동 전환" 정보는 여전히 유효하므로,
-                    // 전체 탭이 쓰는 섹션 헤더를 그대로 재사용한다(새 UI 어휘 없음).
+                    // 풀이 여럿일 때만 탭 바. 풀이 하나뿐이면 이 줄 자체가 사라지고
+                    // (고를 탭도, 구분할 풀도 없다) 그 풀의 자동 전환 토글은 맨 위
+                    // 타이틀 줄로 올라간다(headerToggleProvider) — 화면에서 가장 위,
+                    // 가장 눈에 띄는 자리. 한때 이 자리에 섹션 헤더를 대신 그렸으나
+                    // 풀 이름 한 줄이 군더더기라는 피드백으로 걷어냈다.
                     if !visibleTabs.isEmpty {
                         tabBar
-                    } else if let only = providersWithAccounts.first {
-                        sectionHeader(only)
                     }
                     cards
                 }
@@ -117,8 +115,8 @@ struct AccountListView: View {
             Text("Mobius").font(.system(size: 14, weight: .bold, design: .rounded))
             Text(loc("뫼비우스")).font(.system(size: 10)).foregroundStyle(.tertiary)
             Spacer()
-            // 풀 탭에서 그 풀의 자동 전환 토글 — 구 전역 토글과 같은 자리라 익숙하고,
-            // 탭 바가 한 줄을 온전히 쓸 수 있다(100% 폭). 전체 탭이거나 풀이 하나뿐이면
+            // 풀 탭 / 단일 풀에서 그 풀의 자동 전환 토글 — 구 전역 토글과 같은 자리라
+            // 익숙하고, 탭 바가 한 줄을 온전히 쓸 수 있다(100% 폭). 전체 탭에서만
             // 각 섹션 헤더의 미니 토글이 담당한다(sectionHeader) — 토글은 늘 한 곳에만.
             if let provider = headerToggleProvider {
                 autoSwitchToggle(provider)
@@ -140,10 +138,15 @@ struct AccountListView: View {
 
     private var providersWithAccounts: [Provider] { state.file.providersWithAccounts }
 
-    /// 헤더 오른쪽 토글이 담당할 풀 — 풀 탭일 때만 그 풀. 전체 탭이면 nil이고, 풀이
-    /// 하나뿐일 때도 nil이다(그때는 탭 바 자리의 섹션 헤더가 토글을 들고 있다).
-    /// 두 자리에 동시에 뜨면 같은 바인딩이 중복 노출된다 — 늘 한 곳에만.
-    private var headerToggleProvider: Provider? { tab.provider }
+    /// 헤더 오른쪽 토글이 담당할 풀 — 풀 탭이면 그 풀, **계정이 있는 풀이 하나뿐이면
+    /// 그 풀**(탭 바도 섹션 헤더도 없으므로 토글이 갈 곳은 여기뿐이다). 전체 탭에서
+    /// 풀이 여럿일 때만 nil이고 그때는 섹션 헤더의 미니 토글이 담당한다 —
+    /// 두 자리에 동시에 뜨면 같은 바인딩이 중복 노출된다. 늘 한 곳에만.
+    private var headerToggleProvider: Provider? {
+        if let provider = tab.provider { return provider }
+        let pools = providersWithAccounts
+        return pools.count == 1 ? pools.first : nil
+    }
 
     // MARK: 프로바이더 탭 바 — 100% 폭, 노출 탭 수만큼 균등 분할
     // (자동 전환 토글은 풀 탭이면 헤더 오른쪽, 아니면 섹션 헤더)
@@ -153,9 +156,9 @@ struct AccountListView: View {
     }
 
     /// 노출할 탭 — 계정이 있는 풀만. 풀이 하나뿐이면 **빈 배열**이다('전체' 탭과 그 풀 탭이
-    /// 같은 화면이라 고를 것이 없다). 그때 `body`는 이 자리에 `sectionHeader`를 대신 그리고,
-    /// `tab`이 `.all`로 읽히므로 `cards`의 '전체' 브랜치가 섹션 헤더 없이 그 풀만 그린다
-    /// (풀이 하나면 `cards`는 헤더를 안 그리므로 중복되지 않는다).
+    /// 같은 화면이라 고를 것이 없다). 그때 `body`는 이 줄을 통째로 생략하고 자동 전환
+    /// 토글만 맨 위 헤더로 올린다. `tab`은 `.all`로 읽히므로 `cards`의 '전체' 브랜치가
+    /// 그 풀만 그리는데, 풀이 하나면 섹션 헤더를 안 그리므로 풀 이름 줄도 사라진다.
     /// `providersWithAccounts`에서 파생되므로 프로바이더가 늘어도 자동으로 맞다.
     private var visibleTabs: [ProviderTab] {
         let pools = providersWithAccounts
@@ -194,8 +197,8 @@ struct AccountListView: View {
     /// 맨글자 하나만 떠 있으면 길 잃은 텍스트처럼 보여서(사용자 피드백) 디바이더로
     /// "여기부터 이 풀"임을 고정하고, 풀별 자동 전환 상태가 보이고 조작 가능하게 한다
     /// (풀 탭 헤더 토글과 짝 — 사각지대 제거).
-    /// 두 자리에서 쓰인다: (1) 전체 탭의 풀 섹션마다, (2) 풀이 하나뿐일 때 탭 바 자리
-    /// (탭이 사라져도 이 줄이 남아 아래 카드 위치가 흔들리지 않는다).
+    /// **전체 탭에서 풀이 둘 이상일 때만** 쓰인다 — 풀이 하나뿐이면 구분할 대상이 없어
+    /// 이 줄 없이 카드가 바로 오고, 토글은 맨 위 헤더로 간다(headerToggleProvider).
     private func sectionHeader(_ provider: Provider) -> some View {
         HStack(spacing: 8) {
             Text(provider.displayName.uppercased())
