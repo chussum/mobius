@@ -284,12 +284,17 @@ public final class InMemoryKeychain: KeychainClient, @unchecked Sendable {
     /// 이 service로의 **첫 매칭 write 1회만** 실패시킨다 (매칭 시 소모되어 nil로 초기화).
     /// 1회 소모형이라 같은 service로의 후속 write(예: 롤백)는 통과한다.
     public var failWritesForService: String?
+    /// service별 read 호출 횟수 (테스트 관측용). 실제 Keychain 읽기는 승인창·subprocess
+    /// 비용이 있어 "정말 필요할 때만 읽는다"가 규율이므로(실패 기록 3·3b), 그 규율을
+    /// 증상이 아니라 **호출 여부로 직접** 단언할 수 있게 계측한다(실패 기록 4b의 교훈).
+    public private(set) var readsByService: [String: Int] = [:]
 
     public init() {}
     private func key(_ s: String, _ a: String) -> String { s + "\u{0}" + a }
 
     public func read(service: String, account: String) throws -> Data? {
         lock.lock(); defer { lock.unlock() }
+        readsByService[service, default: 0] += 1
         return store[key(service, account)]
     }
 

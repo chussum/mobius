@@ -168,6 +168,26 @@ final class SwitcherTests: XCTestCase {
         XCTAssertFalse(reauthFlag(work.id))
     }
 
+    func testLiveSaveSkipsPreviousSnapshotReadWhenNotFlagged() async throws {
+        // 실패 기록 3b: 값싼 조건을 먼저. 딱지가 없는 정상 계정(대다수)은 이전 스냅샷을
+        // 읽을 이유가 없다 — 비밀 파일이 없으면 secretData가 구버전 Keychain 항목까지
+        // 찾아보므로(security subprocess), 조건 없이 읽으면 5분마다 그 비용을 낸다.
+        let secretService = AccountStore.secretService(for: personal.id)
+        try FileManager.default.removeItem(at: env.secretFile(for: personal.id))
+        try io.writeLiveSnapshot(oauthSnap(email: "p@x.com", access: "A1", refresh: "R1"))
+
+        var wrote = await switcher.refreshActiveSnapshotIfStable()
+        XCTAssertTrue(wrote)
+        XCTAssertNil(kc.readsByService[secretService], "딱지가 없으면 이전 스냅샷을 읽지 않는다")
+
+        // 딱지가 붙으면 그때만 읽는다 — 해제 판정에 이전 토큰이 필요하므로.
+        try store.setNeedsReauth(personal.id, true)
+        try io.writeLiveSnapshot(oauthSnap(email: "p@x.com", access: "A2", refresh: "R2"))
+        wrote = await switcher.refreshActiveSnapshotIfStable()
+        XCTAssertTrue(wrote)
+        XCTAssertFalse(reauthFlag(personal.id))
+    }
+
     func testResaveOnSwitchClearsReauthOfOutgoingAccount() async throws {
         // 전환 직전 되저장 경로 — 떠나는 계정의 라이브 토큰이 그새 회전했다면 그것도 증거다.
         try io.writeLiveSnapshot(oauthSnap(email: "p@x.com", access: "A0", refresh: "R0"))

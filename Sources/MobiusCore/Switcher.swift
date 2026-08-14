@@ -94,10 +94,15 @@ public final class Switcher: @unchecked Sendable {
     /// needsReauth를 소진과 동급으로 보기 때문에 멀쩡한 활성 계정에서 계속 밀려난다 (이슈 #14).
     /// 여기는 **네트워크 0**이고 5분마다 어차피 도는 라이브싱크에 얹히므로, 게이지를 꺼도
     /// "끄면 폴링 0" 계약을 지키면서 복구가 자동으로 잡힌다.
+    /// ★ 순서 주의(실패 기록 3b): **값싼 플래그 검사를 먼저** 하고 이전 스냅샷 읽기는 정말
+    ///   필요할 때만 한다. `secretData`는 비밀 파일이 없으면 구버전 Keychain 항목까지
+    ///   찾아보므로(= `security` subprocess), 조건 없이 읽으면 딱지가 없는 정상 계정도
+    ///   5분마다 그 비용을 낸다. 딱지가 붙어 있는 경우는 드물다 — 비싼 쪽을 뒤로.
     private func saveLiveSecret(_ data: Data, for id: UUID) throws {
-        let previous = try? store.secretData(for: id)
+        let flagged = store.file.accounts.first(where: { $0.id == id })?.needsReauth == true
+        let previous = flagged ? try? store.secretData(for: id) : nil
         try store.setSecretData(data, for: id)
-        guard store.file.accounts.first(where: { $0.id == id })?.needsReauth == true,
+        guard flagged,
               ReauthClearance.refreshTokenRotated(previous: previous, next: data) else { return }
         // 저장 실패는 삼킨다 — secret 저장(위)은 이미 성공했고, 딱지는 다음 회전에서 다시
         // 내려간다. 호출자의 신선도 계약(아래 refreshActiveSnapshotIfStable)은 secret 쓰기의
