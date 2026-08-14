@@ -79,8 +79,30 @@ public final class Switcher: @unchecked Sendable {
                   $0.provider == provider && $0.emailAddress == email
               })
         else { return nil }
-        try store.setSecretData(live, for: profile.id)
+        try saveLiveSecret(live, for: profile.id)
         return profile.id
+    }
+
+    /// 라이브 자격증명을 프로필 스냅샷으로 저장한다. refresh 토큰이 **다른 값으로 교체**됐으면
+    /// `needsReauth` 딱지도 함께 내린다 (판정 근거는 `ReauthClearance` 참조).
+    ///
+    /// 이 자리가 필요한 이유: 딱지를 자동으로 내리는 경로가 **usage 200 하나뿐**이었고
+    /// (`AppState.refreshUsageIfStale`), 그 함수는 '사용량 게이지 표시'(showUsageGauges)가
+    /// 꺼져 있으면 통째로 조기 반환한다. 반대로 refresh를 시도하는 모든 진입점은 스스로를
+    /// `!needsReauth`로 필터링하므로, 게이지를 끈 사용자에게 딱지는 **일방향 래치**가 됐다 —
+    /// CLI에서 재로그인해 실제로 복구해도 딱지가 남고, `AccountProfile.autoSwitchMayLeave`가
+    /// needsReauth를 소진과 동급으로 보기 때문에 멀쩡한 활성 계정에서 계속 밀려난다 (이슈 #14).
+    /// 여기는 **네트워크 0**이고 5분마다 어차피 도는 라이브싱크에 얹히므로, 게이지를 꺼도
+    /// "끄면 폴링 0" 계약을 지키면서 복구가 자동으로 잡힌다.
+    private func saveLiveSecret(_ data: Data, for id: UUID) throws {
+        let previous = try? store.secretData(for: id)
+        try store.setSecretData(data, for: id)
+        guard store.file.accounts.first(where: { $0.id == id })?.needsReauth == true,
+              ReauthClearance.refreshTokenRotated(previous: previous, next: data) else { return }
+        // 저장 실패는 삼킨다 — secret 저장(위)은 이미 성공했고, 딱지는 다음 회전에서 다시
+        // 내려간다. 호출자의 신선도 계약(아래 refreshActiveSnapshotIfStable)은 secret 쓰기의
+        // 성패만을 뜻하므로 여기서 false로 뒤집으면 오히려 거짓말이 된다.
+        try? store.setNeedsReauth(id, false)
     }
 
     /// 활성 계정의 스냅샷을 라이브(claude가 갱신하는 최신 토큰)와 동기화한다.
@@ -108,7 +130,7 @@ public final class Switcher: @unchecked Sendable {
         guard let (data, stableEmail) = await io.readStableLiveSecretData(),
               stableEmail == email else { return false }
         do {
-            try store.setSecretData(data, for: profile.id)
+            try saveLiveSecret(data, for: profile.id)
             return true
         } catch {
             return false // 디스크 실패 등 — 신선하다고 보고하면 안 된다 (위 계약 참조)
@@ -208,7 +230,7 @@ public final class Switcher: @unchecked Sendable {
         // 실제 변화가 있을 때만(드묾) 비밀+이메일 두 번 읽어 일치 확인 후 저장.
         guard let (live, stableEmail) = await io.readStableLiveSecretData(),
               stableEmail == email else { return }
-        try store.setSecretData(live, for: profile.id)
+        try saveLiveSecret(live, for: profile.id)
         if !activeUnchanged {
             try store.setActive(profile.id)
             // 외부(사용자) 로그인으로 활성이 바뀐 것 — 자동 전환 상태가 아니므로

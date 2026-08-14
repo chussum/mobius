@@ -399,6 +399,26 @@ Sources/MobiusApp/        SwiftUI 메뉴바 앱 + AppState + Views/ + LoginFlow 
     호출부가 다른 세션으로 되돌아가도 안 쓰이는 속성은 그대로 남아 초록불이다. 전송 경로를
     주입(`UsageFetcher.Transport` / `OAuthTokenRefresher.transport`)하고 **fetch가 그 경로를
     실제로 탔는지**를 단언할 것(호출부를 되돌려 빨간불이 되는지 실제로 확인하고 넣었다).
+19. **상태를 켜는 경로와 끄는 경로가 다른 게이트 아래 있어 딱지가 일방향 래치가 됨 (이슈 #14)** —
+    `needsReauth`를 자동으로 **켜는** 경로는 여럿(폴백 refresh 결과, usage 401, 로컬 검사)인데
+    자동으로 **끄는** 경로는 `refreshUsageIfStale`의 usage 200 하나뿐이었고, 그 함수는 표시용
+    설정인 **'사용량 게이지 표시'(showUsageGauges)가 꺼지면 통째로 조기 반환**한다. 게다가 refresh를
+    시도하는 진입점은 **전부 자기를 `!needsReauth`로 필터링**한다(폴백 스윕·로컬 검증·후보 프로브·
+    임계값 폴) → 한 번 켜지면 스스로 못 꺼진다. 사용자가 CLI에서 재로그인해 실제로 복구해도 딱지가
+    남고, `autoSwitchMayLeave`가 needsReauth를 **소진과 동급**으로 보므로 엔진이 멀쩡한 활성 계정을
+    계속 밀어낸다. 사용자에게 보이는 증상은 "딱지"가 아니라 **"멀쩡한 계정이 있는데 전환이 안 됨"**
+    (Linux 포팅본 실측 제보 — 원인은 달랐지만 증상 클래스가 같다). → 라이브 스냅샷 저장 시
+    **refresh 토큰이 다른 값으로 교체됐으면** 딱지를 내린다(`ReauthClearance.refreshTokenRotated`,
+    `Switcher.saveLiveSecret`). 네트워크 0이고 5분 라이브싱크에 얹히므로 "게이지 끄면 폴링 0"이 유지된다.
+    ★ **"저장 바이트가 바뀌면 해제"로 넓히면 더 나쁜 회귀** — `refreshActiveSnapshotIfStable`이
+    활성 계정 스냅샷을 5분마다 **무조건** 되저장하므로 죽은 계정도 같은 죽은 토큰이 계속 저장된다
+    → 딱지가 5분 이상 못 버티고 엔진이 죽은 계정을 정상 후보로 취급한다(회귀 테스트로 못 박음:
+    `testRefreshActiveSnapshotKeepsReauthWhenTokenUnchanged`). 회전만이 살아있다는 증거다.
+    교훈: (1) **불리언 상태를 켜는 조건과 끄는 조건은 같은 게이트 아래 두라** — 해제만 표시용
+    토글 뒤에 숨으면 값이 영구 고착된다. (2) 진입점마다 `!flag` 필터를 다는 순간 그 flag는
+    스스로 못 풀리므로, 그 flag를 끄는 경로를 **필터 밖**에 반드시 하나 만들어라.
+    (3) 저장 secret은 raw blob이 아니라 `CredentialsSnapshot` JSON이다 — 한 겹 안 벗기고
+    `CredentialBlob`에 넘기면 항상 nil이라 규칙이 초록불인 채로 조용히 무력해진다(실제로 밟았다).
 
 ## QA / 진행 상황
 
