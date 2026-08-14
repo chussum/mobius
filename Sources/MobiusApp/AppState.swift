@@ -775,7 +775,24 @@ final class AppState: ObservableObject {
 
     // MARK: 주기 처리
 
+    /// 틱 재진입 가드 — @MainActor 전용 필드라 별도 동기화가 필요 없다(설정~첫 await 사이에
+    /// 다른 틱이 끼어들 수 없다).
+    private var tickInFlight = false
+
     func tick() async {
+        // ★ 앞 틱이 끝나기 전에는 새 틱을 돌리지 않는다 (이슈 #15).
+        // 3초 타이머(:289)는 이전 틱의 완료를 확인하지 않고 매번 새 Task를 만들고, tick()에는
+        // await 지점이 여럿이라 틱들이 서로 끼어들며 **무한정 쌓인다**. 쌓인 틱은 각자 세션 로그
+        // 스캔을 하나씩 더 띄우고, 그 스캔들은 워처의 스캔 락에 직렬화되므로 대기열이 영영 줄지
+        // 않는다 — 스캔이 틱 간격을 한 번 넘기는 순간 스스로 못 빠져나오는 되먹임이 된다
+        // (실측 제보: 2일 11시간 동안 CPU 336분을 태우며 UI 정지).
+        // 워처 락 분리(SessionLogWatcher)만으로 메인 스레드 정지는 막히지만, 이 가드가 없으면
+        // 스캔이 겹쳐 CPU를 계속 태운다. 두 수정은 각각 다른 증상을 막으므로 함께 둔다.
+        // 건너뛴 틱은 유실이 아니다 — 내부 작업은 전부 "마지막 실행 시각" 기준 게이트라
+        // 다음 틱에서 이어서 처리된다.
+        guard !tickInFlight else { return }
+        tickInFlight = true
+        defer { tickInFlight = false }
         checkForUpdates() // 내부에서 24시간 게이트 — 실제 조회는 하루 1회
         syncNow()         // 내부에서 15분 게이트 — 켜져 있을 때만 동작
         // 오래된 푸터 에러 자동 소거 (TTL 5분)
@@ -850,7 +867,13 @@ final class AppState: ObservableObject {
         }
 
         // 로그 스캔은 메인 액터 밖에서 — Codex 세션 루트는 파일이 수만 개라
-        // 열거+stat(실측 ~0.1s)가 UI를 막지 않게 한다. 워처는 자체 락으로 안전.
+        // 열거+stat(실측 ~0.1s)가 UI를 막지 않게 한다.
+        // ★ [정정, 이슈 #15] 예전 주석은 "워처는 자체 락으로 안전"이라고 적혀 있었는데 정확히
+        // 반대였다. 워처가 **자체 락을 갖고 있기 때문에** 메인 액터에서 그 접근자
+        // (lastActivity/trackedFiles)를 만지면 진행 중인 스캔이 끝날 때까지 메인 스레드가
+        // 동기 블록된다 — 백그라운드로 옮겼다는 사실이 안전을 뜻하지 않는다. 공유된 락이
+        // 두 경로를 도로 붙인다. 지금은 그 두 접근자가 스캔 락과 분리된 경량 락을 쓰므로
+        // 안전하지만, **워처에 새 접근자를 추가할 때 스캔 락을 잡게 하지 말 것.**
         let claudeWatcher = watcher, codexWatcher = self.codexWatcher
         let (claudeHits, codexBatches) = await Task.detached(priority: .utility) {
             (claudeWatcher.scan(now: now), codexWatcher.scanBatches(now: now))

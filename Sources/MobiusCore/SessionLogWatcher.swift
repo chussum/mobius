@@ -39,8 +39,21 @@ public final class SessionLogWatcher<Event: Sendable>: @unchecked Sendable {
     private var offsets: [String: UInt64] = [:]   // 파일 경로 → 읽은 위치
     private var primed = false                    // 첫 스캔 여부 — parseFromStart의 프라이밍 판정
                                                   // + recentDirs 프루닝 게이트(첫 스캔은 전수 시딩)
-    private var lastActivityAt: Date?             // 스캔에서 본 후보 파일 mtime의 최댓값
+    /// 스캔 상태(offsets/primed) 전용 락. **scanBatches가 스캔 전 구간에 걸쳐 쥔다** —
+    /// 열거·stat·파일 읽기·파싱이 전부 이 안에 있으므로 보유 시간이 로그 트리 크기에 비례해
+    /// 얼마든지 길어진다. 따라서 **호출측이 동기적으로 기다려도 되는 락이 아니다.**
     private let lock = NSLock()
+
+    /// 외부 노출 값(lastActivity/trackedFiles) 전용 경량 락 — 필드 대입 순간만 잡는다.
+    /// ★ 스캔 락과 반드시 분리한다 (이슈 #15): 두 값을 스캔 락으로 지키면 접근자가
+    /// 진행 중인 스캔이 끝나기를 기다리게 되고, 그 접근자를 메인 액터에서 부르는 순간
+    /// **메인 스레드가 통째로 블록된다**(await 양보가 아니라 pthread 뮤텍스 동기 대기).
+    /// 게다가 스캔은 `.utility`(효율 코어)에서 돌고 NSLock은 우선순위 상속을 하지 않아,
+    /// UI 스레드가 느린 코어의 저우선 작업을 밀어주지도 못한 채 기다린다 =
+    /// 세션 로그가 큰 환경에서 앱이 영구 정지한다(실측: 4.3GB/5,690개, 재시작 6분 후).
+    private let observableLock = NSLock()
+    private var lastActivityAt: Date?             // 스캔에서 본 후보 파일 mtime의 최댓값
+    private var trackedSnapshot: Set<String> = [] // 직전 스캔 완료 시점의 offsets 키 스냅샷
     /// 이 시간 안에 수정된 파일만 본다
     public var recentWindow: TimeInterval = 600
 
@@ -62,6 +75,10 @@ public final class SessionLogWatcher<Event: Sendable>: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         var batches: [Batch] = []
         let fm = FileManager.default
+        // lastActivityAt은 루프 안에서 경량 락으로 게시한다. 여기서 한 번만 읽어 로컬로 누적하면
+        // 매 후보 파일마다 락을 잡지 않아도 되고(스캔 락이 동시 스캔을 막으므로 이 값을 쓰는
+        // 주체는 항상 하나뿐 = 로컬 누적이 원본과 동치), 게시는 최댓값이 실제로 오를 때만 한다.
+        var observedActivity = observableLock.withLock { lastActivityAt } ?? .distantPast
 
         // 후보 파일 수집.
         // recentDirs 주입 시(Codex, 날짜 파티션): 최근 창의 폴더만 열거해 수만 파일 전수 walk를
@@ -98,7 +115,13 @@ public final class SessionLogWatcher<Event: Sendable>: @unchecked Sendable {
             guard let en = fm.enumerator(at: root,
                                          includingPropertiesForKeys: [.contentModificationDateKey])
             else { return [] }
-            candidates = en.compactMap { $0 as? URL }.filter { $0.pathExtension == "jsonl" }
+            // ★ 열거는 스트리밍으로 거른다 — `compactMap { $0 as? URL }.filter { … }`는 디렉토리를
+            // 포함한 **전체 엔트리**를 배열로 물질화한 뒤 다시 거르는 2패스라, 큰 트리에서 거대
+            // 배열의 할당·해제가 스캔 시간을 지배한다(이슈 #15 샘플: _ContiguousArrayStorage
+            // __deallocating_deinit이 최다 프레임). 위 recentDirs 분기와 같은 형태로 통일.
+            var urls: [URL] = []
+            for case let url as URL in en where url.pathExtension == "jsonl" { urls.append(url) }
+            candidates = urls
         }
 
         for url in candidates {
@@ -109,7 +132,10 @@ public final class SessionLogWatcher<Event: Sendable>: @unchecked Sendable {
             // 똑같이 들어 있다(예: tailOnly에서 처음 본 파일은 파싱을 건너뛰지만 방금 쓰였다).
             // mtime은 이 줄 바로 위에서 이미 읽은 값이라 **파일시스템 호출이 늘지 않는다**.
             // resourceValues 실패분(.distantPast)은 비교에서 자연히 탈락해 nil을 오염시키지 않는다.
-            if mtime > (lastActivityAt ?? .distantPast) { lastActivityAt = mtime }
+            if mtime > observedActivity {
+                observedActivity = mtime
+                observableLock.withLock { lastActivityAt = mtime }
+            }
             let recent = mtime > now.addingTimeInterval(-recentWindow)
             let tracked = offsets[url.path] != nil
             switch policy {
@@ -162,13 +188,20 @@ public final class SessionLogWatcher<Event: Sendable>: @unchecked Sendable {
             }
         }
         primed = true
+        // 추적 파일 스냅샷 게시 — 접근자가 스캔 락을 기다리지 않게(이슈 #15).
+        let tracked = Set(offsets.keys)
+        observableLock.withLock { trackedSnapshot = tracked }
         return batches
     }
 
-    /// 현재 오프셋을 추적 중인 파일 경로들 — 호출측의 파일 귀속(격리) 판단용 스냅샷.
+    /// 직전 스캔이 **완료된 시점**에 오프셋을 추적 중이던 파일 경로들 —
+    /// 호출측의 파일 귀속(격리) 판단용 스냅샷.
+    ///
+    /// 유일한 소비자(CodexStatusRouter)는 방금 그 스캔이 낸 배치를 처리하며 이 값을 읽으므로
+    /// "그 배치와 짝이 맞는 추적 집합"이 오히려 정확하다 — 스캔 중인 offsets를 실시간으로 읽던
+    /// 종전 동작은 틱이 겹칠 때 절반만 갱신된 중간 상태를 볼 수 있었다.
     public var trackedFiles: Set<String> {
-        lock.lock(); defer { lock.unlock() }
-        return Set(offsets.keys)
+        observableLock.withLock { trackedSnapshot }
     }
 
     /// 이번 인스턴스가 스캔에서 관찰한 세션 파일 수정 시각의 최댓값 — "CLI 세션이 최근에
@@ -179,10 +212,11 @@ public final class SessionLogWatcher<Event: Sendable>: @unchecked Sendable {
     /// Codex 워처의 값은 아무도 읽지 않는다. 두 워처의 값을 합치거나 바꿔 읽지 말 것
     /// (codex를 쓰는 동안 claude 세션이 도는 것처럼 보여 배지가 오탐한다).
     ///
-    /// trackedFiles와 동일한 잠금 패턴 — scanBatches가 lock 안에서 갱신한다.
+    /// trackedFiles와 동일한 잠금 패턴 — 경량 락(observableLock)만 잡으므로 진행 중인 스캔을
+    /// 기다리지 않는다. ★ 이 접근자는 메인 액터에서 3초마다 불린다(AppState.recomputeBadgeCheap) —
+    /// 스캔 락으로 되돌리면 이슈 #15(메인 스레드 영구 정지)가 그대로 재발한다.
     public var lastActivity: Date? {
-        lock.lock(); defer { lock.unlock() }
-        return lastActivityAt
+        observableLock.withLock { lastActivityAt }
     }
 
     /// [start, end) 구간에서 마지막 개행(0x0A)의 다음 오프셋을 찾는다.
