@@ -14,9 +14,19 @@ extension Provider {
 }
 
 /// 팝오버 상단 필터 탭 — 전체 / Claude / Codex. rawValue가 AppStorage로 저장돼
-/// 마지막 선택이 재시작 후에도 유지된다.
+/// 마지막 선택이 재시작 후에도 유지된다. 실제로 노출되는 탭은 계정이 있는 풀로
+/// 한정되고(`AccountListView.visibleTabs`), 저장값이 그중에 없으면 읽을 때
+/// `.all`로 정규화된다(`AccountListView.tab`) — 저장값 자체는 보존한다.
 enum ProviderTab: String, CaseIterable {
     case all, claude, codex
+
+    /// 풀 → 탭. exhaustive switch라 새 Provider가 생기면 컴파일이 깨져 케이스 누락을 막는다.
+    init(provider: Provider) {
+        switch provider {
+        case .claude: self = .claude
+        case .codex: self = .codex
+        }
+    }
 
     var provider: Provider? {
         switch self {
@@ -48,7 +58,20 @@ struct AccountListView: View {
     @State private var rowHeights: [UUID: CGFloat] = [:]
     private let clock = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
 
-    private var tab: ProviderTab { ProviderTab(rawValue: providerTabRaw) ?? .all }
+    /// ★ 저장된 선택이 지금 노출되는 탭에 없으면 `.all`로 **읽는다** — 저장값은 덮어쓰지 않는다.
+    /// 이 정규화가 없으면 탭 바가 숨겨진 뒤 저장값이 `codex`인 사용자가 "등록된 계정이 없습니다"
+    /// 화면에 갇힌다(탈출할 컨트롤이 화면에 없다). 저장값을 보존하므로 그 풀에 계정을 다시
+    /// 추가하면 원래 선택이 살아난다.
+    private var tab: ProviderTab {
+        let saved = ProviderTab(rawValue: providerTabRaw) ?? .all
+        guard !visibleTabs.isEmpty else { return .all }
+        return visibleTabs.contains(saved) ? saved : .all
+    }
+
+    /// 픽커는 정규화된 값을 읽고 쓰기는 원본으로 — 노출 탭이 바뀌어도 '선택 없음'이 안 생긴다.
+    private var tabSelection: Binding<String> {
+        Binding(get: { tab.rawValue }, set: { providerTabRaw = $0 })
+    }
 
     var body: some View {
         ZStack {
@@ -57,7 +80,16 @@ struct AccountListView: View {
                 if state.file.accounts.isEmpty {
                     emptyView
                 } else {
-                    tabBar
+                    // ★ 이 줄은 항상 존재한다 — 풀이 여럿이면 탭 바, 하나뿐이면 그 자리에
+                    // 섹션 헤더. 탭 바를 그냥 없애면 아래 카드가 위로 밀려 팝오버 레이아웃이
+                    // 흔들린다(사용자 피드백). 풀이 하나뿐일 때 탭은 고를 것이 없지만
+                    // "지금 어느 풀을 보고 있는가 + 그 풀의 자동 전환" 정보는 여전히 유효하므로,
+                    // 전체 탭이 쓰는 섹션 헤더를 그대로 재사용한다(새 UI 어휘 없음).
+                    if !visibleTabs.isEmpty {
+                        tabBar
+                    } else if let only = providersWithAccounts.first {
+                        sectionHeader(only)
+                    }
                     cards
                 }
                 footer
@@ -85,9 +117,9 @@ struct AccountListView: View {
             Text("Mobius").font(.system(size: 14, weight: .bold, design: .rounded))
             Text(loc("뫼비우스")).font(.system(size: 10)).foregroundStyle(.tertiary)
             Spacer()
-            // 풀 탭(또는 전체 탭인데 풀이 하나뿐)에서 그 풀의 자동 전환 토글 — 구 전역
-            // 토글과 같은 자리라 익숙하고, 탭 바가 한 줄을 온전히 쓸 수 있다(100% 폭).
-            // 전체 탭에서 풀이 여럿이면 각 섹션 헤더의 미니 토글이 담당한다(sectionHeader).
+            // 풀 탭에서 그 풀의 자동 전환 토글 — 구 전역 토글과 같은 자리라 익숙하고,
+            // 탭 바가 한 줄을 온전히 쓸 수 있다(100% 폭). 전체 탭이거나 풀이 하나뿐이면
+            // 각 섹션 헤더의 미니 토글이 담당한다(sectionHeader) — 토글은 늘 한 곳에만.
             if let provider = headerToggleProvider {
                 autoSwitchToggle(provider)
             }
@@ -106,29 +138,35 @@ struct AccountListView: View {
             .help(loc("한도가 차면 다음 계정으로 자동으로 이어집니다"))
     }
 
-    private var providersWithAccounts: [Provider] {
-        Provider.allCases.filter { !state.file.accounts(of: $0).isEmpty }
-    }
+    private var providersWithAccounts: [Provider] { state.file.providersWithAccounts }
 
-    /// 헤더 오른쪽 토글이 담당할 풀 — 풀 탭이면 그 풀, 전체 탭이면 풀이 하나뿐일 때만
-    /// 그 풀(섹션 헤더가 없어 토글 자리도 없으므로). 풀이 여럿인 전체 탭은 nil —
-    /// 각 섹션 헤더의 미니 토글이 담당한다.
-    private var headerToggleProvider: Provider? {
-        if let provider = tab.provider { return provider }
-        let pools = providersWithAccounts
-        return pools.count == 1 ? pools.first : nil
-    }
+    /// 헤더 오른쪽 토글이 담당할 풀 — 풀 탭일 때만 그 풀. 전체 탭이면 nil이고, 풀이
+    /// 하나뿐일 때도 nil이다(그때는 탭 바 자리의 섹션 헤더가 토글을 들고 있다).
+    /// 두 자리에 동시에 뜨면 같은 바인딩이 중복 노출된다 — 늘 한 곳에만.
+    private var headerToggleProvider: Provider? { tab.provider }
 
-    // MARK: 프로바이더 탭 바 — 100% 폭, 3등분 (자동 전환 토글은 헤더 오른쪽)
+    // MARK: 프로바이더 탭 바 — 100% 폭, 노출 탭 수만큼 균등 분할
+    // (자동 전환 토글은 풀 탭이면 헤더 오른쪽, 아니면 섹션 헤더)
 
     private func poolCount(_ t: ProviderTab) -> Int {
         t.provider.map { state.file.accounts(of: $0).count } ?? state.file.accounts.count
     }
 
+    /// 노출할 탭 — 계정이 있는 풀만. 풀이 하나뿐이면 **빈 배열**이다('전체' 탭과 그 풀 탭이
+    /// 같은 화면이라 고를 것이 없다). 그때 `body`는 이 자리에 `sectionHeader`를 대신 그리고,
+    /// `tab`이 `.all`로 읽히므로 `cards`의 '전체' 브랜치가 섹션 헤더 없이 그 풀만 그린다
+    /// (풀이 하나면 `cards`는 헤더를 안 그리므로 중복되지 않는다).
+    /// `providersWithAccounts`에서 파생되므로 프로바이더가 늘어도 자동으로 맞다.
+    private var visibleTabs: [ProviderTab] {
+        let pools = providersWithAccounts
+        guard pools.count > 1 else { return [] }
+        return [.all] + pools.map(ProviderTab.init(provider:))
+    }
+
     private var tabBar: some View {
-        PillPicker(options: ProviderTab.allCases.map {
+        PillPicker(options: visibleTabs.map {
             .init(value: $0.rawValue, label: $0.title, badge: poolCount($0))
-        }, selection: $providerTabRaw, fillsWidth: true)
+        }, selection: tabSelection, fillsWidth: true)
     }
 
     // MARK: 카드 목록
@@ -152,10 +190,12 @@ struct AccountListView: View {
         }
     }
 
-    /// 전체 탭의 풀 경계 — 대문자 레이블 + 오른쪽으로 흐르는 헤어라인 + 풀 자동 전환
-    /// 미니 토글. 맨글자 하나만 떠 있으면 길 잃은 텍스트처럼 보여서(사용자 피드백)
-    /// 디바이더로 "여기부터 이 풀"임을 고정하고, 전체 탭에서도 풀별 자동 전환 상태가
-    /// 보이고 조작 가능하게 한다 (풀 탭 헤더 토글과 짝 — 사각지대 제거).
+    /// 풀 경계 — 대문자 레이블 + 오른쪽으로 흐르는 헤어라인 + 풀 자동 전환 미니 토글.
+    /// 맨글자 하나만 떠 있으면 길 잃은 텍스트처럼 보여서(사용자 피드백) 디바이더로
+    /// "여기부터 이 풀"임을 고정하고, 풀별 자동 전환 상태가 보이고 조작 가능하게 한다
+    /// (풀 탭 헤더 토글과 짝 — 사각지대 제거).
+    /// 두 자리에서 쓰인다: (1) 전체 탭의 풀 섹션마다, (2) 풀이 하나뿐일 때 탭 바 자리
+    /// (탭이 사라져도 이 줄이 남아 아래 카드 위치가 흔들리지 않는다).
     private func sectionHeader(_ provider: Provider) -> some View {
         HStack(spacing: 8) {
             Text(provider.displayName.uppercased())

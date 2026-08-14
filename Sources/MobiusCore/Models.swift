@@ -277,6 +277,12 @@ public struct AccountsFile: Codable, Equatable, Sendable {
         accounts.filter { $0.provider == provider }
     }
 
+    /// 계정이 하나 이상 등록된 풀 — `Provider.allCases` 순서를 유지한다.
+    /// 팝오버의 탭 노출(계정 없는 프로바이더는 숨김)과 '전체' 탭 섹션이 공유한다.
+    public var providersWithAccounts: [Provider] {
+        Provider.allCases.filter { !accounts(of: $0).isEmpty }
+    }
+
     public func primary(of provider: Provider) -> AccountProfile? {
         accounts.first { $0.provider == provider }
     }
