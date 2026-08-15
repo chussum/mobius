@@ -898,6 +898,12 @@ final class AppState: ObservableObject {
             guard hit.kind == .window else { sawMonthlySpend = true; continue }
             await verifyAndRecordWindowHit(accountID: claudeActiveID, now: now)
         }
+        // 판정을 못 끝낸 트리거 재시도 — 로그 hit은 한 번만 배달되므로(오프셋 전진), 조회가
+        // 실패한 트리거를 여기서 다시 보지 않으면 사용자가 타이핑을 멈춘 순간 그 소진은
+        // 영영 기록되지 않는다. 재시도 주기는 HitAttribution.cooldown이 잡는다(매 틱 아님).
+        for accountID in Array(pendingHitVerify.keys) {   // 루프 중 딕셔너리를 지우므로 복사
+            await verifyAndRecordWindowHit(accountID: accountID, now: now)
+        }
         if sawMonthlySpend { await verifyWindowsAfterSpendLimit(accountID: claudeActiveID, now: now) }
 
         // Codex: 매 턴 실리는 rate_limits 상태 — 라우터가 전환 전 세션 파일을 걸러낸 뒤
@@ -968,9 +974,17 @@ final class AppState: ObservableObject {
     }
 
     /// 계정별 마지막 **네트워크** 검증 시도 시각 — 실패 시 백오프용(HitAttribution.cooldown).
-    /// 인메모리로 충분하다: 앱을 껐다 켜면 다시 시도해도 되는 성격이고, 소진 중이면 hit이
-    /// 계속 오므로 자연히 재시도된다.
     private var lastHitVerifyAttempt: [UUID: Date] = [:]
+
+    /// **판정이 안 끝난 트리거**(계정 → 그 트리거를 처음 본 시각).
+    /// ★ 로그 hit은 워처 오프셋이 전진해 **한 번만 배달된다.** 조회가 실패했다고 그 자리에서
+    ///   버리면, 사용자가 한도 에러를 보고 타이핑을 멈춘 순간 새 에러가 안 나와 **진짜 소진이
+    ///   영영 기록되지 않는다**(자동 전환이 통째로 사라짐 — 셀프리뷰 지적). 그래서 트리거를
+    ///   여기 남겨 다음 틱에 다시 판정한다(쿨다운이 재시도 주기를 잡는다).
+    private var pendingHitVerify: [UUID: Date] = [:]
+    /// 보류 트리거의 수명 — 이 시간이 지나도록 판정을 못 했으면 버린다(오프라인이 길어질 때
+    /// 옛 트리거로 뒤늦게 엉뚱한 기록을 남기지 않도록).
+    private static let pendingHitVerifyTTL: TimeInterval = 15 * 60
 
     /// ★ [이슈 #19] 창 소진 hit의 **계정 귀속 검증**. 로그 hit은 트리거일 뿐이고, 이 계정이
     /// 정말 소진인지는 **그 계정의 토큰으로 조회한 usage**가 판정한다(오귀인 구조적 불가).
@@ -984,13 +998,25 @@ final class AppState: ObservableObject {
     private func verifyAndRecordWindowHit(accountID: UUID?, now: Date) async {
         guard let accountID,
               let account = store.file.accounts.first(where: { $0.id == accountID }) else { return }
+        // 트리거 등록(이미 보류 중이면 처음 본 시각을 유지) — 캐시 신선도 판정의 기준점이 된다.
+        let observedAt = pendingHitVerify[accountID] ?? now
+        pendingHitVerify[accountID] = observedAt
+        if now.timeIntervalSince(observedAt) > Self.pendingHitVerifyTTL {
+            pendingHitVerify[accountID] = nil
+            return
+        }
+
         let snapshot: UsageSnapshot?
         switch HitAttribution.plan(activeIsLimited: account.isLimited(now: now),
                                    cachedUsageAt: usage[accountID]?.fetchedAt,
+                                   hitObservedAt: observedAt,
                                    lastFetchAttemptAt: lastHitVerifyAttempt[accountID],
                                    now: now) {
-        case .skipAlreadyRecorded, .skipCooldown:
+        case .skipAlreadyRecorded:
+            pendingHitVerify[accountID] = nil   // 이미 기록됨 = 이 트리거는 해소됐다
             return
+        case .skipCooldown:
+            return                              // 보류 유지 — 다음 틱에 다시 본다
         case .verifyWithCache:
             snapshot = usage[accountID]
         case .fetchUsage:
@@ -998,18 +1024,29 @@ final class AppState: ObservableObject {
             guard let blob = usageQueryBlob(for: accountID),
                   let fetched = try? await UsageFetcher.fetch(keychainBlob: blob) else { return }
             usage[accountID] = fetched      // 게이지도 같이 신선해진다 (같은 계정의 같은 값)
+            saveUsageCache()                // 다른 usage 갱신 지점과 동일하게 디스크에도 반영
             snapshot = fetched
         }
         guard let snapshot else { return }
-        // 조회하는 동안 상태가 바뀔 수 있다(전환/기록) — 판정 직전에 다시 확인한다.
-        guard store.file.activeByProvider[.claude] == accountID,
-              store.file.accounts.first(where: { $0.id == accountID })?
-                  .isLimited(now: now) == false else { return }
-        guard case let .record(verified) = HitAttribution.verdict(usage: snapshot, now: now)
+        // 여기부터는 **판정이 섰다** = 트리거 해소. (조회 실패는 위에서 return하며 보류 유지.)
+        pendingHitVerify[accountID] = nil
+        // ★ 조회하는 동안 시간이 흘렀다(네트워크 최대 10초) — 리셋 시각 비교와 기록에는
+        //   틱의 낡은 now가 아니라 **지금**을 쓴다. 안 그러면 그 사이 리셋이 지난 창을
+        //   소진으로 인정해, 이미 지난 resetsAt을 기록하면서 전환 알림까지 띄운다.
+        let verifiedAt = Date()
+        guard store.file.accounts.first(where: { $0.id == accountID })?
+                  .isLimited(now: verifiedAt) == false else { return }
+        guard case let .record(verified) = HitAttribution.verdict(usage: snapshot, now: verifiedAt)
         else { return }   // .discard = 창에 여유가 있다 = 이 hit은 다른 계정 것이었다
-        recordHit(verified, on: accountID, now: now)
-        await apply(engines[.claude]!.onRateLimitHit(file: store.file, hit: verified, now: now),
-                    provider: .claude, now: now)
+        recordHit(verified, on: accountID, now: verifiedAt)
+        // ★ 엔진 호출은 **이 계정이 아직 활성일 때만.** onRateLimitHit은 hit을 인자 계정이
+        //   아니라 "현재 활성 계정"에 얹어 판단하므로(markedFile), 그 사이 전환이 끝났다면
+        //   엉뚱한 계정을 소진으로 보고 결정한다. 기록만 남기고 나머지는 onTick에 맡긴다.
+        if store.file.activeByProvider[.claude] == accountID {
+            await apply(engines[.claude]!.onRateLimitHit(file: store.file, hit: verified,
+                                                         now: verifiedAt),
+                        provider: .claude, now: verifiedAt)
+        }
         file = store.file
     }
 
