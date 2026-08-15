@@ -198,4 +198,108 @@ final class SessionLogWatcherTests: XCTestCase {
         XCTAssertEqual(hits.count, 1)
         XCTAssertEqual(hits[0].resetsAt, Date(timeIntervalSince1970: TimeInterval(epoch)))
     }
+
+    // MARK: 이슈 #15 — 접근자가 진행 중인 스캔을 기다리면 안 된다
+
+    /// 첫 파싱에서 **딱 한 번** 멈추는 게이트 — "스캔 락을 쥔 채 오래 도는 스캔"을 결정적으로
+    /// 재현한다(sleep 기반 타이밍 의존 없음). 한 스캔이 파일 여러 개를 파싱할 수 있으므로
+    /// 재무장하지 않는다 — 두 번째 이후 파싱은 그냥 통과시켜 스캔이 스스로 끝나게 둔다.
+    final class ParseGate: @unchecked Sendable {
+        let entered = DispatchSemaphore(value: 0)
+        private let release = DispatchSemaphore(value: 0)
+        private let lock = NSLock()
+        private var armed = true
+        func hold() {
+            lock.lock()
+            guard armed else { lock.unlock(); return }
+            armed = false
+            lock.unlock()
+            entered.signal()
+            release.wait()
+        }
+        func open() { release.signal() }
+    }
+
+    func names(_ paths: Set<String>) -> [String] {
+        paths.map { URL(fileURLWithPath: $0).lastPathComponent }.sorted()
+    }
+
+    func gatedWatcher(_ gate: ParseGate) -> SessionLogWatcher<String> {
+        SessionLogWatcher<String>(root: env.projectsDir) { line, _ in
+            gate.hold()
+            return line
+        }
+    }
+
+    /// 스캔이 락을 쥐고 도는 **도중에** lastActivity/trackedFiles가 즉시 반환해야 한다.
+    ///
+    /// 회귀 시 무슨 일이 벌어지나: 두 접근자를 스캔 락(`lock`)으로 되돌리면 이 테스트가
+    /// 타임아웃한다. 실제 앱에서는 그 대기가 메인 액터에서 일어나므로
+    /// (AppState.recomputeBadgeCheap이 3초마다 lastActivity를 읽는다) 세션 로그가 큰 환경에서
+    /// UI가 영구 정지한다 — 크래시가 아니라 행(hang)이라 크래시 리포트도 안 남는다
+    /// (실측 제보: 4.3GB/5,690개, 재시작 약 6분 후 재현).
+    func testAccessorsDoNotWaitForAnInProgressScan() throws {
+        let gate = ParseGate()
+        let watcher = gatedWatcher(gate)
+        try "primed\n".write(to: log, atomically: true, encoding: .utf8)
+        XCTAssertTrue(watcher.scan().isEmpty)   // 프라이밍 — 오프셋만 기록, parse 미호출
+        try append("appended")
+
+        let scanFinished = expectation(description: "scan finished")
+        DispatchQueue.global().async {
+            _ = watcher.scan()
+            scanFinished.fulfill()
+        }
+        // 스캔이 파싱 구간(= 스캔 락 보유 중)에 진입할 때까지 기다린다.
+        XCTAssertEqual(gate.entered.wait(timeout: .now() + 5), .success,
+                       "스캔이 파싱 구간에 진입하지 못했다 — 테스트 전제가 깨짐")
+
+        let accessorsReturned = expectation(description: "accessors returned during scan")
+        DispatchQueue.global().async {
+            _ = watcher.lastActivity
+            _ = watcher.trackedFiles
+            accessorsReturned.fulfill()
+        }
+        wait(for: [accessorsReturned], timeout: 2)   // 스캔 락을 잡으면 여기서 타임아웃
+
+        gate.open()
+        wait(for: [scanFinished], timeout: 5)
+    }
+
+    /// "안 막힌다"만 보증하고 값이 비어 있으면 배지 판정이 조용히 false로 굳으므로, 게시되는
+    /// 값의 내용도 못 박는다. lastActivity는 스캔 **도중** 관찰 즉시 반영되고(정지 판정을
+    /// 늦추지 않는다), trackedFiles는 스캔 **완료 시점** 스냅샷이라 진행 중에는 직전 값이
+    /// 보인다(절반만 갱신된 중간 상태를 노출하지 않는다).
+    func testAccessorValuesDuringAndAfterScan() throws {
+        let gate = ParseGate()
+        let watcher = gatedWatcher(gate)
+        try "primed\n".write(to: log, atomically: true, encoding: .utf8)
+        _ = watcher.scan()
+        let afterPriming = try XCTUnwrap(watcher.lastActivity)
+        // 경로는 파일명으로 비교한다 — enumerator는 /var를 /private/var로 해석해 돌려주므로
+        // 같은 파일인데도 문자열이 다르다(심볼릭 링크).
+        XCTAssertEqual(names(watcher.trackedFiles), ["session.jsonl"])
+
+        // 두 파일 모두 프라이밍보다 확실히 나중으로 못 박는다 — 열거 순서가 보장되지 않으므로
+        // 어느 쪽이 먼저 관찰되든 lastActivity가 올라야 한다.
+        let other = env.projectsDir.appendingPathComponent("proj1/other.jsonl")
+        try "x\n".write(to: other, atomically: true, encoding: .utf8)
+        try append("appended")
+        try setMtime(log, afterPriming.addingTimeInterval(30))
+        try setMtime(other, afterPriming.addingTimeInterval(60))
+
+        let scanFinished = expectation(description: "scan finished")
+        DispatchQueue.global().async { _ = watcher.scan(); scanFinished.fulfill() }
+        XCTAssertEqual(gate.entered.wait(timeout: .now() + 5), .success)
+
+        XCTAssertGreaterThan(try XCTUnwrap(watcher.lastActivity), afterPriming)
+        XCTAssertEqual(names(watcher.trackedFiles), ["session.jsonl"])   // 아직 직전 스냅샷
+
+        gate.open()
+        wait(for: [scanFinished], timeout: 5)
+        // 스캔 완료 후: 새 파일이 추적 집합에 반영된다.
+        XCTAssertEqual(names(watcher.trackedFiles), ["other.jsonl", "session.jsonl"])
+        XCTAssertEqual(try XCTUnwrap(watcher.lastActivity).timeIntervalSince1970,
+                       afterPriming.addingTimeInterval(60).timeIntervalSince1970, accuracy: 1)
+    }
 }
