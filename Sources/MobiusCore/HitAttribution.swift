@@ -99,6 +99,16 @@ public enum HitAttribution {
 
     /// 사용량 스냅샷으로 이 hit이 **이 계정의 것**인지 판정한다.
     ///
+    /// 모델 전용 한도를 귀속 증거로 **믿을 수 있는 최소 시간** — 마지막 활성 계정 변경 이후.
+    ///
+    /// ★ 두 신호의 성격이 다르다: 계정 창 100%는 "이 계정이 **지금** 막혀 있다"라서 방금 그
+    ///   에러를 낸 주체라는 증거가 되지만, 모델 전용 한도 100%는 **며칠 가는 상태**라 누가
+    ///   이 에러를 냈는지에 대해 아무 말도 하지 않는다. 오귀인은 **전환 직후**에만 생기므로
+    ///   (전환 전에 시작된 턴이 뒤늦게 에러를 남긴다), 최근에 전환이 있었다면 모델 한도
+    ///   증거는 쓰지 않는다. 진짜로 모델 한도에 걸린 사용자는 계속 그 에러를 만나므로
+    ///   이 창이 지난 뒤의 hit에서 정상적으로 기록된다(최대 이만큼 늦어질 뿐).
+    public static let modelScopeTrustWindow: TimeInterval = 300
+
     /// **계정 창(5시간/주간)을 먼저 본다.** 계정 자체가 소진이면 그걸로 기록한다.
     ///
     /// 계정 창은 여유인데 **모델 전용 한도**(`weekly_scoped`, 예: Fable)가 100%면 그것도
@@ -114,9 +124,17 @@ public enum HitAttribution {
     /// **아니다.** 잘못된 24시간 폴백을 박아 멀쩡한 계정을 하루 막지도 않고, "여유"로
     /// 오해해 트리거를 태워 없애지도 않는다(둘을 같은 값으로 돌려주면 호출측이 트리거를
     /// 소비해 버려 그 소진은 영영 기록되지 않는다 — 셀프리뷰 지적).
-    public static func verdict(usage: UsageSnapshot, now: Date) -> Verdict {
+    /// - Parameter trustModelScope: 모델 전용 한도를 귀속 증거로 써도 되는가
+    ///   (= 마지막 활성 계정 변경으로부터 `modelScopeTrustWindow`가 지났는가).
+    public static func verdict(usage: UsageSnapshot, now: Date,
+                               trustModelScope: Bool = true) -> Verdict {
         if let hit = usage.exhaustionHit(now: now) { return .record(hit) }
-        if let scoped = usage.scopedExhaustionHit(now: now) { return .record(scoped) }
-        return usage.hasExhaustedWindow() ? .inconclusive : .discard
+        if trustModelScope, let scoped = usage.scopedExhaustionHit(now: now) {
+            return .record(scoped)
+        }
+        // ★ `.inconclusive`("소진은 맞는데 리셋 시각을 못 얻음")는 **계정 창에만** 적용한다.
+        //   모델 전용 한도는 며칠 100%로 남아 있을 수 있어, 그걸로 보류를 걸면 **멀쩡한
+        //   계정**에서 스쳐 지나간 hit 하나가 15분 동안 보류로 남아 60초마다 조회를 유발한다.
+        return usage.hasExhaustedAccountWindow() ? .inconclusive : .discard
     }
 }

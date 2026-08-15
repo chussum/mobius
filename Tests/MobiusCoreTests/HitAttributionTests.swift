@@ -66,6 +66,31 @@ final class HitAttributionTests: XCTestCase {
         XCTAssertEqual(HitAttribution.verdict(usage: noReset, now: now), .inconclusive)
     }
 
+    /// ★ 전환 직후에는 모델 전용 한도를 귀속 증거로 쓰지 않는다 — 그 100%는 며칠 가는
+    /// **상태**라 "누가 이 에러를 냈는지"를 말해 주지 않는데, 오귀인은 정확히 전환 직후에만
+    /// 생긴다. 이 갈래가 없으면 뒤늦게 도착한 남의 hit이 멀쩡한 계정에 "모델 한도"를 찍고
+    /// 사용자가 시키지도 않은 전환·알림이 나간다(이 PR이 고치는 증상의 재현).
+    func testScopedModelLimitIsNotTrustedRightAfterASwitch() {
+        let usage = snapshot(fiveHour: 9, sevenDay: 16,
+                             scoped: [ScopedUsageLimit(label: "Fable", percent: 100,
+                                                       resetsAt: now.addingTimeInterval(4 * 86400))])
+        XCTAssertEqual(HitAttribution.verdict(usage: usage, now: now, trustModelScope: false),
+                       .discard)
+        // 계정 창 소진은 시점 정보가 있는 증거라 전환 직후에도 그대로 인정한다.
+        let exhausted = snapshot(fiveHour: 100, sevenDay: 16)
+        guard case .record = HitAttribution.verdict(usage: exhausted, now: now,
+                                                    trustModelScope: false)
+        else { return XCTFail("계정 창 소진은 전환 직후에도 기록돼야 한다") }
+    }
+
+    /// 오래된 모델 한도 100%(리셋 시각 없음)가 멀쩡한 계정을 영영 "판정 보류"로 묶으면 안 된다 —
+    /// 보류는 15분 동안 60초마다 조회를 유발한다. `.inconclusive`는 **계정 창** 전용이다.
+    func testStaleScopedLimitDoesNotBlockDiscard() {
+        let usage = snapshot(fiveHour: 9, sevenDay: 16,
+                             scoped: [ScopedUsageLimit(label: "Fable", percent: 100, resetsAt: nil)])
+        XCTAssertEqual(HitAttribution.verdict(usage: usage, now: now), .discard)
+    }
+
     /// 계정 창은 여유인데 **모델 전용 한도**(Fable 등)가 찼으면 그것도 진짜 소진이다 —
     /// 다만 `modelScoped: true`로 기록해 "계정 사용 불가"가 아니라 "그 모델만 불가"로 남긴다.
     /// 이 갈래가 없으면 모델 한도로 막힌 사용자는 hit이 매번 버려져 자동 전환을 못 받는다.
@@ -98,16 +123,25 @@ final class HitAttributionTests: XCTestCase {
     /// 스킵하면 그 사이 **계정 창 자체가** 소진되는 신호를 놓친다.
     func testModelLimitedAccountUsesLongerRecheckInterval() {
         XCTAssertGreaterThan(HitAttribution.modelLimitedRecheck, HitAttribution.cooldown)
+        let recheck = HitAttribution.modelLimitedRecheck
         XCTAssertEqual(HitAttribution.plan(accountIsLimited: false, hasModelLimitRecord: true,
                                            cachedUsageAt: nil, hitObservedAt: now,
-                                           lastFetchAttemptAt: now.addingTimeInterval(-120),
+                                           lastFetchAttemptAt: now.addingTimeInterval(-recheck + 1),
                                            now: now),
                        .skipCooldown)
         XCTAssertEqual(HitAttribution.plan(accountIsLimited: false, hasModelLimitRecord: true,
                                            cachedUsageAt: nil, hitObservedAt: now,
-                                           lastFetchAttemptAt: now.addingTimeInterval(-601),
+                                           lastFetchAttemptAt: now.addingTimeInterval(-recheck - 1),
                                            now: now),
                        .fetchUsage)
+        // 같은 상황에서 일반 쿨다운(60초)만 지났으면 아직 조회하지 않는다 — 이 상수가
+        // 실제로 쓰이는지 못 박는다(그냥 60초로 돌아가도 위 두 단언은 통과한다).
+        XCTAssertEqual(HitAttribution.plan(accountIsLimited: false, hasModelLimitRecord: true,
+                                           cachedUsageAt: nil, hitObservedAt: now,
+                                           lastFetchAttemptAt: now.addingTimeInterval(
+                                               -HitAttribution.cooldown - 1),
+                                           now: now),
+                       .skipCooldown)
     }
 
     // MARK: 게이트 — 네트워크를 언제 쓰는가

@@ -723,5 +723,14 @@ Sources/MobiusApp/        SwiftUI 메뉴바 앱 + AppState + Views/ + LoginFlow 
 - **모델 전용 한도(weekly_scoped/Fable) 처리(이슈 #19 PR에 포함, 2026-08-15)**: 계정 한도와
   **다른 개념**으로 분리됐다 — `isLimited`(계정 자체) vs `isModelLimited`(그 모델만).
   자동 전환은 모델 한도로도 일어나지만(핀 존중), 그 기록이 계정을 폴백 후보에서 지우지는
-  않는다. 남은 후속: **모델별 게이지 노출**(usage `limits[]`의 weekly_scoped를 카드에 표시).
+  않는다. 알림·CLI 라벨·전환 사유도 계정 소진과 분리(`notifyModelLimitedOnly`,
+  `SwitchReason.modelExhausted`). 모델 한도 100%는 **며칠 가는 상태**라 익명 hit의 귀속
+  증거로는 약해서, **마지막 전환 이후 5분이 지났을 때만** 증거로 쓴다
+  (`HitAttribution.modelScopeTrustWindow` — 오귀인은 전환 직후에만 생긴다).
+  ★ **남은 한계(의식적 선택)**: `RateLimitInfo` 슬롯이 **하나뿐**이라 계정 한도와 모델 한도가
+  공존하지 못한다 — 모델 한도가 있는 계정의 5시간 창이 소진되면 계정 기록이 모델 기록을
+  덮어쓰고, 5시간 창이 풀리면 모델 한도는 잊힌 상태가 된다(다음 hit에서 재발견). 자가치유
+  되지만 전환 사이클 한 번을 헛돌고 그 사이 CLI 라벨이 틀린다. 제대로 하려면 두 기록을
+  **별도 필드**로 두고(하위호환 디코딩 필수 — 실패 기록 13) isLimited/isModelLimited/카드/
+  CLI를 함께 고쳐야 한다. 남은 후속: 이 분리 + **모델별 게이지 노출**(카드에 weekly_scoped 표시).
 - 2차 프로젝트(합의): 멀티 PC ~/.claude 세션 동기화 — 자격증명 제외, 별도 스펙.

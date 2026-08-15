@@ -62,11 +62,12 @@ public struct UsageSnapshot: Codable, Equatable, Sendable {
         return RateLimitHit(resetsAt: resetsAt, kind: .window, modelScoped: true)
     }
 
-    /// 100%인 창이 하나라도 있는가(리셋 시각의 유효성과 무관). `.inconclusive` 판정용 —
-    /// "여유 있음"과 "소진인데 리셋 시각을 못 얻음"을 가르는 데 쓴다.
-    public func hasExhaustedWindow() -> Bool {
-        if (fiveHourPercent ?? 0) >= 100 || (sevenDayPercent ?? 0) >= 100 { return true }
-        return (scopedLimits ?? []).contains { $0.percent >= 100 }
+    /// **계정 창**(5시간/주간) 중 100%인 것이 있는가(리셋 시각의 유효성과 무관).
+    /// `.inconclusive` 판정용 — "여유 있음"과 "소진인데 리셋 시각을 못 얻음"을 가른다.
+    /// ★ 모델 전용 한도는 **일부러 제외한다**: 며칠 100%로 남아 있을 수 있어서, 포함하면
+    ///   멀쩡한 계정에 스쳐 온 hit 하나가 영영 "판정 보류"로 남는다.
+    public func hasExhaustedAccountWindow() -> Bool {
+        (fiveHourPercent ?? 0) >= 100 || (sevenDayPercent ?? 0) >= 100
     }
 }
 

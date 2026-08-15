@@ -892,6 +892,16 @@ final class AppState: ObservableObject {
         //   그래서 hit 자체의 내용(리셋 시각·modelScoped)은 쓰지 않고 **버린다** — 검증된
         //   스냅샷에서 나온 값만 기록한다. 로그 hit의 종류·개수는 "지금 확인해 볼 이유"로만 쓴다.
         let claudeActiveID = store.file.activeByProvider[.claude]
+        // 활성 변경 감지(경로 무관 — 앱 전환·CLI·외부 로그인 전부 여기서 잡힌다).
+        // 첫 관찰은 "변경"이 아니다 — 앱 시작 직후 5분 동안 모델 한도 증거를 못 믿게 되면
+        // 그건 그냥 손해다.
+        if !sawClaudeActiveOnce {
+            sawClaudeActiveOnce = true
+            lastKnownClaudeActive = claudeActiveID
+        } else if lastKnownClaudeActive != claudeActiveID {
+            lastKnownClaudeActive = claudeActiveID
+            claudeActiveChangedAt = now
+        }
         var sawMonthlySpend = false
         for hit in claudeHits {
             // 월간 지출 한도(P3)는 창 소진이 아니다 — 기록하면 24h 폴백 오탐이 된다
@@ -1022,8 +1032,19 @@ final class AppState: ObservableObject {
     private static let pendingHitVerifyTTL: TimeInterval = 15 * 60
     /// 수명이 다해 포기한 뒤 그 계정의 검증을 다시 시작하기까지의 간격.
     private static let verifyGiveUpBackoff: TimeInterval = 10 * 60
-    /// 계정별 "당분간 검증 안 함" 시각.
+    /// 계정별 "당분간 조회 안 함" 시각. (트리거는 계속 쌓아 두고 **조회만** 쉰다.)
     private var verifyGiveUpUntil: [UUID: Date] = [:]
+    /// 연속 `.discard` 횟수 — 이 계정과 무관한 hit(다른 계정의 뒤늦은 에러)이 계속 흘러들 때
+    /// 60초마다 조회가 무한히 도는 것을 막는다. `.discard`는 "이 계정은 멀쩡하다"는 뜻이라
+    /// 몇 번 확인했으면 잠시 쉬어도 잃는 게 없다.
+    private var consecutiveDiscards: [UUID: Int] = [:]
+    private static let discardBackoffThreshold = 3
+    /// Claude 활성 계정이 마지막으로 **바뀐** 시각 — 모델 전용 한도를 귀속 증거로 믿어도
+    /// 되는지 판단한다(HitAttribution.modelScopeTrustWindow). 전환·외부 로그인·CLI 전환
+    /// 어느 경로든 여기서 한 번에 감지된다(틱마다 값 비교).
+    private var lastKnownClaudeActive: UUID?
+    private var sawClaudeActiveOnce = false
+    private var claudeActiveChangedAt: Date = .distantPast
 
     /// ★ [이슈 #19] 창 소진 hit의 **계정 귀속 검증**. 로그 hit은 트리거일 뿐이고, 이 계정이
     /// 정말 소진인지는 **그 계정의 토큰으로 조회한 usage**가 판정한다(오귀인 구조적 불가).
@@ -1043,12 +1064,27 @@ final class AppState: ObservableObject {
             verifyGiveUpUntil[accountID] = nil
             return
         }
-        // 계속 판정이 안 서서 포기한 직후엔 새 hit이 와도 잠시 쉰다 — 안 그러면 "영영
-        // 모르겠는" 상태에서 60초 주기 조회가 무한 반복된다. 대가는 이 구간에서 진짜
-        // 소진이 나면 최대 그만큼 늦게 잡힌다는 것(수명 15분 + 이 10분).
+        // 백오프 중 — **조회만** 쉰다. ★ 트리거는 계속 등록한다(셀프리뷰 지적): 여기서
+        // 신호를 통째로 버리면, 이 구간에 진짜 소진이 나고 사용자가 (막혔으니 자연스럽게)
+        // 타이핑을 멈추는 순간 그 소진은 영영 기록되지 않는다 — 기록이 없으면 onTick의
+        // 자가복구도 못 돈다. 조회는 백오프가 끝난 뒤 재시도 루프가 이어서 한다.
+        let backingOff: Bool
         if let until = verifyGiveUpUntil[accountID] {
-            if now < until { return }
-            verifyGiveUpUntil[accountID] = nil
+            if now < until {
+                backingOff = true
+            } else {
+                verifyGiveUpUntil[accountID] = nil
+                consecutiveDiscards[accountID] = 0
+                // 백오프 동안은 시도조차 안 했으므로 수명 시계를 다시 건다 — 안 그러면
+                // 쉬는 사이에 수명이 차서, 재개하자마자 곧바로 다시 포기하게 된다.
+                if let held = pendingHitVerify[accountID] {
+                    pendingHitVerify[accountID] = PendingTrigger(
+                        firstSeenAt: now, needsFresherThan: held.needsFresherThan)
+                }
+                backingOff = false
+            }
+        } else {
+            backingOff = false
         }
         let trigger: PendingTrigger
         if isRetry {
@@ -1076,6 +1112,7 @@ final class AppState: ObservableObject {
                                      needsFresherThan: now)
         }
         pendingHitVerify[accountID] = trigger
+        if backingOff { return }   // 트리거는 남기고 조회만 쉰다
 
         // 디스크 캐시를 먼저 올린다(멱등). ★ 안 하면 두 가지가 깨진다: 팝오버를 한 번도
         //   안 연 상태에서 saveUsageCache()가 **메모리에 있는 계정만** 기록해 나머지 계정의
@@ -1109,7 +1146,14 @@ final class AppState: ObservableObject {
         //   틱의 낡은 now가 아니라 **지금**을 쓴다. 안 그러면 그 사이 리셋이 지난 창을
         //   소진으로 인정해, 이미 지난 resetsAt을 기록하면서 전환 알림까지 띄운다.
         let verifiedAt = Date()
-        switch HitAttribution.verdict(usage: snapshot, now: verifiedAt) {
+        // ★ 모델 전용 한도는 **최근에 전환이 없었을 때만** 귀속 증거로 쓴다 — 그 100%는
+        //   며칠 가는 상태라 "누가 이 에러를 냈는지"를 말해 주지 않는다. 오귀인은 전환 직후에만
+        //   생기므로, 그 구간에서는 이 증거를 안 쓴다(셀프리뷰 지적). 계정 창 100%는 "지금
+        //   막혀 있다"라 시점 정보가 있어 이 제약이 필요 없다.
+        let trustModelScope = verifiedAt.timeIntervalSince(claudeActiveChangedAt)
+            > HitAttribution.modelScopeTrustWindow
+        switch HitAttribution.verdict(usage: snapshot, now: verifiedAt,
+                                      trustModelScope: trustModelScope) {
         case .inconclusive:
             // 소진은 맞는데 리셋 시각을 못 얻었다 — 보류를 유지하되, **방금 본 스냅샷으로는
             // 다시 판정하지 않는다.** 안 그러면 같은 스냅샷이 계속 "트리거보다 나중"으로
@@ -1118,9 +1162,18 @@ final class AppState: ObservableObject {
             return
         case .discard:
             pendingHitVerify[accountID] = nil   // 여유 있음 = 이 hit은 다른 계정 것이었다
+            // 이 계정과 무관한 hit이 계속 흘러들면(다른 계정의 뒤늦은 에러) 매번 조회하게
+            // 된다 — 몇 번 "멀쩡하다"를 확인했으면 잠시 쉰다. 진짜 소진이 나면 그때는
+            // 계정 창이 100%가 되므로 백오프가 끝난 뒤 바로 잡힌다.
+            let discards = (consecutiveDiscards[accountID] ?? 0) + 1
+            consecutiveDiscards[accountID] = discards
+            if discards >= Self.discardBackoffThreshold {
+                verifyGiveUpUntil[accountID] = verifiedAt.addingTimeInterval(Self.verifyGiveUpBackoff)
+            }
             return
         case .record(let verified):
             pendingHitVerify[accountID] = nil
+            consecutiveDiscards[accountID] = 0
             await record(verified, on: accountID, at: verifiedAt)
         }
     }
