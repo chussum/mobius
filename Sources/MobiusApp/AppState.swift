@@ -880,12 +880,15 @@ final class AppState: ObservableObject {
         }.value
 
         // Claude: 세션 로그의 rate-limit 에러 이벤트.
-        // 배치 내 모든 hit는 스캔 시점의 활성 계정에 귀속 —
-        // 루프 중 전환이 일어나도 남은 hit(구 세션 로그)가 새 활성 계정에 오기록되지 않도록.
         // 주의(upstream 293a911): 인증 만료(authentication_failed) 로그는 "어느 계정" 것인지
         // 적혀 있지 않아 활성 계정에 오귀인된다 → needsReauth는 로그가 아니라 usage API 401
         // (계정별 토큰으로 조회 → 오귀인 불가)로만 판정한다(refreshUsageIfStale 참조).
-        // 여기서는 rate-limit(창 소진)만 처리한다.
+        // ★ [이슈 #19] **rate-limit 라인도 똑같이 익명이다.** 같은 원칙을 여기에도 적용한다 —
+        //   로그 hit은 **트리거**일 뿐이고 판정은 usage API가 한다(HitAttribution 참조).
+        //   전환 시점에 진행 중이던 턴이 옛 계정의 에러를 전환 **뒤에** 남기므로, 스캔 시점
+        //   활성 계정에 그대로 기록하면 멀쩡한 폴백이 소진으로 박혀 자동 전환이 통째로 죽는다.
+        //   그래서 hit 자체의 내용(리셋 시각·modelScoped)은 쓰지 않고 **버린다** — 검증된
+        //   스냅샷에서 나온 값만 기록한다. 로그 hit의 종류·개수는 "지금 확인해 볼 이유"로만 쓴다.
         let claudeActiveID = store.file.activeByProvider[.claude]
         var sawMonthlySpend = false
         for hit in claudeHits {
@@ -893,9 +896,7 @@ final class AppState: ObservableObject {
             // (2026-07-13 실측: 플랜 창 여유 상태에서도 뜨고 세션은 정상 동작).
             // 단 창 소진과 겹치면 이 메시지가 우선 표시돼 창 소진을 가리므로 usage로 교차 확인.
             guard hit.kind == .window else { sawMonthlySpend = true; continue }
-            recordHit(hit, on: claudeActiveID, now: now)
-            await apply(engines[.claude]!.onRateLimitHit(file: store.file, hit: hit, now: now),
-                        provider: .claude, now: now)
+            await verifyAndRecordWindowHit(accountID: claudeActiveID, now: now)
         }
         if sawMonthlySpend { await verifyWindowsAfterSpendLimit(accountID: claudeActiveID, now: now) }
 
@@ -934,14 +935,7 @@ final class AppState: ObservableObject {
             await applyVerifiedExhaustion(cached, accountID: accountID, now: now)
             return
         }
-        // 활성 계정은 라이브 토큰으로 조회한다 — 저장 스냅샷은 앱 시작 직후 만료 토큰일 수 있고
-        // (claude CLI가 라이브를 갱신), P3는 활성 계정 세션 로그에서 오므로 대개 활성 계정이다.
-        let blob: Data
-        if store.file.activeAccountID == accountID, let live = try? io.readLiveSnapshot() {
-            blob = live.keychainBlob
-        } else if let secret = try? store.secret(for: accountID) {
-            blob = secret.keychainBlob
-        } else { return }
+        guard let blob = usageQueryBlob(for: accountID) else { return }
         spendVerifyTask = Task { @MainActor in
             defer { spendVerifyTask = nil }
             guard let snap = try? await UsageFetcher.fetch(keychainBlob: blob)
@@ -960,6 +954,61 @@ final class AppState: ObservableObject {
         guard let hit = snap.exhaustionHit(now: now) else { return }
         recordHit(hit, on: accountID, now: now)
         await apply(engines[.claude]!.onRateLimitHit(file: store.file, hit: hit, now: now),
+                    provider: .claude, now: now)
+        file = store.file
+    }
+
+    /// usage 조회에 쓸 자격증명 blob. **활성 계정은 라이브 토큰**을 쓴다 — 저장 스냅샷은 앱
+    /// 시작 직후 만료 토큰일 수 있다(claude CLI가 라이브를 갱신한다).
+    private func usageQueryBlob(for accountID: UUID) -> Data? {
+        if store.file.activeAccountID == accountID, let live = try? io.readLiveSnapshot() {
+            return live.keychainBlob
+        }
+        return (try? store.secret(for: accountID))?.keychainBlob
+    }
+
+    /// 계정별 마지막 **네트워크** 검증 시도 시각 — 실패 시 백오프용(HitAttribution.cooldown).
+    /// 인메모리로 충분하다: 앱을 껐다 켜면 다시 시도해도 되는 성격이고, 소진 중이면 hit이
+    /// 계속 오므로 자연히 재시도된다.
+    private var lastHitVerifyAttempt: [UUID: Date] = [:]
+
+    /// ★ [이슈 #19] 창 소진 hit의 **계정 귀속 검증**. 로그 hit은 트리거일 뿐이고, 이 계정이
+    /// 정말 소진인지는 **그 계정의 토큰으로 조회한 usage**가 판정한다(오귀인 구조적 불가).
+    ///
+    /// 판정이 안 서면(조회 실패/쿨다운) **아무것도 기록하지 않는다.** 잘못된 기록은 폴백을
+    /// 후보에서 빼 자동 전환을 통째로 죽이고 가짜 리셋 시각이 몇 시간 남지만, 기록을 미루면
+    /// 다음 hit에서 다시 잡히기 때문이다(소진 상태면 에러가 계속 나온다).
+    ///
+    /// ★ 401을 여기서 needsReauth로 승격하지 않는다 — 이 경로는 "이 hit이 누구 것인가"만
+    ///   판정한다. 재인증 판정은 기존 경로(refreshUsageIfStale)가 자기 조건으로 한다.
+    private func verifyAndRecordWindowHit(accountID: UUID?, now: Date) async {
+        guard let accountID,
+              let account = store.file.accounts.first(where: { $0.id == accountID }) else { return }
+        let snapshot: UsageSnapshot?
+        switch HitAttribution.plan(activeIsLimited: account.isLimited(now: now),
+                                   cachedUsageAt: usage[accountID]?.fetchedAt,
+                                   lastFetchAttemptAt: lastHitVerifyAttempt[accountID],
+                                   now: now) {
+        case .skipAlreadyRecorded, .skipCooldown:
+            return
+        case .verifyWithCache:
+            snapshot = usage[accountID]
+        case .fetchUsage:
+            lastHitVerifyAttempt[accountID] = now
+            guard let blob = usageQueryBlob(for: accountID),
+                  let fetched = try? await UsageFetcher.fetch(keychainBlob: blob) else { return }
+            usage[accountID] = fetched      // 게이지도 같이 신선해진다 (같은 계정의 같은 값)
+            snapshot = fetched
+        }
+        guard let snapshot else { return }
+        // 조회하는 동안 상태가 바뀔 수 있다(전환/기록) — 판정 직전에 다시 확인한다.
+        guard store.file.activeByProvider[.claude] == accountID,
+              store.file.accounts.first(where: { $0.id == accountID })?
+                  .isLimited(now: now) == false else { return }
+        guard case let .record(verified) = HitAttribution.verdict(usage: snapshot, now: now)
+        else { return }   // .discard = 창에 여유가 있다 = 이 hit은 다른 계정 것이었다
+        recordHit(verified, on: accountID, now: now)
+        await apply(engines[.claude]!.onRateLimitHit(file: store.file, hit: verified, now: now),
                     provider: .claude, now: now)
         file = store.file
     }

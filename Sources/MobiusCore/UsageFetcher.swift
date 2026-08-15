@@ -47,6 +47,20 @@ public struct UsageSnapshot: Codable, Equatable, Sendable {
         guard let resetsAt = exhaustedResets.max() else { return nil }
         return RateLimitHit(resetsAt: resetsAt)
     }
+
+    /// **모델 전용** 주간 한도(`limits[].weekly_scoped`, 예: Fable)의 소진 판정.
+    /// 계정 창(5시간/주간)과 **의도적으로 분리**돼 있다 — 계정 자체는 여유인데 특정 모델만
+    /// 막힌 상태라, `modelScoped: true`로 표시해 엔진이 pin(사용자가 이 계정을 직접 고름)을
+    /// 존중할 수 있게 한다. `exhaustionHit`과 같은 규칙으로 **아직 안 지난 리셋 시각**만
+    /// 인정하고, 그중 가장 늦은 것을 쓴다.
+    public func scopedExhaustionHit(now: Date) -> RateLimitHit? {
+        let resets = (scopedLimits ?? [])
+            .filter { $0.percent >= 100 }
+            .compactMap(\.resetsAt)
+            .filter { $0 > now }
+        guard let resetsAt = resets.max() else { return nil }
+        return RateLimitHit(resetsAt: resetsAt, kind: .window, modelScoped: true)
+    }
 }
 
 public enum UsageFetcherError: Error, Equatable {
