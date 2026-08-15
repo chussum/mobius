@@ -194,9 +194,12 @@ Usage gauges are fetched only when the popover opens (4-minute cache) — never 
   notifies you when this happens). To make a switch stick, close the previous
   account's running codex sessions.
 - **Running `claude` sessions**: switching does **not** interrupt running sessions
-  (measured through many switch round-trips). However, an already-running session
-  keeps using the previous account's credentials — start a new session to use the
-  new account.
+  (measured through many switch round-trips). You don't need to restart them
+  either — an already-open session picks up the new account with your **next
+  prompt**. Only the reply that was already in flight when you switched keeps
+  using the previous account. (Corrected 2026-08-15: earlier docs said "start a
+  new session", which was a guess appended to the "no interruption" measurement,
+  not a measurement itself.)
 - **Re-login detection**: accounts with revoked tokens are flagged automatically
   (via the existing usage check — no extra requests) and show a **"Sign in again"**
   button on the card. Auto-switch skips flagged accounts.
