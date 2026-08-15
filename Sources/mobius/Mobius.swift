@@ -97,9 +97,18 @@ struct Switch: ParsableCommand {
         try ctx.store.setAutoSwitchedFromPrimary(false, provider: target.provider)
         MobiusNotification.postAccountsChanged()
         print("전환 완료 → [\(target.provider.displayName)] \(target.nickname) <\(target.emailAddress)>")
-        print("실행 중인 세션에는 새 계정이 즉시 적용되지 않을 수 있습니다 — 그 경우 세션을 새로 시작하세요.")
-        if target.provider == .claude {
+        // ★ [정정 2026-08-15] 프로바이더마다 전제가 다르다 — claude 세션은 턴마다 자격증명을
+        //   다시 읽어 다음 입력부터 이어지고(재시작 불필요, claude 2.1.232/2.1.233 기준),
+        //   codex 세션은 시작 시점 토큰을 계속 쓰며 토큰 갱신으로 로그인을 되돌리기까지
+        //   한다(클로버). 한 문장으로 합치지 말 것.
+        //   ★ if/else가 아니라 switch인 이유(셀프리뷰 반영): 프로바이더가 늘면 "claude가
+        //   아니면 codex"가 조용히 틀린 안내를 한다 — 컴파일 에러로 드러나야 한다.
+        switch target.provider {
+        case .claude:
+            print("실행 중인 세션도 다음 입력부터 새 계정으로 이어집니다 (진행 중이던 응답만 이전 계정).")
             print("Desktop 동시 전환은 앱에서 전환할 때만 적용됩니다.")
+        case .codex:
+            print("실행 중인 codex 세션은 종료해야 새 계정이 적용됩니다 (구 세션이 로그인을 되돌릴 수 있음).")
         }
     }
 }
