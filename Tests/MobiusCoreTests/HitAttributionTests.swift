@@ -47,13 +47,23 @@ final class HitAttributionTests: XCTestCase {
         else { return XCTFail("5시간 창 소진도 기록돼야 한다") }
     }
 
-    /// 이미 지난 리셋 시각은 소진으로 치지 않는다 — 24h 폴백을 잘못 박느니 다음 기회를 본다.
-    func testExhaustedWindowWithPastResetIsDiscarded() {
+    /// ★ 100%인데 리셋 시각이 이미 지났으면 **`.discard`가 아니라 `.inconclusive`**다.
+    /// 잘못된 24h 폴백을 박지도 않지만, "여유"로 오해해 트리거를 태워 없애지도 않는다 —
+    /// 둘을 같은 값으로 돌려주면 호출측이 트리거를 소비해 그 소진이 영영 기록되지 않는다.
+    func testExhaustedWindowWithPastResetIsInconclusiveNotDiscard() {
         let stale = UsageSnapshot(fiveHourPercent: 100,
                                   fiveHourResetsAt: now.addingTimeInterval(-60),
                                   sevenDayPercent: 10, sevenDayResetsAt: now.addingTimeInterval(3600),
                                   fetchedAt: now)
-        XCTAssertEqual(HitAttribution.verdict(usage: stale, now: now), .discard)
+        XCTAssertEqual(HitAttribution.verdict(usage: stale, now: now), .inconclusive)
+    }
+
+    /// 리셋 시각 자체가 없는 경우도 마찬가지 — 보류다.
+    func testExhaustedWindowWithMissingResetIsInconclusive() {
+        let noReset = UsageSnapshot(fiveHourPercent: 100, fiveHourResetsAt: nil,
+                                    sevenDayPercent: 10,
+                                    sevenDayResetsAt: now.addingTimeInterval(3600), fetchedAt: now)
+        XCTAssertEqual(HitAttribution.verdict(usage: noReset, now: now), .inconclusive)
     }
 
     /// ★ **모델 전용 한도(Fable 등)는 계정 소진으로 치지 않는다.**

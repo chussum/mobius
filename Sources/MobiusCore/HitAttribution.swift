@@ -45,6 +45,9 @@ public enum HitAttribution {
         case record(RateLimitHit)
         /// 창에 여유가 있다 = 이 hit은 **다른 계정 것**이었다 → 버린다.
         case discard
+        /// 소진은 맞는데 **쓸 수 있는 리셋 시각이 없다**(누락/파싱 실패/이미 지남).
+        /// "여유"와 섞으면 안 된다 — 트리거를 보류해 다음 기회에 다시 본다(셀프리뷰 지적).
+        case inconclusive
     }
 
     /// 조회 실패 후 같은 계정을 다시 조회하기까지의 최소 간격.
@@ -92,11 +95,14 @@ public enum HitAttribution {
     ///   → 모델 스코프 소진으로 전환하려면 **먼저 `isLimited`/`firstAvailable`이 modelScoped를
     ///   이해하도록** 고쳐야 한다. 그건 메뉴바·CLI·게이지까지 걸치는 별도 변경이라 후속으로 둔다.
     ///
-    /// ★ 한계(의도한 보수 선택): 100%인데 **리셋 시각이 없거나 이미 지난** 창은 소진으로
-    /// 치지 않는다. 잘못된 24시간 폴백을 박아 멀쩡한 계정을 하루 막는 것보다, 판정을 미루고
-    /// 다음 기회에 다시 보는 쪽이 안전하다.
+    /// ★ 100%인데 **리셋 시각이 없거나 이미 지난** 창은 `.inconclusive`다 — `.discard`가
+    /// **아니다.** 잘못된 24시간 폴백을 박아 멀쩡한 계정을 하루 막지도 않고, "여유"로
+    /// 오해해 트리거를 태워 없애지도 않는다(둘을 같은 값으로 돌려주면 호출측이 트리거를
+    /// 소비해 버려 그 소진은 영영 기록되지 않는다 — 셀프리뷰 지적).
     public static func verdict(usage: UsageSnapshot, now: Date) -> Verdict {
-        guard let hit = usage.exhaustionHit(now: now) else { return .discard }
-        return .record(hit)
+        if let hit = usage.exhaustionHit(now: now) { return .record(hit) }
+        let percents = [usage.fiveHourPercent, usage.sevenDayPercent]
+        if percents.contains(where: { ($0 ?? 0) >= 100 }) { return .inconclusive }
+        return .discard
     }
 }

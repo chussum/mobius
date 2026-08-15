@@ -706,4 +706,11 @@ Sources/MobiusApp/        SwiftUI 메뉴바 앱 + AppState + Views/ + LoginFlow 
   필수 (Bundle.module 접근자는 번들을 못 찾으면 fatalError한다).
 - 후속 후보: accounts.json 파일 락, 세션 로그 기반 인증 에러 감지, Codex 재로그인 감지,
   usage `limits[]`의 모델 스코프 주간 한도(weekly_scoped) 게이지 노출.
+- ★ **알려진 회귀(이슈 #19 수정의 대가, 의식적 선택)**: 창 소진 판정이 이제 usage의
+  5시간/주간 창을 근거로 하므로, **그 두 창에 안 잡히는 한도로 막힌 사용자는 자동 전환을
+  못 받는다** — 대표적으로 모델 전용 주간 한도(Fable/Opus 등 weekly_scoped). 수정 전에는
+  로그 hit만으로 (네트워크 0으로) 전환됐다. 대신 그때는 **계정 전체를 막는** 잘못된 기록이라
+  오귀인 사고의 원인이기도 했다. 제대로 하려면 `AccountProfile.isLimited`·
+  `AutoSwitchEngine.firstAvailable`이 `modelScoped`를 구분해야 한다(메뉴바·CLI·게이지까지
+  걸치는 변경) → 그 뒤에 `scopedExhaustionHit`을 되살린다. **릴리즈 노트에 반드시 알릴 것.**
 - 2차 프로젝트(합의): 멀티 PC ~/.claude 세션 동기화 — 자격증명 제외, 별도 스펙.
