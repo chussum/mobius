@@ -382,8 +382,8 @@ final class AppState: ObservableObject {
                     // 리셋 시각 보정: 로그 기반 감지는 시각이 없으면 24h로 때웠지만
                     // usage API는 진짜 리셋 시각을 안다. 이 계정이 limited로 마킹돼 있고
                     // 소진된 한도(≥100%)의 실제 리셋이 현재 기록과 다르면 그 값으로 교정.
-                    if let real = earliestExhaustedReset(snap),
-                       let cur = store.file.accounts.first(where: { $0.id == profile.id })?.rateLimit,
+                    if let cur = store.file.accounts.first(where: { $0.id == profile.id })?.rateLimit,
+                       let real = earliestExhaustedReset(snap, modelScoped: cur.modelScoped),
                        abs(cur.resetsAt.timeIntervalSince(real)) > 60 {
                         try? store.update(profile.id) {
                             $0.rateLimit = RateLimitInfo(resetsAt: real, recordedAt: cur.recordedAt,
@@ -603,12 +603,22 @@ final class AppState: ObservableObject {
     }
 
     /// 스냅샷에서 소진된(≥100%) 한도들의 가장 이른 실제 리셋 시각. 없으면 nil.
-    private func earliestExhaustedReset(_ s: UsageSnapshot) -> Date? {
+    ///
+    /// ★ **기록의 종류와 같은 창만 본다**(modelScoped). 계정 창과 모델 전용 한도를 섞어
+    ///   min을 취하면 종류가 뒤바뀐 시각으로 교정된다 — 예: Fable(+4일, modelScoped) 기록이
+    ///   있는 계정의 5시간 창이 소진되면 `min(+2시간, +4일)=+2시간`이 **modelScoped 플래그를
+    ///   단 채** 저장돼, 계정이 완전히 막혔는데 `isLimited`는 false가 된다(메뉴바 빨강 없음,
+    ///   핀이면 자동 전환도 안 됨). 반대 방향은 계정 한도를 일찍 풀어 소진된 계정으로 되돌아간다.
+    ///   섞어도 무해했던 코드지만, modelScoped 기록이 실제로 생기기 시작하면서 구멍이 됐다.
+    private func earliestExhaustedReset(_ s: UsageSnapshot, modelScoped: Bool) -> Date? {
         var dates: [Date] = []
-        if let p = s.fiveHourPercent, p >= 100, let r = s.fiveHourResetsAt { dates.append(r) }
-        if let p = s.sevenDayPercent, p >= 100, let r = s.sevenDayResetsAt { dates.append(r) }
-        for l in s.scopedLimits ?? [] where l.percent >= 100 {
-            if let r = l.resetsAt { dates.append(r) }
+        if modelScoped {
+            for l in s.scopedLimits ?? [] where l.percent >= 100 {
+                if let r = l.resetsAt { dates.append(r) }
+            }
+        } else {
+            if let p = s.fiveHourPercent, p >= 100, let r = s.fiveHourResetsAt { dates.append(r) }
+            if let p = s.sevenDayPercent, p >= 100, let r = s.sevenDayResetsAt { dates.append(r) }
         }
         return dates.min()
     }
@@ -959,8 +969,14 @@ final class AppState: ObservableObject {
         // 모델 스코프 한도(scopedLimits/Fable) 기반으로 판단해야 하며 별도 후속이다.
         guard let hit = snap.exhaustionHit(now: now) else { return }
         recordHit(hit, on: accountID, now: now)
-        await apply(engines[.claude]!.onRateLimitHit(file: store.file, hit: hit, now: now),
-                    provider: .claude, now: now)
+        // ★ 엔진 호출은 이 계정이 **아직 활성일 때만** — onRateLimitHit은 hit을 인자 계정이
+        //   아니라 "현재 활성 계정"에 얹어 판단한다(markedFile). 이 함수는 detached 조회를
+        //   거쳐 오므로 그 사이 전환이 끝났을 수 있고, 그러면 엉뚱한 계정을 소진으로 보고
+        //   결정한다 — 이 PR이 없애려는 오귀인과 같은 클래스다(창 hit 경로와 동일 처리).
+        if store.file.activeByProvider[.claude] == accountID {
+            await apply(engines[.claude]!.onRateLimitHit(file: store.file, hit: hit, now: now),
+                        provider: .claude, now: now)
+        }
         file = store.file
     }
 
@@ -974,11 +990,13 @@ final class AppState: ObservableObject {
     ///   한 번 읽기라 Keychain 승인창과 무관하다(실패 기록 3). 불일치면 nil을 돌려 이번 판정을
     ///   건너뛴다 — 트리거는 보류로 남아 reconcile이 마커를 고친 뒤 다시 판정된다.
     private func usageQueryBlob(for accountID: UUID) -> Data? {
-        if store.file.activeAccountID == accountID, let live = try? io.readLiveSnapshot() {
+        if store.file.activeAccountID == accountID {
+            // ★ 순서 주의(실패 기록 3b): **값싼 이메일 확인을 먼저.** readLiveSnapshot은
+            //   security CLI 서브프로세스라, 불일치로 버릴 결과를 먼저 읽으면 그 비용을
+            //   그냥 버리는 셈이다.
             let profileEmail = store.file.accounts.first { $0.id == accountID }?.emailAddress
-            if let liveEmail = try? io.liveEmail(), liveEmail == profileEmail {
-                return live.keychainBlob
-            }
+            guard let liveEmail = try? io.liveEmail(), liveEmail == profileEmail else { return nil }
+            if let live = try? io.readLiveSnapshot() { return live.keychainBlob }
             return nil
         }
         return (try? store.secret(for: accountID))?.keychainBlob
@@ -987,12 +1005,23 @@ final class AppState: ObservableObject {
     /// 계정별 마지막 **네트워크** 검증 시도 시각 — 실패 시 백오프용(HitAttribution.cooldown).
     private var lastHitVerifyAttempt: [UUID: Date] = [:]
 
-    /// **판정이 안 끝난 트리거**(계정 → 그 트리거를 처음 본 시각).
+    /// 판정이 안 끝난 트리거 하나.
+    /// 두 시각을 **따로** 들고 있다: 언제까지 재시도할지(TTL)와, 어떤 스냅샷을 믿을지(신선도).
+    /// 하나로 합치면 둘 중 하나가 반드시 틀린다 — 신선도 기준을 갱신하면 TTL이 영영 안 오고,
+    /// TTL 기준을 그대로 쓰면 이미 "모르겠다"고 판정한 스냅샷으로 계속 같은 답을 낸다.
+    private struct PendingTrigger {
+        /// TTL 기준 — 이 트리거를 처음 본 시각.
+        let firstSeenAt: Date
+        /// 이 시각 **이후에 뜬** 스냅샷만 판정에 쓴다.
+        var needsFresherThan: Date
+    }
+
+    /// **판정이 안 끝난 트리거**(계정 → 트리거).
     /// ★ 로그 hit은 워처 오프셋이 전진해 **한 번만 배달된다.** 조회가 실패했다고 그 자리에서
     ///   버리면, 사용자가 한도 에러를 보고 타이핑을 멈춘 순간 새 에러가 안 나와 **진짜 소진이
     ///   영영 기록되지 않는다**(자동 전환이 통째로 사라짐 — 셀프리뷰 지적). 그래서 트리거를
     ///   여기 남겨 다음 틱에 다시 판정한다(쿨다운이 재시도 주기를 잡는다).
-    private var pendingHitVerify: [UUID: Date] = [:]
+    private var pendingHitVerify: [UUID: PendingTrigger] = [:]
     /// 보류 트리거의 수명 — 이 시간이 지나도록 판정을 못 했으면 버린다(오프라인이 길어질 때
     /// 옛 트리거로 뒤늦게 엉뚱한 기록을 남기지 않도록).
     private static let pendingHitVerifyTTL: TimeInterval = 15 * 60
@@ -1017,26 +1046,33 @@ final class AppState: ObservableObject {
             lastHitVerifyAttempt[accountID] = nil
             return
         }
-        let previous = pendingHitVerify[accountID]
-        if isRetry, let previous, now.timeIntervalSince(previous) > Self.pendingHitVerifyTTL {
-            pendingHitVerify[accountID] = nil    // 너무 오래된 트리거는 포기한다
-            return
-        }
-        // 트리거 등록 — 보류 중이면 처음 본 시각을 유지한다(캐시 선후 판정의 기준점).
-        // 단 TTL을 넘긴 보류 위에 새 hit이 오면 그 hit 시각으로 갱신한다.
-        let observedAt: Date
-        if let previous, isRetry || now.timeIntervalSince(previous) <= Self.pendingHitVerifyTTL {
-            observedAt = previous
+        let trigger: PendingTrigger
+        if isRetry {
+            guard let previous = pendingHitVerify[accountID] else { return }
+            guard now.timeIntervalSince(previous.firstSeenAt) <= Self.pendingHitVerifyTTL else {
+                pendingHitVerify[accountID] = nil    // 너무 오래된 트리거는 포기한다
+                return
+            }
+            trigger = previous
         } else {
-            observedAt = now
+            // ★ 새 hit은 **언제나 새 트리거**다(셀프리뷰 지적 — 주석은 그렇게 적어 놓고 코드는
+            //   TTL을 넘겼을 때만 갱신했다). 옛 트리거의 시각을 물려받으면, 그 사이 팝오버가
+            //   떠 놓은 **소진 이전** 스냅샷이 "트리거보다 나중"으로 통과해 진짜 소진을
+            //   "여유"로 판정하고 트리거까지 태워 없앤다 — 순서 규칙을 만든 이유가 무너진다.
+            trigger = PendingTrigger(firstSeenAt: now, needsFresherThan: now)
         }
-        pendingHitVerify[accountID] = observedAt
+        pendingHitVerify[accountID] = trigger
+
+        // 디스크 캐시를 먼저 올린다(멱등). ★ 안 하면 두 가지가 깨진다: 팝오버를 한 번도
+        //   안 연 상태에서 saveUsageCache()가 **메모리에 있는 계정만** 기록해 나머지 계정의
+        //   저장된 게이지를 지우고, 멀쩡한 디스크 캐시를 못 봐서 불필요한 조회를 한 번 더 한다.
+        loadUsageCacheIfNeeded()
 
         let snapshot: UsageSnapshot?
         switch HitAttribution.plan(accountIsLimited: account.isLimited(now: now),
                                    hasModelLimitRecord: account.isModelLimited(now: now),
                                    cachedUsageAt: usage[accountID]?.fetchedAt,
-                                   hitObservedAt: observedAt,
+                                   hitObservedAt: trigger.needsFresherThan,
                                    lastFetchAttemptAt: lastHitVerifyAttempt[accountID],
                                    now: now) {
         case .skipAlreadyRecorded:
@@ -1061,7 +1097,11 @@ final class AppState: ObservableObject {
         let verifiedAt = Date()
         switch HitAttribution.verdict(usage: snapshot, now: verifiedAt) {
         case .inconclusive:
-            return                              // 소진은 맞는데 리셋 시각을 못 얻었다 — 보류 유지
+            // 소진은 맞는데 리셋 시각을 못 얻었다 — 보류를 유지하되, **방금 본 스냅샷으로는
+            // 다시 판정하지 않는다.** 안 그러면 같은 스냅샷이 계속 "트리거보다 나중"으로
+            // 통과해 매 틱 같은 답만 내고 새 조회가 영영 안 일어난다(셀프리뷰 지적).
+            pendingHitVerify[accountID]?.needsFresherThan = verifiedAt
+            return
         case .discard:
             pendingHitVerify[accountID] = nil   // 여유 있음 = 이 hit은 다른 계정 것이었다
             return

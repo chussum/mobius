@@ -106,9 +106,14 @@ public final class AutoSwitchEngine: @unchecked Sendable {
         //     (로그 hit 순간의 전환을 쿨다운·throw 등으로 놓쳐도 다음 틱에 복구).
         //     단 autoSwitchMayLeave가 false면(모델 전용 한도 + 사용자 핀) 밀어내지 않는다 —
         //     "1회 자동 전환 후 내가 되돌리면 머문다".
+        // ★ avoidModelLimited는 "모델 한도 기록이 있는가"가 아니라 **"그것 때문에 떠나는가"**다.
+        //   재인증 필요·계정 소진으로 떠나는데 옛 모델 한도 기록이 남아 있다는 이유로 후보를
+        //   걸러내면, 갈 수 있는 폴백이 있는데도 **못 쓰는 계정에 머문다**(셀프리뷰 지적).
+        let leavingForModelLimit = !active.needsReauth && !active.isLimited(now: now)
+            && active.isModelLimited(now: now)
         if active.autoSwitchMayLeave(now: now),
            let next = firstAvailable(in: file, excluding: active.id, now: now,
-                                     avoidModelLimited: active.isModelLimited(now: now)) {
+                                     avoidModelLimited: leavingForModelLimit) {
             return .switchTo(next, reason: .activeExhausted)
         }
 

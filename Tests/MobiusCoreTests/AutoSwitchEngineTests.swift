@@ -499,4 +499,37 @@ final class AutoSwitchEngineTests: XCTestCase {
             file: file, hit: RateLimitHit(resetsAt: t0.addingTimeInterval(3600)), now: t0),
                        .allExhausted)
     }
+
+    /// ★ **떠나는 이유가 모델 한도가 아니면** 모델 한도가 걸린 폴백을 걸러내면 안 된다.
+    /// 재인증이 필요한(= 못 쓰는) 계정에 머물러 있는데, 옛 Fable 기록이 남아 있다는 이유로
+    /// 갈 수 있는 폴백을 지워 버리면 사용자는 죽은 계정에 갇힌다.
+    func testReauthLeaveDoesNotFilterModelLimitedFallbacks() {
+        file.accounts[0].needsReauth = true
+        file.accounts[0].rateLimit = RateLimitInfo(resetsAt: t0.addingTimeInterval(4 * 86400),
+                                                   recordedAt: t0, modelScoped: true)
+        file.accounts[1].rateLimit = RateLimitInfo(resetsAt: t0.addingTimeInterval(4 * 86400),
+                                                   recordedAt: t0, modelScoped: true)
+        XCTAssertEqual(AutoSwitchEngine().onTick(file: file, now: t0),
+                       .switchTo(fb1.id, reason: .activeExhausted))
+    }
+
+    /// 계정 자체가 소진돼 떠날 때도 마찬가지 — 모델 한도 폴백은 정상 후보다.
+    func testAccountExhaustedLeaveDoesNotFilterModelLimitedFallbacks() {
+        file.accounts[0].rateLimit = RateLimitInfo(resetsAt: t0.addingTimeInterval(3600),
+                                                   recordedAt: t0, modelScoped: false)
+        file.accounts[1].rateLimit = RateLimitInfo(resetsAt: t0.addingTimeInterval(4 * 86400),
+                                                   recordedAt: t0, modelScoped: true)
+        XCTAssertEqual(AutoSwitchEngine().onTick(file: file, now: t0),
+                       .switchTo(fb1.id, reason: .activeExhausted))
+    }
+
+    /// 반대로 모델 한도**만** 걸려서 떠날 때는 같은 모델이 막힌 폴백을 건너뛴다.
+    func testModelLimitedLeaveSkipsModelLimitedFallbacksOnTick() {
+        file.accounts[0].rateLimit = RateLimitInfo(resetsAt: t0.addingTimeInterval(4 * 86400),
+                                                   recordedAt: t0, modelScoped: true)
+        file.accounts[1].rateLimit = RateLimitInfo(resetsAt: t0.addingTimeInterval(4 * 86400),
+                                                   recordedAt: t0, modelScoped: true)
+        XCTAssertEqual(AutoSwitchEngine().onTick(file: file, now: t0),
+                       .switchTo(fb2.id, reason: .activeExhausted))
+    }
 }
