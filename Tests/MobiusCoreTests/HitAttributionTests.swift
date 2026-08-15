@@ -74,8 +74,11 @@ final class HitAttributionTests: XCTestCase {
         let usage = snapshot(fiveHour: 9, sevenDay: 16,
                              scoped: [ScopedUsageLimit(label: "Fable", percent: 100,
                                                        resetsAt: now.addingTimeInterval(4 * 86400))])
+        // ★ `.discard`가 아니라 `.notYetTrusted`다 — 필요한 건 새 데이터가 아니라 **시간**이라,
+        //   호출측이 같은 스냅샷으로 창이 지난 뒤 공짜로 다시 판정한다(조회 0회). discard로
+        //   두면 그 discard가 백오프 카운터를 채워 신뢰 창이 열린 뒤에도 기록이 더 늦어진다.
         XCTAssertEqual(HitAttribution.verdict(usage: usage, now: now, trustModelScope: false),
-                       .discard)
+                       .notYetTrusted)
         // 계정 창 소진은 시점 정보가 있는 증거라 전환 직후에도 그대로 인정한다.
         let exhausted = snapshot(fiveHour: 100, sevenDay: 16)
         guard case .record = HitAttribution.verdict(usage: exhausted, now: now,
@@ -210,5 +213,38 @@ final class HitAttributionTests: XCTestCase {
                                            lastFetchAttemptAt: now.addingTimeInterval(-10),
                                            now: now),
                        .skipCooldown)
+    }
+
+    /// ★ 로그 hit은 "CLI가 실제로 막혔다"는 사실이고 usage 백분율은 근사값이라, 소진 순간
+    /// API가 99%로 보일 수 있다. 그때 버리면 — 막힌 사용자는 타이핑을 멈춰 새 hit도 안 오므로 —
+    /// 그 소진은 영영 기록되지 않는다. 한도에 바짝 붙었으면 버리지 않고 보류한다.
+    func testNearLimitIsHeldPendingInsteadOfDiscarded() {
+        XCTAssertEqual(HitAttribution.verdict(usage: snapshot(fiveHour: 99, sevenDay: 30), now: now),
+                       .inconclusive)
+        // 오귀인 쪽(폴백 7일 16%)은 이 선에 한참 못 미쳐 즉시 버려진다 — 비용이 늘지 않는다.
+        XCTAssertEqual(HitAttribution.verdict(usage: snapshot(fiveHour: 9, sevenDay: 16), now: now),
+                       .discard)
+    }
+
+    /// 모델 한도를 같은 값으로 재확인한 뒤에는 재확인 주기를 더 늦춘다 — 모델 한도는 며칠
+    /// 가는 상태라, 안 늦추면 그 기간 내내 3분마다 조회가 돌아 "폴링 0" 계약이 무너진다.
+    func testReconfirmedModelLimitUsesSteadyInterval() {
+        XCTAssertGreaterThan(HitAttribution.modelLimitedSteadyRecheck,
+                             HitAttribution.modelLimitedRecheck)
+        // 첫 재확인 주기는 지났지만 정상 상태 주기는 아직 — 조회하지 않는다.
+        XCTAssertEqual(HitAttribution.plan(accountIsLimited: false, hasModelLimitRecord: true,
+                                           modelLimitReconfirmed: true, cachedUsageAt: nil,
+                                           hitObservedAt: now,
+                                           lastFetchAttemptAt: now.addingTimeInterval(
+                                               -HitAttribution.modelLimitedRecheck - 1),
+                                           now: now),
+                       .skipCooldown)
+        XCTAssertEqual(HitAttribution.plan(accountIsLimited: false, hasModelLimitRecord: true,
+                                           modelLimitReconfirmed: true, cachedUsageAt: nil,
+                                           hitObservedAt: now,
+                                           lastFetchAttemptAt: now.addingTimeInterval(
+                                               -HitAttribution.modelLimitedSteadyRecheck - 1),
+                                           now: now),
+                       .fetchUsage)
     }
 }

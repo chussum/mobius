@@ -41,10 +41,17 @@ public final class AutoSwitchEngine: @unchecked Sendable {
 
     public init(provider: Provider = .claude) { self.provider = provider }
 
-    public func noteSwitched(now: Date = Date()) {
+    /// - Parameter forModelLimit: 이 전환이 **모델 전용 한도 때문**이었는가.
+    ///   primary 자동 복귀 게이트가 이 값을 본다 — 아래 `onTick` (B) 참조.
+    public func noteSwitched(now: Date = Date(), forModelLimit: Bool = false) {
         lock.lock(); defer { lock.unlock() }
         lastSwitchAt = now
+        leftForModelLimit = forModelLimit
     }
+
+    /// 마지막 자동 전환이 모델 전용 한도 때문이었는가(인메모리 — 재시작하면 false로 시작한다.
+    /// 그 경우 복귀가 조금 더 관대해질 뿐이라 안전한 방향이다).
+    private var leftForModelLimit = false
 
     private func inCooldown(_ now: Date) -> Bool {
         lock.lock(); defer { lock.unlock() }
@@ -138,7 +145,15 @@ public final class AutoSwitchEngine: @unchecked Sendable {
         //   검사해서, advisory만 보고 떠난 경우(rateLimit 없음) 가드가 통째로 스킵됐다 →
         //   쿨다운(120초)이 풀리는 순간 primary로 돌아가고, 아직 임계값 위인 primary를
         //   다시 떠나는 2분 주기 핑퐁이 창이 리셋될 때까지 계속된다.
-        let gates = [primary.rateLimit?.resetsAt, primary.advisory?.resetsAt]
+        // ★ primary의 **모델 전용 한도**는 "떠난 이유가 그것이었을 때만" 복귀를 막는다
+        //   (셀프리뷰 지적). 모델 한도는 며칠 가는데, 그걸 무조건 게이트로 쓰면 계정 자체가
+        //   멀쩡한 primary로 **일주일 내내 못 돌아온다** — 게다가 (A)의 firstAvailable은
+        //   같은 상태의 계정을 다른 이유의 전환에서는 정상 후보로 고르므로 두 분기가 서로
+        //   모순된 말을 하게 된다. 계정 자체 한도는 이유와 무관하게 늘 게이트다.
+        let modelGate = lock.withLock { leftForModelLimit }
+            ? primary.rateLimit.flatMap { $0.modelScoped ? $0.resetsAt : nil } : nil
+        let accountGate = primary.rateLimit.flatMap { $0.modelScoped ? nil : $0.resetsAt }
+        let gates = [accountGate, modelGate, primary.advisory?.resetsAt]
             .compactMap { $0?.addingTimeInterval(margin) }
         if let blockedUntil = gates.max(), now < blockedUntil { return .none }
         return .switchTo(primary.id, reason: .primaryRecovered)

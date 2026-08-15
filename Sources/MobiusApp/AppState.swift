@@ -326,10 +326,12 @@ final class AppState: ObservableObject {
                 // 활성 계정은 저장 스냅샷 대신 **라이브 토큰**으로 조회한다 — claude CLI가
                 // 라이브 토큰을 갱신하므로 저장본이 낡으면 401 오탐(잘 쓰는데 "재로그인 필요")이
                 // 난다. 비활성 계정은 라이브가 그 계정이 아니므로 저장 스냅샷을 쓴다.
-                let blob: Data?
-                if isActive, let live = try? io.readLiveSnapshot() { blob = live.keychainBlob }
-                else { blob = (try? store.secret(for: profile.id))?.keychainBlob }
-                guard let blob else { continue }
+                // ★ 라이브를 쓸 땐 **라이브 이메일이 이 프로필과 맞는지** 확인한다 —
+                //   activeByProvider 마커가 외부 로그인보다 최대 15초 뒤처지므로, 확인 없이
+                //   쓰면 X의 토큰으로 조회한 결과를 Y의 게이지에 쓰고 401이면 Y에 재로그인
+                //   딱지까지 붙인다(이 PR이 없애는 오귀인과 같은 클래스). 불일치면 저장
+                //   스냅샷으로 내려온다 — 그건 계정 id로 꺼내므로 오귀인이 불가능하다.
+                guard let blob = usageQueryBlob(for: profile.id) else { continue }
                 // 비활성 계정의 저장 access 토큰이 만료됐으면 게이지를 못 읽어 얼어붙는다
                 // (429/401 → 조용히 continue). 폴백 refresh 기계로 미리 갱신한다 — 활성은
                 // check의 첫 guard가 절대 건드리지 않고, 회전 토큰은 원자 저장되며,
@@ -924,7 +926,16 @@ final class AppState: ObservableObject {
         for accountID in Array(pendingHitVerify.keys) {   // 루프 중 딕셔너리를 지우므로 복사
             await verifyAndRecordWindowHit(accountID: accountID, now: scannedAt, isRetry: true)
         }
-        if sawMonthlySpend { await verifyWindowsAfterSpendLimit(accountID: claudeActiveID, now: now) }
+        // 월 지출(P3, extra-usage) 한도 이벤트도 **같은 경로로 교차 확인**한다.
+        // 이 메시지는 표시 우선순위(override)라 "무엇이 막혔는지"의 신뢰 신호가 아니어서
+        // 원래도 usage로 창을 교차확인했는데, 그 전용 코드는 이 PR이 창 hit 경로에 넣은
+        // 보호(순서 기반 캐시·보류 재시도·라이브 신원 확인)를 하나도 못 받고 있었다 —
+        // 캐시가 나이 기준(4분)이라 소진 직전 스냅샷으로 "여유"라 오판할 수 있고, 조회가
+        // 실패하면 재시도 장치가 없어 그 hit이 통째로 사라졌다(셀프리뷰 지적).
+        // 판정 로직이 동일하므로 전용 경로를 지우고 합쳤다.
+        if sawMonthlySpend {
+            await verifyAndRecordWindowHit(accountID: claudeActiveID, now: scannedAt)
+        }
 
         // Codex: 매 턴 실리는 rate_limits 상태 — 라우터가 전환 전 세션 파일을 걸러낸 뒤
         // 게이지 갱신 + 소진 판정 (네트워크 0)
@@ -943,51 +954,6 @@ final class AppState: ObservableObject {
             $0.rateLimit = RateLimitInfo(resetsAt: hit.effectiveResetsAt(now: now),
                                          recordedAt: now, modelScoped: hit.modelScoped)
         }
-    }
-
-    /// 월 지출(P3, extra-usage) 한도 이벤트의 교차 확인 — 이 메시지는 표시 우선순위(override)라
-    /// 실제 막힌 한도의 신뢰 신호가 아니므로, usage로 5h/주간 창을 교차확인해 진짜 창 소진이면
-    /// 실제 리셋 시각으로 기록하고 창 여유면 무시한다(applyVerifiedExhaustion).
-    /// P3는 짧은 폭주로 온다(실측: 30초에 15개 세션 파일) — 캐시 우선 + 단일 인플라이트로
-    /// 네트워크 호출을 억제하고, 이미 소진 기록이 있으면 건너뛴다.
-    private var spendVerifyTask: Task<Void, Never>?
-
-    private func verifyWindowsAfterSpendLimit(accountID: UUID?, now: Date) async {
-        guard let accountID, spendVerifyTask == nil else { return }
-        guard let account = store.file.accounts.first(where: { $0.id == accountID }),
-              !account.isLimited(now: now) else { return }
-        // 신선한 캐시가 있으면 네트워크 없이 판단
-        if let cached = usage[accountID], now.timeIntervalSince(cached.fetchedAt) < usageStaleness {
-            await applyVerifiedExhaustion(cached, accountID: accountID, now: now)
-            return
-        }
-        guard let blob = usageQueryBlob(for: accountID) else { return }
-        spendVerifyTask = Task { @MainActor in
-            defer { spendVerifyTask = nil }
-            guard let snap = try? await UsageFetcher.fetch(keychainBlob: blob)
-            else { return }
-            usage[accountID] = snap
-            await applyVerifiedExhaustion(snap, accountID: accountID, now: Date())
-        }
-    }
-
-    private func applyVerifiedExhaustion(_ snap: UsageSnapshot, accountID: UUID, now: Date) async {
-        // P3(extra-usage 월 지출 한도) 메시지는 표시 우선순위(override)라 "무엇이 막혔는지"의
-        // 신뢰 신호가 아니다(extra-usage가 차면 실제 원인인 다른 한도를 가린다 — 사용자 정정).
-        // → usage로 5h/주간 창을 교차확인해 진짜 창 소진이면 실제 리셋 시각으로 기록하고,
-        // 창 여유면 무시한다(계정은 창 안에서 계속 사용 가능). 프리미엄 유지 전환은 P3가 아니라
-        // 모델 스코프 한도(scopedLimits/Fable) 기반으로 판단해야 하며 별도 후속이다.
-        guard let hit = snap.exhaustionHit(now: now) else { return }
-        recordHit(hit, on: accountID, now: now)
-        // ★ 엔진 호출은 이 계정이 **아직 활성일 때만** — onRateLimitHit은 hit을 인자 계정이
-        //   아니라 "현재 활성 계정"에 얹어 판단한다(markedFile). 이 함수는 detached 조회를
-        //   거쳐 오므로 그 사이 전환이 끝났을 수 있고, 그러면 엉뚱한 계정을 소진으로 보고
-        //   결정한다 — 이 PR이 없애려는 오귀인과 같은 클래스다(창 hit 경로와 동일 처리).
-        if store.file.activeByProvider[.claude] == accountID {
-            await apply(engines[.claude]!.onRateLimitHit(file: store.file, hit: hit, now: now),
-                        provider: .claude, now: now)
-        }
-        file = store.file
     }
 
     /// usage 조회에 쓸 자격증명 blob. **활성 계정은 라이브 토큰**을 쓴다 — 저장 스냅샷은 앱
@@ -1043,6 +1009,10 @@ final class AppState: ObservableObject {
     private static let verifyGiveUpBackoff: TimeInterval = 10 * 60
     /// 계정별 "당분간 조회 안 함" 시각. (트리거는 계속 쌓아 두고 **조회만** 쉰다.)
     private var verifyGiveUpUntil: [UUID: Date] = [:]
+    /// 모델 전용 한도를 **같은 값으로 다시 확인한** 계정 — 이후 재확인을 더 늦춘다.
+    /// 모델 한도는 며칠 가는 상태라, 여기서 늦추지 않으면 그 기간 내내 3분마다 조회가 돌아
+    /// "게이지 끄면 폴링 0" 계약이 무너진다. 기록이 바뀌면(다른 값/해제) 다시 빠른 주기로.
+    private var modelLimitReconfirmed: Set<UUID> = []
     /// 연속 `.discard` 횟수 — 이 계정과 무관한 hit(다른 계정의 뒤늦은 에러)이 계속 흘러들 때
     /// 60초마다 조회가 무한히 도는 것을 막는다. `.discard`는 "이 계정은 멀쩡하다"는 뜻이라
     /// 몇 번 확인했으면 잠시 쉬어도 잃는 게 없다.
@@ -1134,6 +1104,7 @@ final class AppState: ObservableObject {
         var judgedByFetch = false
         switch HitAttribution.plan(accountIsLimited: account.isLimited(now: now),
                                    hasModelLimitRecord: account.isModelLimited(now: now),
+                                   modelLimitReconfirmed: modelLimitReconfirmed.contains(accountID),
                                    cachedUsageAt: usage[accountID]?.fetchedAt,
                                    hitObservedAt: trigger.needsFresherThan,
                                    lastFetchAttemptAt: lastHitVerifyAttempt[accountID],
@@ -1172,10 +1143,17 @@ final class AppState: ObservableObject {
         switch HitAttribution.verdict(usage: snapshot, now: verifiedAt,
                                       trustModelScope: trustModelScope) {
         case .inconclusive:
-            // 소진은 맞는데 리셋 시각을 못 얻었다 — 보류를 유지하되, **방금 본 스냅샷으로는
-            // 다시 판정하지 않는다.** 안 그러면 같은 스냅샷이 계속 "트리거보다 나중"으로
-            // 통과해 매 틱 같은 답만 내고 새 조회가 영영 안 일어난다(셀프리뷰 지적).
+            // 소진은 맞는데 리셋 시각을 못 얻었다(또는 한도에 바짝 붙어 API가 아직 못 따라옴)
+            // — 보류를 유지하되, **방금 본 스냅샷으로는 다시 판정하지 않는다.** 안 그러면
+            // 같은 스냅샷이 계속 "트리거보다 나중"으로 통과해 매 틱 같은 답만 내고 새 조회가
+            // 영영 안 일어난다(셀프리뷰 지적).
             pendingHitVerify[accountID]?.needsFresherThan = verifiedAt
+            return
+        case .notYetTrusted:
+            // 모델 한도는 보이는데 전환 직후라 아직 못 믿는다 — 필요한 건 **새 데이터가
+            // 아니라 시간**이다. needsFresherThan을 그대로 두면 같은 스냅샷으로 창이 지난 뒤
+            // 공짜로 다시 판정된다(조회 0회). 이걸 discard로 처리하면 그 discard가 백오프
+            // 카운터를 채워, 신뢰 창이 열린 뒤에도 몇 분 더 기록이 늦어졌다(셀프리뷰 지적).
             return
         case .discard:
             pendingHitVerify[accountID] = nil   // 여유 있음 = 이 hit은 다른 계정 것이었다
@@ -1208,7 +1186,13 @@ final class AppState: ObservableObject {
         // 계속 쓰므로 hit이 반복해서 온다. 매번 저장하면 accounts.json이 무의미하게 갱신되고
         // recordedAt만 흔들린다(UI 깜빡임·불필요한 디스크 쓰기).
         if let existing = account.rateLimit, existing.resetsAt == verified.resetsAt,
-           existing.modelScoped == verified.modelScoped, existing.resetsAt > verifiedAt { return }
+           existing.modelScoped == verified.modelScoped, existing.resetsAt > verifiedAt {
+            // 같은 모델 한도를 다시 확인했다 = 이제 알아낼 건 "계정 창이 새로 소진됐는지"뿐
+            // → 재확인 주기를 늦춘다(위 modelLimitReconfirmed 참조).
+            if verified.modelScoped { modelLimitReconfirmed.insert(accountID) }
+            return
+        }
+        modelLimitReconfirmed.remove(accountID)   // 새로운 기록 — 다시 빠른 주기로
         recordHit(verified, on: accountID, now: verifiedAt)
         // ★ 엔진 호출은 **이 계정이 아직 활성일 때만.** onRateLimitHit은 hit을 인자 계정이
         //   아니라 "현재 활성 계정"에 얹어 판단하므로(markedFile), 그 사이 전환이 끝났다면
@@ -1409,7 +1393,8 @@ final class AppState: ObservableObject {
             if provider == .codex { await quiesceCodexUsageTask() }
             do {
                 try switcher.switchTo(id)
-                engines[provider]?.noteSwitched(now: now)
+                engines[provider]?.noteSwitched(now: now,
+                                                forModelLimit: reason == .modelExhausted)
                 // 자동 전환의 결과인지 기록 — onTick의 primary 복귀는 이 플래그가
                 // true일 때만 일어난다 (수동 전환 자동 회귀 방지). 임계값 선제 전환도
                 // 자동 전환이므로 소진 전환과 동일하게 플래그를 세운다.

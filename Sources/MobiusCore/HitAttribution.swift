@@ -45,6 +45,10 @@ public enum HitAttribution {
         case record(RateLimitHit)
         /// 창에 여유가 있다 = 이 hit은 **다른 계정 것**이었다 → 버린다.
         case discard
+        /// 모델 전용 한도 소진이 보이지만 **아직 믿을 수 없다**(최근 전환 직후).
+        /// `.inconclusive`와 달리 **더 신선한 데이터가 필요한 게 아니라 시간만 지나면 된다** —
+        /// 호출측은 트리거를 보류하되 **같은 스냅샷으로 다시 판정**하므로 추가 조회가 없다.
+        case notYetTrusted
         /// 소진은 맞는데 **쓸 수 있는 리셋 시각이 없다**(누락/파싱 실패/이미 지남).
         /// "여유"와 섞으면 안 된다 — 트리거를 보류해 다음 기회에 다시 본다(셀프리뷰 지적).
         case inconclusive
@@ -60,11 +64,17 @@ public enum HitAttribution {
     /// 그렇다고 완전히 스킵할 수도 없다 — 그 사이 **계정 창 자체가** 소진될 수 있고, 그건
     /// 반드시 잡아야 하는 신호다. 그래서 "끄지 않고 늦춘다".
     ///
-    /// ★ 이 값은 **두 나쁜 결과 사이의 저울**이다(셀프리뷰 지적으로 10분 → 3분): 길수록
-    ///   조회는 줄지만, 모델 한도가 걸린 계정의 **5시간 창이 새로 소진됐을 때** 그만큼 오래
-    ///   기록이 안 되고 — 기록이 없으면 `onTick`의 자가복구도 못 도므로 — 사용자는 자동 전환
-    ///   없이 막혀 있게 된다. 10분은 그 공백이 너무 길었다.
+    /// ★ 이 값은 **두 나쁜 결과 사이의 저울**이다: 길수록 조회는 줄지만, 모델 한도가 걸린
+    ///   계정의 **5시간 창이 새로 소진됐을 때** 그만큼 오래 기록이 안 되고 — 기록이 없으면
+    ///   `onTick`의 자가복구도 못 도므로 — 사용자는 자동 전환 없이 막혀 있게 된다.
+    ///   그래서 **한 값으로 두 요구를 맞추지 않고 2단으로 나눈다**: 첫 재확인은 빠르게(아래),
+    ///   같은 결과가 반복되면 느리게(`modelLimitedSteadyRecheck`). 모델 한도는 며칠 가는
+    ///   상태라, 그 상태에서 계속 3분마다 두드리면 하루 수백 번이 되어 "게이지 끄면 폴링 0"
+    ///   계약이 무너진다(셀프리뷰 지적).
     public static let modelLimitedRecheck: TimeInterval = 180
+
+    /// 모델 한도를 **같은 값으로 다시 확인한 뒤**의 재확인 간격(정상 상태 감시).
+    public static let modelLimitedSteadyRecheck: TimeInterval = 15 * 60
 
     /// 이번 트리거를 어떻게 처리할지 정한다. 순수 함수 — 부작용 없음.
     /// 값싼 조건부터 본다(실패 기록 3b: 비싼 부작용은 뒤로).
@@ -82,15 +92,23 @@ public enum HitAttribution {
     ///   버린다** — 게다가 그 버림은 조회 흔적조차 안 남아 "소진이 아니었다"와 구분되지 않는다.
     ///   이 규칙이면 한 배치 안의 두 번째 hit부터는(첫 hit이 방금 조회했으므로) 그대로 캐시를
     ///   타 네트워크 0을 유지하면서, 오래된 스냅샷으로는 절대 판정하지 않는다.
+    /// - Parameter modelLimitReconfirmed: 그 모델 한도를 이미 **같은 값으로 다시 확인**했는가
+    ///   (= 더 알아낼 게 "계정 창이 새로 소진됐는지"뿐인 정상 상태) → 재확인을 더 늦춘다.
     public static func plan(accountIsLimited: Bool,
                             hasModelLimitRecord: Bool = false,
+                            modelLimitReconfirmed: Bool = false,
                             cachedUsageAt: Date?,
                             hitObservedAt: Date,
                             lastFetchAttemptAt: Date?,
                             now: Date) -> Action {
         if accountIsLimited { return .skipAlreadyRecorded }
         if let cachedUsageAt, cachedUsageAt >= hitObservedAt { return .verifyWithCache }
-        let backoff = hasModelLimitRecord ? modelLimitedRecheck : cooldown
+        let backoff: TimeInterval
+        if hasModelLimitRecord {
+            backoff = modelLimitReconfirmed ? modelLimitedSteadyRecheck : modelLimitedRecheck
+        } else {
+            backoff = cooldown
+        }
         if let lastFetchAttemptAt, now.timeIntervalSince(lastFetchAttemptAt) < backoff {
             return .skipCooldown
         }
@@ -126,15 +144,29 @@ public enum HitAttribution {
     /// 소비해 버려 그 소진은 영영 기록되지 않는다 — 셀프리뷰 지적).
     /// - Parameter trustModelScope: 모델 전용 한도를 귀속 증거로 써도 되는가
     ///   (= 마지막 활성 계정 변경으로부터 `modelScopeTrustWindow`가 지났는가).
+    /// API가 아직 100%를 안 보여줘도 "곧 그렇게 될" 수준이면 판정을 미루는 경계.
+    ///
+    /// ★ 로그 hit은 **CLI가 실제로 막혔다는 사실**이고, `utilization`은 다른 서비스의
+    ///   근사값이다. 소진 순간 API가 99%로 보이면 `.discard`가 되는데, 그러면 트리거가
+    ///   타 없어지고 — 막힌 사용자는 (당연히) 타이핑을 멈추므로 새 hit도 안 와서 — 그
+    ///   소진은 영영 기록되지 않는다(셀프리뷰 지적). 그래서 **한도에 바짝 붙어 있으면**
+    ///   버리지 않고 보류해 다음 조회에서 다시 본다. 오귀인 쪽(폴백 7일 16%)은 이 선에
+    ///   한참 못 미쳐 즉시 버려지므로 비용이 늘지 않는다.
+    public static let nearLimitPercent: Double = 95
+
     public static func verdict(usage: UsageSnapshot, now: Date,
                                trustModelScope: Bool = true) -> Verdict {
         if let hit = usage.exhaustionHit(now: now) { return .record(hit) }
-        if trustModelScope, let scoped = usage.scopedExhaustionHit(now: now) {
-            return .record(scoped)
+        if let scoped = usage.scopedExhaustionHit(now: now) {
+            // 전환 직후엔 이 증거를 안 믿는다 — 다만 **버리지도 않는다**: 필요한 건 새
+            // 데이터가 아니라 시간이므로, 같은 스냅샷으로 창이 지난 뒤 다시 판정한다.
+            return trustModelScope ? .record(scoped) : .notYetTrusted
         }
         // ★ `.inconclusive`("소진은 맞는데 리셋 시각을 못 얻음")는 **계정 창에만** 적용한다.
         //   모델 전용 한도는 며칠 100%로 남아 있을 수 있어, 그걸로 보류를 걸면 **멀쩡한
         //   계정**에서 스쳐 지나간 hit 하나가 15분 동안 보류로 남아 60초마다 조회를 유발한다.
-        return usage.hasExhaustedAccountWindow() ? .inconclusive : .discard
+        if usage.hasExhaustedAccountWindow() { return .inconclusive }
+        if usage.hasNearLimitAccountWindow(threshold: nearLimitPercent) { return .inconclusive }
+        return .discard
     }
 }

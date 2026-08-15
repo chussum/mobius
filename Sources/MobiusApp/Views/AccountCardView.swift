@@ -152,7 +152,16 @@ struct AccountCardView: View {
         return five >= 100 || week >= 100
     }
     @ViewBuilder private var statusLine: some View {
-        if autoSwitchOn, let rl = profile.rateLimit, rl.resetsAt > now, generallyLimited {
+        // ★ 모델 전용 한도는 "계정 한도 소진"으로 표시하지 않는다 — 계정은 다른 모델로 계속
+        //   쓸 수 있다(메뉴바·CLI·알림과 같은 규칙). 특히 usage를 아직 모를 때 generallyLimited는
+        //   보수적으로 true라, 이 분기가 없으면 모델 한도만 있는 계정에 계정 소진 카운트다운이
+        //   뜬다(셀프리뷰 지적).
+        if autoSwitchOn, let rl = profile.rateLimit, rl.resetsAt > now, rl.modelScoped {
+            let mins = max(0, Int(rl.resetsAt.timeIntervalSince(now) / 60))
+            Label(loc("모델 한도 · %d시간 %d분 후 초기화", mins / 60, mins % 60),
+                  systemImage: "sparkles")
+                .font(.system(size: 10)).foregroundStyle(.secondary)
+        } else if autoSwitchOn, let rl = profile.rateLimit, rl.resetsAt > now, generallyLimited {
             let mins = max(0, Int(rl.resetsAt.timeIntervalSince(now) / 60))
             Label(loc("리셋까지 %d시간 %d분", mins / 60, mins % 60), systemImage: "hourglass")
                 .font(.system(size: 10)).foregroundStyle(.orange)

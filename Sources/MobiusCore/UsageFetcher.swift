@@ -69,6 +69,12 @@ public struct UsageSnapshot: Codable, Equatable, Sendable {
     public func hasExhaustedAccountWindow() -> Bool {
         (fiveHourPercent ?? 0) >= 100 || (sevenDayPercent ?? 0) >= 100
     }
+
+    /// 계정 창이 한도에 **바짝 붙어** 있는가 — "아직 100%는 아니지만 곧"인 상태.
+    /// 로그가 소진을 말하는데 API가 살짝 못 따라온 경우를 버리지 않고 보류하는 데 쓴다.
+    public func hasNearLimitAccountWindow(threshold: Double) -> Bool {
+        (fiveHourPercent ?? 0) >= threshold || (sevenDayPercent ?? 0) >= threshold
+    }
 }
 
 public enum UsageFetcherError: Error, Equatable {
