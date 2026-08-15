@@ -903,18 +903,26 @@ final class AppState: ObservableObject {
             claudeActiveChangedAt = now
         }
         var sawMonthlySpend = false
+        // ★ 트리거의 신선도 기준은 **스캔이 끝난 지금**이지 틱 시작 시각(now)이 아니다
+        //   (셀프리뷰 지적). 틱은 여기까지 오는 동안 reconcile·5분 스냅샷 동기화·임계값 폴을
+        //   거치는데, 그중 임계값 폴은 usage 캐시를 갱신한다 — 그 스냅샷은 아직 **소진 전**
+        //   (예: 96%)일 수 있고, 그런데도 `fetchedAt > now`라 "트리거보다 나중"으로 통과해
+        //   방금 도착한 진짜 소진을 "여유"로 판정하고 트리거까지 태워 없앤다. 이 PR이 세운
+        //   "나이가 아니라 순서" 규칙이 정확히 여기서 깨진다. 한 배치의 hit들은 같은 값을
+        //   공유하므로 배치 내 캐시 재사용(네트워크 0)은 그대로다.
+        let scannedAt = Date()
         for hit in claudeHits {
             // 월간 지출 한도(P3)는 창 소진이 아니다 — 기록하면 24h 폴백 오탐이 된다
             // (2026-07-13 실측: 플랜 창 여유 상태에서도 뜨고 세션은 정상 동작).
             // 단 창 소진과 겹치면 이 메시지가 우선 표시돼 창 소진을 가리므로 usage로 교차 확인.
             guard hit.kind == .window else { sawMonthlySpend = true; continue }
-            await verifyAndRecordWindowHit(accountID: claudeActiveID, now: now)
+            await verifyAndRecordWindowHit(accountID: claudeActiveID, now: scannedAt)
         }
         // 판정을 못 끝낸 트리거 재시도 — 로그 hit은 한 번만 배달되므로(오프셋 전진), 조회가
         // 실패한 트리거를 여기서 다시 보지 않으면 사용자가 타이핑을 멈춘 순간 그 소진은
         // 영영 기록되지 않는다. 재시도 주기는 HitAttribution.cooldown이 잡는다(매 틱 아님).
         for accountID in Array(pendingHitVerify.keys) {   // 루프 중 딕셔너리를 지우므로 복사
-            await verifyAndRecordWindowHit(accountID: accountID, now: now, isRetry: true)
+            await verifyAndRecordWindowHit(accountID: accountID, now: scannedAt, isRetry: true)
         }
         if sawMonthlySpend { await verifyWindowsAfterSpendLimit(accountID: claudeActiveID, now: now) }
 
@@ -989,8 +997,9 @@ final class AppState: ObservableObject {
     ///   `activeByProvider` 마커는 reconcile이 15초마다 맞추고 로그인 창이 열려 있으면 아예
     ///   건너뛰므로, 밖에서 계정이 바뀐 직후엔 **X의 토큰으로 조회한 결과를 Y에 기록**할 수
     ///   있다 — 이 PR이 없애려는 오귀인과 정확히 같은 클래스다. 이메일 확인은 `~/.claude.json`
-    ///   한 번 읽기라 Keychain 승인창과 무관하다(실패 기록 3). 불일치면 nil을 돌려 이번 판정을
-    ///   건너뛴다 — 트리거는 보류로 남아 reconcile이 마커를 고친 뒤 다시 판정된다.
+    ///   한 번 읽기라 Keychain 승인창과 무관하다(실패 기록 3).
+    ///   불일치면 **라이브를 쓰지 않고 저장 스냅샷으로 내려온다**(아래 참조) — 저장 secret은
+    ///   계정 id로 꺼내므로 그 자체가 오귀인 안전한 경로다.
     private func usageQueryBlob(for accountID: UUID) -> Data? {
         // ★ 순서 주의(실패 기록 3b): **값싼 이메일 확인을 먼저.** readLiveSnapshot은
         //   security CLI 서브프로세스라, 불일치로 버릴 결과를 먼저 읽으면 그 비용만 버린다.
@@ -1097,9 +1106,12 @@ final class AppState: ObservableObject {
             trigger = previous
         } else if let previous = pendingHitVerify[accountID],
                   now.timeIntervalSince(previous.firstSeenAt) > Self.pendingHitVerifyTTL {
-            // 새 hit이지만 이 계정의 판정은 이미 15분째 안 서고 있다 → 포기 + 백오프.
-            pendingHitVerify[accountID] = nil
+            // 새 hit이지만 이 계정의 판정은 이미 15분째 안 서고 있다 → 조회는 잠시 쉰다.
+            // ★ 단 **새 hit은 새 트리거로 남긴다**(셀프리뷰 지적): 낡은 트리거를 버리면서
+            //   방금 도착한 가장 신선한 증거까지 같이 버리면, 사용자가 (막혔으니) 타이핑을
+            //   멈추는 순간 그 소진은 영영 기록되지 않는다.
             verifyGiveUpUntil[accountID] = now.addingTimeInterval(Self.verifyGiveUpBackoff)
+            pendingHitVerify[accountID] = PendingTrigger(firstSeenAt: now, needsFresherThan: now)
             return
         } else {
             // 새 hit은 **새 데이터를 요구**한다 — 그 사이 팝오버가 떠 놓은 *소진 이전* 스냅샷이
@@ -1112,7 +1124,6 @@ final class AppState: ObservableObject {
                                      needsFresherThan: now)
         }
         pendingHitVerify[accountID] = trigger
-        if backingOff { return }   // 트리거는 남기고 조회만 쉰다
 
         // 디스크 캐시를 먼저 올린다(멱등). ★ 안 하면 두 가지가 깨진다: 팝오버를 한 번도
         //   안 연 상태에서 saveUsageCache()가 **메모리에 있는 계정만** 기록해 나머지 계정의
@@ -1120,6 +1131,7 @@ final class AppState: ObservableObject {
         loadUsageCacheIfNeeded()
 
         let snapshot: UsageSnapshot?
+        var judgedByFetch = false
         switch HitAttribution.plan(accountIsLimited: account.isLimited(now: now),
                                    hasModelLimitRecord: account.isModelLimited(now: now),
                                    cachedUsageAt: usage[accountID]?.fetchedAt,
@@ -1132,8 +1144,13 @@ final class AppState: ObservableObject {
         case .skipCooldown:
             return                              // 보류 유지 — 다음 틱에 다시 본다
         case .verifyWithCache:
+            // ★ 백오프 중에도 이 갈래는 막지 않는다(셀프리뷰 지적) — 백오프의 목적은
+            //   **조회를 쉬는 것**이지 판정을 멈추는 게 아니다. 공짜로 판정할 수 있는데
+            //   막으면, 그 사이 진짜 소진이 나도 기록이 없어 자동 전환이 최대 10분 늦는다.
             snapshot = usage[accountID]
         case .fetchUsage:
+            if backingOff { return }            // 트리거는 남기고 조회만 쉰다
+            judgedByFetch = true
             lastHitVerifyAttempt[accountID] = now
             guard let blob = usageQueryBlob(for: accountID),
                   let fetched = try? await UsageFetcher.fetch(keychainBlob: blob) else { return }
@@ -1165,6 +1182,11 @@ final class AppState: ObservableObject {
             // 이 계정과 무관한 hit이 계속 흘러들면(다른 계정의 뒤늦은 에러) 매번 조회하게
             // 된다 — 몇 번 "멀쩡하다"를 확인했으면 잠시 쉰다. 진짜 소진이 나면 그때는
             // 계정 창이 100%가 되므로 백오프가 끝난 뒤 바로 잡힌다.
+            // ★ **조회로 판정한 경우에만 센다**(셀프리뷰 지적): 전환 직후 구 계정의 잔여
+            //   에러는 한 배치에 여러 개 몰려 오는데(동시 세션 수만큼), 그중 2·3번째는 방금
+            //   받아 둔 캐시로 공짜 판정된다. 그것까지 세면 배치 하나로 임계값을 채워
+            //   **멀쩡한 새 활성 계정**이 10분간 백오프에 걸린다 — 이 PR이 다루는 바로 그 시나리오다.
+            guard judgedByFetch else { return }
             let discards = (consecutiveDiscards[accountID] ?? 0) + 1
             consecutiveDiscards[accountID] = discards
             if discards >= Self.discardBackoffThreshold {
