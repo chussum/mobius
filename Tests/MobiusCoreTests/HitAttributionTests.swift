@@ -66,17 +66,48 @@ final class HitAttributionTests: XCTestCase {
         XCTAssertEqual(HitAttribution.verdict(usage: noReset, now: now), .inconclusive)
     }
 
-    /// ★ **모델 전용 한도(Fable 등)는 계정 소진으로 치지 않는다.**
-    /// 한때 "모델 한도로 막힌 진짜 소진을 놓치지 않으려고" 포함했는데, 그러면 이 이슈가 더
-    /// 나쁘게 재현된다: 모델 한도 100%는 며칠 유지되는 **상태**라 익명 로그 라인의 귀속
-    /// 증거가 못 되는데, `AccountProfile.isLimited`는 modelScoped를 구분하지 않으므로
-    /// 멀쩡한 폴백이 **며칠** 후보에서 빠진다. 모델 스코프 기반 전환은 isLimited가 그 구분을
-    /// 이해하게 만든 뒤의 후속 과제다.
-    func testScopedModelLimitAloneIsNotAccountExhaustion() {
+    /// 계정 창은 여유인데 **모델 전용 한도**(Fable 등)가 찼으면 그것도 진짜 소진이다 —
+    /// 다만 `modelScoped: true`로 기록해 "계정 사용 불가"가 아니라 "그 모델만 불가"로 남긴다.
+    /// 이 갈래가 없으면 모델 한도로 막힌 사용자는 hit이 매번 버려져 자동 전환을 못 받는다.
+    func testScopedModelLimitIsRecordedAsModelScoped() {
+        let resets = now.addingTimeInterval(4 * 86400)
         let usage = snapshot(fiveHour: 20, sevenDay: 30,
                              scoped: [ScopedUsageLimit(label: "Fable", percent: 100,
+                                                       resetsAt: resets)])
+        guard case let .record(hit) = HitAttribution.verdict(usage: usage, now: now) else {
+            return XCTFail("모델 전용 한도 소진도 기록돼야 한다")
+        }
+        XCTAssertEqual(hit.resetsAt, resets)
+        XCTAssertTrue(hit.modelScoped)
+    }
+
+    /// 계정 창 소진이 모델 전용 한도보다 우선한다 — 계정 전체가 막힌 것이므로
+    /// modelScoped=false(= 핀과 무관하게 밀어낼 수 있고, 폴백 후보에서도 빠진다)로 기록된다.
+    func testAccountWindowWinsOverScopedLimit() {
+        let usage = snapshot(fiveHour: 100, sevenDay: 30,
+                             scoped: [ScopedUsageLimit(label: "Fable", percent: 100,
                                                        resetsAt: now.addingTimeInterval(4 * 86400))])
-        XCTAssertEqual(HitAttribution.verdict(usage: usage, now: now), .discard)
+        guard case let .record(hit) = HitAttribution.verdict(usage: usage, now: now) else {
+            return XCTFail("계정 창 소진이 우선 기록돼야 한다")
+        }
+        XCTAssertFalse(hit.modelScoped)
+    }
+
+    /// 모델 한도 기록이 이미 있으면 재확인을 **끄지 않고 늦춘다** — 그 계정은 계속 쓸 수
+    /// 있어 hit이 끊임없이 오므로 60초 주기면 사실상 배경 폴링이 되고, 그렇다고 완전히
+    /// 스킵하면 그 사이 **계정 창 자체가** 소진되는 신호를 놓친다.
+    func testModelLimitedAccountUsesLongerRecheckInterval() {
+        XCTAssertGreaterThan(HitAttribution.modelLimitedRecheck, HitAttribution.cooldown)
+        XCTAssertEqual(HitAttribution.plan(accountIsLimited: false, hasModelLimitRecord: true,
+                                           cachedUsageAt: nil, hitObservedAt: now,
+                                           lastFetchAttemptAt: now.addingTimeInterval(-120),
+                                           now: now),
+                       .skipCooldown)
+        XCTAssertEqual(HitAttribution.plan(accountIsLimited: false, hasModelLimitRecord: true,
+                                           cachedUsageAt: nil, hitObservedAt: now,
+                                           lastFetchAttemptAt: now.addingTimeInterval(-601),
+                                           now: now),
+                       .fetchUsage)
     }
 
     // MARK: 게이트 — 네트워크를 언제 쓰는가
@@ -84,11 +115,11 @@ final class HitAttributionTests: XCTestCase {
     /// 이미 소진 기록이 있으면 아무것도 하지 않는다 — 소진 중엔 매 요청이 같은 에러를
     /// 남기므로, 이 가드가 없으면 hit마다 알림·엔진 호출이 반복된다(알림 폭풍).
     func testAlreadyRecordedSkipsEverything() {
-        XCTAssertEqual(HitAttribution.plan(activeIsLimited: true, cachedUsageAt: nil,
+        XCTAssertEqual(HitAttribution.plan(accountIsLimited: true, cachedUsageAt: nil,
                                            hitObservedAt: now, lastFetchAttemptAt: nil, now: now),
                        .skipAlreadyRecorded)
         // 캐시도 쿨다운도 이 판정을 뒤집지 못한다.
-        XCTAssertEqual(HitAttribution.plan(activeIsLimited: true,
+        XCTAssertEqual(HitAttribution.plan(accountIsLimited: true,
                                            cachedUsageAt: now.addingTimeInterval(-1000),
                                            hitObservedAt: now, lastFetchAttemptAt: now, now: now),
                        .skipAlreadyRecorded)
@@ -96,14 +127,14 @@ final class HitAttributionTests: XCTestCase {
 
     /// 첫 hit은 조회한다(캐시 없음).
     func testFirstHitFetches() {
-        XCTAssertEqual(HitAttribution.plan(activeIsLimited: false, cachedUsageAt: nil,
+        XCTAssertEqual(HitAttribution.plan(accountIsLimited: false, cachedUsageAt: nil,
                                            hitObservedAt: now, lastFetchAttemptAt: nil, now: now),
                        .fetchUsage)
     }
 
     /// 한 배치의 두 번째 hit부터는 방금 조회한 캐시를 그대로 쓴다 — 네트워크 0.
     func testCacheTakenAfterTheHitIsUsed() {
-        XCTAssertEqual(HitAttribution.plan(activeIsLimited: false,
+        XCTAssertEqual(HitAttribution.plan(accountIsLimited: false,
                                            cachedUsageAt: now.addingTimeInterval(0.4),
                                            hitObservedAt: now,
                                            lastFetchAttemptAt: now, now: now),
@@ -114,7 +145,7 @@ final class HitAttributionTests: XCTestCase {
     /// 40초 전 96%였던 스냅샷으로 방금 100%가 된 창을 "여유"로 오판하면 진짜 소진을 버리는데,
     /// 그 버림은 흔적도 안 남아 "소진이 아니었다"와 구분되지 않는다.
     func testCacheOlderThanTheHitIsNotTrusted() {
-        XCTAssertEqual(HitAttribution.plan(activeIsLimited: false,
+        XCTAssertEqual(HitAttribution.plan(accountIsLimited: false,
                                            cachedUsageAt: now.addingTimeInterval(-40),
                                            hitObservedAt: now,
                                            lastFetchAttemptAt: nil, now: now),
@@ -125,12 +156,12 @@ final class HitAttributionTests: XCTestCase {
     /// 남겨 다음 틱에 다시 본다). 소진 중에도 사용자가 타이핑을 멈추면 새 hit이 안 오므로,
     /// 여기서 버리면 그 소진은 영영 기록되지 않는다.
     func testCooldownAfterFailedFetchThenRetry() {
-        XCTAssertEqual(HitAttribution.plan(activeIsLimited: false, cachedUsageAt: nil,
+        XCTAssertEqual(HitAttribution.plan(accountIsLimited: false, cachedUsageAt: nil,
                                            hitObservedAt: now.addingTimeInterval(-10),
                                            lastFetchAttemptAt: now.addingTimeInterval(-10),
                                            now: now),
                        .skipCooldown)
-        XCTAssertEqual(HitAttribution.plan(activeIsLimited: false, cachedUsageAt: nil,
+        XCTAssertEqual(HitAttribution.plan(accountIsLimited: false, cachedUsageAt: nil,
                                            hitObservedAt: now.addingTimeInterval(-61),
                                            lastFetchAttemptAt: now.addingTimeInterval(-61),
                                            now: now),
@@ -139,7 +170,7 @@ final class HitAttributionTests: XCTestCase {
 
     /// 실패했던 조회의 낡은 캐시가 쿨다운을 건너뛰게 하지 않는다(캐시가 트리거보다 오래됨).
     func testStaleCacheDoesNotBypassCooldown() {
-        XCTAssertEqual(HitAttribution.plan(activeIsLimited: false,
+        XCTAssertEqual(HitAttribution.plan(accountIsLimited: false,
                                            cachedUsageAt: now.addingTimeInterval(-300),
                                            hitObservedAt: now.addingTimeInterval(-10),
                                            lastFetchAttemptAt: now.addingTimeInterval(-10),

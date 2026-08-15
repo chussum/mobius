@@ -1033,7 +1033,8 @@ final class AppState: ObservableObject {
         pendingHitVerify[accountID] = observedAt
 
         let snapshot: UsageSnapshot?
-        switch HitAttribution.plan(activeIsLimited: account.isLimited(now: now),
+        switch HitAttribution.plan(accountIsLimited: account.isLimited(now: now),
+                                   hasModelLimitRecord: account.isModelLimited(now: now),
                                    cachedUsageAt: usage[accountID]?.fetchedAt,
                                    hitObservedAt: observedAt,
                                    lastFetchAttemptAt: lastHitVerifyAttempt[accountID],
@@ -1072,8 +1073,13 @@ final class AppState: ObservableObject {
 
     /// 검증된 소진을 실제로 반영한다.
     private func record(_ verified: RateLimitHit, on accountID: UUID, at verifiedAt: Date) async {
-        guard store.file.accounts.first(where: { $0.id == accountID })?
-                  .isLimited(now: verifiedAt) == false else { return }
+        guard let account = store.file.accounts.first(where: { $0.id == accountID }),
+              !account.isLimited(now: verifiedAt) else { return }
+        // 같은 내용을 다시 쓰지 않는다 — 모델 전용 한도는 며칠 유지되고 그동안 사용자는 계정을
+        // 계속 쓰므로 hit이 반복해서 온다. 매번 저장하면 accounts.json이 무의미하게 갱신되고
+        // recordedAt만 흔들린다(UI 깜빡임·불필요한 디스크 쓰기).
+        if let existing = account.rateLimit, existing.resetsAt == verified.resetsAt,
+           existing.modelScoped == verified.modelScoped, existing.resetsAt > verifiedAt { return }
         recordHit(verified, on: accountID, now: verifiedAt)
         // ★ 엔진 호출은 **이 계정이 아직 활성일 때만.** onRateLimitHit은 hit을 인자 계정이
         //   아니라 "현재 활성 계정"에 얹어 판단하므로(markedFile), 그 사이 전환이 끝났다면

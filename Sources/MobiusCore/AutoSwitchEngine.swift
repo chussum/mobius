@@ -47,10 +47,18 @@ public final class AutoSwitchEngine: @unchecked Sendable {
         return now < lastSwitchAt.addingTimeInterval(cooldown)
     }
 
-    /// 후보: 풀 내 순서(우선순위)대로, 한도 안 걸렸고 재인증 불필요한 계정
-    private func firstAvailable(in file: AccountsFile, excluding: UUID?, now: Date) -> UUID? {
+    /// 후보: 풀 내 순서(우선순위)대로, 한도 안 걸렸고 재인증 불필요한 계정.
+    ///
+    /// - Parameter avoidModelLimited: **모델 전용 한도 때문에 떠나는 중인가.** 그렇다면
+    ///   같은 모델이 막힌 계정으로 옮겨봐야 소용없으므로 후보에서 뺀다. 반대로 계정 자체가
+    ///   소진돼 떠나는 경우엔 모델 한도가 걸린 계정도 **정상 후보다** — 계정은 멀쩡하고
+    ///   사용자는 다른 모델을 쓸 수 있다(이슈 #19 후속: 이걸 구분 안 하면 며칠짜리 모델
+    ///   한도 하나가 폴백을 통째로 지워 "모든 계정 한도 소진"이 난다).
+    private func firstAvailable(in file: AccountsFile, excluding: UUID?, now: Date,
+                                avoidModelLimited: Bool = false) -> UUID? {
         file.accounts(of: provider).first {
             $0.id != excluding && !$0.isLimited(now: now) && !$0.needsReauth
+                && !(avoidModelLimited && $0.isModelLimited(now: now))
         }?.id
     }
 
@@ -65,8 +73,12 @@ public final class AutoSwitchEngine: @unchecked Sendable {
         // 계정은 다른 모델로 쓸 수 있고, 사용자가 "여기 있겠다"고 이미 선택했으므로.
         if hit.modelScoped && active.userPinned { return .none }
         guard let next = firstAvailable(in: markedFile(file, activeID: active.id, hit: hit, now: now),
-                                        excluding: active.id, now: now) else {
-            return .allExhausted
+                                        excluding: active.id, now: now,
+                                        avoidModelLimited: hit.modelScoped) else {
+            // ★ 모델 전용 한도인데 갈 곳이 없다 = 어디로 옮겨도 그 모델은 막혀 있다.
+            //   이때 "모든 계정 한도 소진"은 **거짓말이다** — 계정들은 멀쩡하고 다른 모델은
+            //   쓸 수 있다. 조용히 머문다(사용자는 CLI 에러로 이미 상황을 안다).
+            return hit.modelScoped ? .none : .allExhausted
         }
         return .switchTo(next, reason: .activeExhausted)
     }
@@ -95,7 +107,8 @@ public final class AutoSwitchEngine: @unchecked Sendable {
         //     단 autoSwitchMayLeave가 false면(모델 전용 한도 + 사용자 핀) 밀어내지 않는다 —
         //     "1회 자동 전환 후 내가 되돌리면 머문다".
         if active.autoSwitchMayLeave(now: now),
-           let next = firstAvailable(in: file, excluding: active.id, now: now) {
+           let next = firstAvailable(in: file, excluding: active.id, now: now,
+                                     avoidModelLimited: active.isModelLimited(now: now)) {
             return .switchTo(next, reason: .activeExhausted)
         }
 

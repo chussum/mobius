@@ -453,4 +453,50 @@ final class AutoSwitchEngineTests: XCTestCase {
         XCTAssertEqual(engine.onTick(file: file, now: t0.addingTimeInterval(161)),
                        .switchTo(primary.id, reason: .primaryRecovered))
     }
+
+    // MARK: 모델 전용 한도와 계정 한도의 구분 (이슈 #19 후속)
+
+    /// ★ **모델 전용 한도가 걸린 폴백도 계정 소진 전환에서는 정상 후보다.**
+    /// Fable 주간 한도 하나(며칠짜리)가 폴백을 통째로 지우면, 주계정이 진짜로 소진됐을 때
+    /// 갈 곳이 없어 "모든 계정 한도 소진"이 뜬다 — 계정 자체는 멀쩡한데도. 이슈 #19의
+    /// 오귀인이 이 경로로 되살아났었다.
+    func testAccountExhaustionCanSwitchIntoModelLimitedFallback() {
+        file.accounts[1].rateLimit = RateLimitInfo(resetsAt: t0.addingTimeInterval(4 * 86400),
+                                                   recordedAt: t0, modelScoped: true)
+        let d = AutoSwitchEngine().onRateLimitHit(
+            file: file, hit: RateLimitHit(resetsAt: t0.addingTimeInterval(3600)), now: t0)
+        XCTAssertEqual(d, .switchTo(fb1.id, reason: .activeExhausted))
+    }
+
+    /// 반대로 **모델 한도 때문에 떠날 때**는 같은 모델이 막힌 계정을 건너뛴다 —
+    /// 옮겨봐야 그 모델은 여전히 못 쓴다.
+    func testModelLimitedSwitchSkipsModelLimitedFallback() {
+        file.accounts[1].rateLimit = RateLimitInfo(resetsAt: t0.addingTimeInterval(4 * 86400),
+                                                   recordedAt: t0, modelScoped: true)
+        let d = AutoSwitchEngine().onRateLimitHit(
+            file: file, hit: RateLimitHit(resetsAt: t0.addingTimeInterval(3600), modelScoped: true),
+            now: t0)
+        XCTAssertEqual(d, .switchTo(fb2.id, reason: .activeExhausted))
+    }
+
+    /// 모델 한도인데 갈 곳이 전부 같은 모델로 막혔으면 **"모든 계정 한도 소진"은 거짓말**이다
+    /// (계정들은 멀쩡하다). 조용히 머문다.
+    func testModelLimitedWithNoHeadroomStaysSilentInsteadOfAllExhausted() {
+        for i in 1...2 {
+            file.accounts[i].rateLimit = RateLimitInfo(resetsAt: t0.addingTimeInterval(4 * 86400),
+                                                       recordedAt: t0, modelScoped: true)
+        }
+        let d = AutoSwitchEngine().onRateLimitHit(
+            file: file, hit: RateLimitHit(resetsAt: t0.addingTimeInterval(3600), modelScoped: true),
+            now: t0)
+        XCTAssertEqual(d, .none)
+        // 계정 자체 소진이면 여전히 정직하게 allExhausted다.
+        for i in 1...2 {
+            file.accounts[i].rateLimit = RateLimitInfo(resetsAt: t0.addingTimeInterval(3600),
+                                                       recordedAt: t0, modelScoped: false)
+        }
+        XCTAssertEqual(AutoSwitchEngine().onRateLimitHit(
+            file: file, hit: RateLimitHit(resetsAt: t0.addingTimeInterval(3600)), now: t0),
+                       .allExhausted)
+    }
 }

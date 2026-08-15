@@ -209,11 +209,14 @@ final class ModelsTests: XCTestCase {
         p.rateLimit = RateLimitInfo(resetsAt: Date(timeIntervalSince1970: 2_000), recordedAt: now)
         XCTAssertTrue(p.isLimited(now: now))
         XCTAssertTrue(p.autoSwitchMayLeave(now: now))
-        // 모델 전용 한도 + 핀이면 밀어내지 않는 기존 규칙도 advisory와 무관하게 유지
+        // 모델 전용 한도 + 핀이면 밀어내지 않는 기존 규칙도 advisory와 무관하게 유지.
+        // ★ 단 isLimited는 이제 **계정 자체 소진만** 뜻한다(이슈 #19 후속) — 모델 전용
+        //   한도는 isModelLimited로 분리됐다. 계정은 다른 모델로 계속 쓸 수 있기 때문.
         p.rateLimit = RateLimitInfo(resetsAt: Date(timeIntervalSince1970: 2_000),
                                     recordedAt: now, modelScoped: true)
         p.userPinned = true
-        XCTAssertTrue(p.isLimited(now: now))
+        XCTAssertFalse(p.isLimited(now: now))
+        XCTAssertTrue(p.isModelLimited(now: now))
         XCTAssertFalse(p.autoSwitchMayLeave(now: now))
     }
 
@@ -239,5 +242,36 @@ final class ModelsTests: XCTestCase {
         XCTAssertTrue(AdvisoryRecord.shouldSet(utilization: 50, threshold: 50))
         XCTAssertTrue(AdvisoryRecord.shouldClear(utilization: 45, threshold: 50))
         XCTAssertFalse(AdvisoryRecord.shouldClear(utilization: 45.1, threshold: 50))
+    }
+
+    // MARK: 계정 한도 vs 모델 전용 한도 (이슈 #19 후속)
+
+    /// ★ 모델 전용 한도는 **계정 사용 불가가 아니다** — 다른 모델로 계속 쓸 수 있다.
+    /// 둘을 섞어 보면 며칠짜리 모델 한도 하나가 폴백 자격을 지워 "모든 계정 한도 소진"이 난다.
+    func testModelScopedRecordIsNotAccountLimited() {
+        let t = Date(timeIntervalSince1970: 1_000_000)
+        var p = AccountProfile(id: UUID(), nickname: "a", emailAddress: "a@x",
+                               organizationName: "", tierDescription: "")
+        p.rateLimit = RateLimitInfo(resetsAt: t.addingTimeInterval(4 * 86400),
+                                    recordedAt: t, modelScoped: true)
+        XCTAssertFalse(p.isLimited(now: t))
+        XCTAssertTrue(p.isModelLimited(now: t))
+        // 핀이 없으면 자동 전환은 떠날 수 있고, 핀이 있으면 머문다("내가 여기 있겠다").
+        XCTAssertTrue(p.autoSwitchMayLeave(now: t))
+        p.userPinned = true
+        XCTAssertFalse(p.autoSwitchMayLeave(now: t))
+    }
+
+    /// 계정 자체 한도는 그대로 "사용 불가"이고, 핀도 이를 뒤집지 못한다.
+    func testAccountScopedRecordLimitsRegardlessOfPin() {
+        let t = Date(timeIntervalSince1970: 1_000_000)
+        var p = AccountProfile(id: UUID(), nickname: "a", emailAddress: "a@x",
+                               organizationName: "", tierDescription: "")
+        p.userPinned = true
+        p.rateLimit = RateLimitInfo(resetsAt: t.addingTimeInterval(3600),
+                                    recordedAt: t, modelScoped: false)
+        XCTAssertTrue(p.isLimited(now: t))
+        XCTAssertFalse(p.isModelLimited(now: t))
+        XCTAssertTrue(p.autoSwitchMayLeave(now: t))
     }
 }

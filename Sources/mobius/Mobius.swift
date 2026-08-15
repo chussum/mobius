@@ -45,7 +45,10 @@ func parseProvider(_ raw: String) throws -> Provider {
 func fmtReset(_ p: AccountProfile) -> String {
     guard let rl = p.rateLimit, rl.resetsAt > Date() else { return "" }
     let mins = Int(rl.resetsAt.timeIntervalSinceNow / 60)
-    return "  [한도 소진 — \(mins / 60)시간 \(mins % 60)분 후 리셋]"
+    // ★ 모델 전용 한도(Fable 등)를 "한도 소진"으로 적으면 거짓말이다 — 그 계정은 다른
+    //   모델로 멀쩡히 쓸 수 있다(AccountProfile.isLimited가 둘을 구분한다).
+    let label = rl.modelScoped ? "모델 한도" : "한도 소진"
+    return "  [\(label) — \(mins / 60)시간 \(mins % 60)분 후 리셋]"
 }
 
 struct List: AsyncParsableCommand {

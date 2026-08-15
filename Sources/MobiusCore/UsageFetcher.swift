@@ -47,6 +47,27 @@ public struct UsageSnapshot: Codable, Equatable, Sendable {
         guard let resetsAt = exhaustedResets.max() else { return nil }
         return RateLimitHit(resetsAt: resetsAt)
     }
+
+    /// **모델 전용** 주간 한도(`limits[].weekly_scoped`, 예: Fable)의 소진 판정.
+    /// 계정 창(5시간/주간)과 **의도적으로 분리**돼 있다 — 계정 자체는 여유인데 특정 모델만
+    /// 막힌 상태이므로 `modelScoped: true`로 표시하고, 소비자는 이를 "계정 사용 불가"가
+    /// 아니라 "그 모델만 불가"로 다룬다(`AccountProfile.isModelLimited`).
+    /// `exhaustionHit`과 같은 규칙으로 **아직 안 지난 리셋 시각**만 인정하고, 그중 가장 늦은 것.
+    public func scopedExhaustionHit(now: Date) -> RateLimitHit? {
+        let resets = (scopedLimits ?? [])
+            .filter { $0.percent >= 100 }
+            .compactMap(\.resetsAt)
+            .filter { $0 > now }
+        guard let resetsAt = resets.max() else { return nil }
+        return RateLimitHit(resetsAt: resetsAt, kind: .window, modelScoped: true)
+    }
+
+    /// 100%인 창이 하나라도 있는가(리셋 시각의 유효성과 무관). `.inconclusive` 판정용 —
+    /// "여유 있음"과 "소진인데 리셋 시각을 못 얻음"을 가르는 데 쓴다.
+    public func hasExhaustedWindow() -> Bool {
+        if (fiveHourPercent ?? 0) >= 100 || (sevenDayPercent ?? 0) >= 100 { return true }
+        return (scopedLimits ?? []).contains { $0.percent >= 100 }
+    }
 }
 
 public enum UsageFetcherError: Error, Equatable {
