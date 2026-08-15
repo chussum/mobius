@@ -383,7 +383,8 @@ final class AppState: ObservableObject {
                     // usage API는 진짜 리셋 시각을 안다. 이 계정이 limited로 마킹돼 있고
                     // 소진된 한도(≥100%)의 실제 리셋이 현재 기록과 다르면 그 값으로 교정.
                     if let cur = store.file.accounts.first(where: { $0.id == profile.id })?.rateLimit,
-                       let real = earliestExhaustedReset(snap, modelScoped: cur.modelScoped),
+                       let real = verifiedResetCorrection(snap, modelScoped: cur.modelScoped,
+                                                          now: Date()),
                        abs(cur.resetsAt.timeIntervalSince(real)) > 60 {
                         try? store.update(profile.id) {
                             $0.rateLimit = RateLimitInfo(resetsAt: real, recordedAt: cur.recordedAt,
@@ -602,25 +603,16 @@ final class AppState: ObservableObject {
         if changed { MobiusNotification.postAccountsChanged(); reload() }
     }
 
-    /// 스냅샷에서 소진된(≥100%) 한도들의 가장 이른 실제 리셋 시각. 없으면 nil.
+    /// 저장된 기록을 교정할 실제 리셋 시각. 없으면 nil(교정 안 함).
     ///
-    /// ★ **기록의 종류와 같은 창만 본다**(modelScoped). 계정 창과 모델 전용 한도를 섞어
-    ///   min을 취하면 종류가 뒤바뀐 시각으로 교정된다 — 예: Fable(+4일, modelScoped) 기록이
-    ///   있는 계정의 5시간 창이 소진되면 `min(+2시간, +4일)=+2시간`이 **modelScoped 플래그를
-    ///   단 채** 저장돼, 계정이 완전히 막혔는데 `isLimited`는 false가 된다(메뉴바 빨강 없음,
-    ///   핀이면 자동 전환도 안 됨). 반대 방향은 계정 한도를 일찍 풀어 소진된 계정으로 되돌아간다.
-    ///   섞어도 무해했던 코드지만, modelScoped 기록이 실제로 생기기 시작하면서 구멍이 됐다.
-    private func earliestExhaustedReset(_ s: UsageSnapshot, modelScoped: Bool) -> Date? {
-        var dates: [Date] = []
-        if modelScoped {
-            for l in s.scopedLimits ?? [] where l.percent >= 100 {
-                if let r = l.resetsAt { dates.append(r) }
-            }
-        } else {
-            if let p = s.fiveHourPercent, p >= 100, let r = s.fiveHourResetsAt { dates.append(r) }
-            if let p = s.sevenDayPercent, p >= 100, let r = s.sevenDayResetsAt { dates.append(r) }
-        }
-        return dates.min()
+    /// ★ **기록을 쓰는 쪽과 정확히 같은 규칙을 쓴다**(`exhaustionHit`/`scopedExhaustionHit`):
+    ///   기록의 종류와 같은 창만 보고, 아직 안 지난 리셋 중 **가장 늦은 것**. 예전엔 이 함수만
+    ///   따로 `min()`을 썼는데, 쓰는 쪽이 `max()`라 5시간·주간이 함께 소진되면 **저장(+5일) →
+    ///   교정(+2시간) → 2시간 뒤 해제 → 아직 주간 소진인 계정으로 복귀 → 다시 hit** 의 무한
+    ///   왕복이 된다. 두 규칙을 나란히 두지 말고 한 곳에서만 정의한다.
+    private func verifiedResetCorrection(_ s: UsageSnapshot, modelScoped: Bool,
+                                         now: Date) -> Date? {
+        (modelScoped ? s.scopedExhaustionHit(now: now) : s.exhaustionHit(now: now))?.resetsAt
     }
 
     // MARK: 여러 Mac 동기화 (실험)
@@ -990,15 +982,18 @@ final class AppState: ObservableObject {
     ///   한 번 읽기라 Keychain 승인창과 무관하다(실패 기록 3). 불일치면 nil을 돌려 이번 판정을
     ///   건너뛴다 — 트리거는 보류로 남아 reconcile이 마커를 고친 뒤 다시 판정된다.
     private func usageQueryBlob(for accountID: UUID) -> Data? {
-        if store.file.activeAccountID == accountID {
-            // ★ 순서 주의(실패 기록 3b): **값싼 이메일 확인을 먼저.** readLiveSnapshot은
-            //   security CLI 서브프로세스라, 불일치로 버릴 결과를 먼저 읽으면 그 비용을
-            //   그냥 버리는 셈이다.
-            let profileEmail = store.file.accounts.first { $0.id == accountID }?.emailAddress
-            guard let liveEmail = try? io.liveEmail(), liveEmail == profileEmail else { return nil }
-            if let live = try? io.readLiveSnapshot() { return live.keychainBlob }
-            return nil
+        // ★ 순서 주의(실패 기록 3b): **값싼 이메일 확인을 먼저.** readLiveSnapshot은
+        //   security CLI 서브프로세스라, 불일치로 버릴 결과를 먼저 읽으면 그 비용만 버린다.
+        if store.file.activeAccountID == accountID,
+           let profileEmail = store.file.accounts.first(where: { $0.id == accountID })?.emailAddress,
+           let liveEmail = try? io.liveEmail(), liveEmail == profileEmail,
+           let live = try? io.readLiveSnapshot() {
+            return live.keychainBlob
         }
+        // 라이브를 못 쓰는 경우(신원 불일치·Keychain 읽기 실패)엔 **저장 스냅샷으로 내려온다.**
+        // 저장 secret은 계정 id로 꺼내므로 오귀인 위험이 없다 — 낡아서 조회가 실패할 수는
+        // 있고, 그건 보류 트리거가 다시 시도한다. 여기서 nil로 끝내면 P3(월 지출) 교차확인은
+        // 재시도 장치가 없어 그 hit이 통째로 사라진다(셀프리뷰 지적).
         return (try? store.secret(for: accountID))?.keychainBlob
     }
 
@@ -1025,6 +1020,10 @@ final class AppState: ObservableObject {
     /// 보류 트리거의 수명 — 이 시간이 지나도록 판정을 못 했으면 버린다(오프라인이 길어질 때
     /// 옛 트리거로 뒤늦게 엉뚱한 기록을 남기지 않도록).
     private static let pendingHitVerifyTTL: TimeInterval = 15 * 60
+    /// 수명이 다해 포기한 뒤 그 계정의 검증을 다시 시작하기까지의 간격.
+    private static let verifyGiveUpBackoff: TimeInterval = 10 * 60
+    /// 계정별 "당분간 검증 안 함" 시각.
+    private var verifyGiveUpUntil: [UUID: Date] = [:]
 
     /// ★ [이슈 #19] 창 소진 hit의 **계정 귀속 검증**. 로그 hit은 트리거일 뿐이고, 이 계정이
     /// 정말 소진인지는 **그 계정의 토큰으로 조회한 usage**가 판정한다(오귀인 구조적 불가).
@@ -1036,30 +1035,45 @@ final class AppState: ObservableObject {
     /// ★ 401을 여기서 needsReauth로 승격하지 않는다 — 이 경로는 "이 hit이 누구 것인가"만
     ///   판정한다. 재인증 판정은 기존 경로(refreshUsageIfStale)가 자기 조건으로 한다.
     /// - Parameter isRetry: 보류 트리거의 재시도인가(= 이번 틱에 새 로그 hit이 온 게 아니다).
-    ///   TTL은 **재시도에만** 적용한다: 새 hit이 왔는데 옛 보류의 TTL로 걸러 버리면 그 hit이
-    ///   통째로 사라진다(셀프리뷰 지적 — 조회가 15분 넘게 실패한 뒤 새로 소진된 경우가 정확히
-    ///   이 함정이다). 새 hit은 언제나 **새 트리거**로 다시 시작한다.
     private func verifyAndRecordWindowHit(accountID: UUID?, now: Date, isRetry: Bool = false) async {
         guard let accountID else { return }
         guard let account = store.file.accounts.first(where: { $0.id == accountID }) else {
             pendingHitVerify[accountID] = nil   // 계정이 사라졌다 — 보류도 함께 정리(누수 방지)
             lastHitVerifyAttempt[accountID] = nil
+            verifyGiveUpUntil[accountID] = nil
             return
+        }
+        // 계속 판정이 안 서서 포기한 직후엔 새 hit이 와도 잠시 쉰다 — 안 그러면 "영영
+        // 모르겠는" 상태에서 60초 주기 조회가 무한 반복된다. 대가는 이 구간에서 진짜
+        // 소진이 나면 최대 그만큼 늦게 잡힌다는 것(수명 15분 + 이 10분).
+        if let until = verifyGiveUpUntil[accountID] {
+            if now < until { return }
+            verifyGiveUpUntil[accountID] = nil
         }
         let trigger: PendingTrigger
         if isRetry {
             guard let previous = pendingHitVerify[accountID] else { return }
             guard now.timeIntervalSince(previous.firstSeenAt) <= Self.pendingHitVerifyTTL else {
                 pendingHitVerify[accountID] = nil    // 너무 오래된 트리거는 포기한다
+                verifyGiveUpUntil[accountID] = now.addingTimeInterval(Self.verifyGiveUpBackoff)
                 return
             }
             trigger = previous
+        } else if let previous = pendingHitVerify[accountID],
+                  now.timeIntervalSince(previous.firstSeenAt) > Self.pendingHitVerifyTTL {
+            // 새 hit이지만 이 계정의 판정은 이미 15분째 안 서고 있다 → 포기 + 백오프.
+            pendingHitVerify[accountID] = nil
+            verifyGiveUpUntil[accountID] = now.addingTimeInterval(Self.verifyGiveUpBackoff)
+            return
         } else {
-            // ★ 새 hit은 **언제나 새 트리거**다(셀프리뷰 지적 — 주석은 그렇게 적어 놓고 코드는
-            //   TTL을 넘겼을 때만 갱신했다). 옛 트리거의 시각을 물려받으면, 그 사이 팝오버가
-            //   떠 놓은 **소진 이전** 스냅샷이 "트리거보다 나중"으로 통과해 진짜 소진을
-            //   "여유"로 판정하고 트리거까지 태워 없앤다 — 순서 규칙을 만든 이유가 무너진다.
-            trigger = PendingTrigger(firstSeenAt: now, needsFresherThan: now)
+            // 새 hit은 **새 데이터를 요구**한다 — 그 사이 팝오버가 떠 놓은 *소진 이전* 스냅샷이
+            // "트리거보다 나중"으로 통과해 진짜 소진을 "여유"로 판정하는 걸 막는다.
+            // ★ 단 **TTL 기준(firstSeenAt)은 물려받는다**: 새 hit마다 수명을 리셋하면, 판정이
+            //   계속 "모르겠다"로 끝나는 상황(리셋 시각을 안 주는 창)에서 사용자가 작업을
+            //   이어가는 한 hit이 계속 와 **수명이 영영 안 차고 60초마다 조회가 무한 반복**된다
+            //   = 이 코드베이스가 피하는 배경 폴링(셀프리뷰 지적). 두 시각을 나눠 든 이유가 이것.
+            trigger = PendingTrigger(firstSeenAt: pendingHitVerify[accountID]?.firstSeenAt ?? now,
+                                     needsFresherThan: now)
         }
         pendingHitVerify[accountID] = trigger
 
@@ -1298,12 +1312,21 @@ final class AppState: ObservableObject {
             let name = store.file.accounts.first { $0.id == id }?.nickname ?? "?"
             notify(title: loc("한도 소진 — 자동 전환이 꺼져 있습니다"),
                    body: loc("%@ 계정이 한도에 도달했습니다. 수동으로 전환하세요.", name))
+        case let .notifyModelLimitedOnly(id):
+            // ★ "계정 한도 소진"과 문구를 공유하면 거짓말이 된다 — 계정은 다른 모델로 계속
+            //   쓸 수 있다(같은 이유로 메뉴바·CLI도 이 상태를 소진으로 표시하지 않는다).
+            let name = store.file.accounts.first { $0.id == id }?.nickname ?? "?"
+            notify(title: loc("모델 한도 — 자동 전환이 꺼져 있습니다"),
+                   body: loc("%@ 계정에서 이 모델만 한도에 걸렸어요. 계정은 다른 모델로 계속 쓸 수 있어요.", name))
         case let .switchTo(id, reason):
             // 전환 직전 검증(Claude 전용): 자동 폴백(activeExhausted)이나 임계값 선제
             // 전환(thresholdAdvisory)으로 넘어가기 전에 대상 계정을 실제 OAuth refresh로
             // 확인한다. 죽었으면 취소(마킹됨) → 다음 틱에 엔진이 다음 폴백을 고른다.
             // (Codex는 OAuth refresh 검증 경로가 없어 스킵한다.)
+            // 모델 전용 한도 전환도 "자동 전환"이다 — 전환 전 검증과 primary 자동 복귀
+            // 플래그를 계정 소진과 동일하게 적용한다(문구만 다르다).
             let autoFromPrimary = reason == .activeExhausted || reason == .thresholdAdvisory
+                || reason == .modelExhausted
             if autoFromPrimary, provider == .claude {
                 guard await preflightFallback(id, now: now) else { file = store.file; return }
             }
@@ -1346,6 +1369,11 @@ final class AppState: ObservableObject {
                 case .activeExhausted:
                     notify(title: loc("🔄 %@ 계정으로 전환했어요", name),
                            body: loc("%@ 한도 소진 → %@. %@", fromName ?? "?", name, sessionNote))
+                case .modelExhausted:
+                    // ★ 계정 소진과 문구를 섞지 않는다 — 떠난 계정은 다른 모델로 멀쩡히 쓸 수 있다.
+                    notify(title: loc("🔄 %@ 계정으로 전환했어요", name),
+                           body: loc("%@ 계정에서 이 모델의 한도에 걸려 %@(으)로 옮겼어요. %@",
+                                     fromName ?? "?", name, sessionNote))
                 }
             } catch {
                 lastError = loc("자동 전환 실패: %@", error.localizedDescription)

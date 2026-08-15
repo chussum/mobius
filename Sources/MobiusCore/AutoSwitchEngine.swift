@@ -2,6 +2,7 @@ import Foundation
 
 public enum SwitchReason: Equatable, Sendable {
     case activeExhausted    // 활성 계정 한도 소진
+    case modelExhausted     // **모델 전용** 한도 소진 — 계정은 멀쩡하다(문구를 섞지 말 것)
     case primaryRecovered   // primary 리셋 도래 → 복귀
     case thresholdAdvisory  // 임계값 선제 경고 — **소진 아님** (알림 문구도 소진 표현 금지)
 }
@@ -11,6 +12,9 @@ public enum Decision: Equatable, Sendable {
     case switchTo(UUID, reason: SwitchReason)
     case allExhausted       // 전환할 곳이 없음 → 알림만
     case notifyExhaustedOnly(UUID) // 자동 전환 꺼짐 — 소진된 활성 계정 알림만
+    /// 자동 전환 꺼짐 — **모델 전용** 한도 알림만. notifyExhaustedOnly와 문구를 공유하면
+    /// "계정 한도 소진"이라고 거짓말하게 된다(계정은 다른 모델로 계속 쓸 수 있다).
+    case notifyModelLimitedOnly(UUID)
     /// 자동 전환 꺼짐 — 임계값 선제 경고 알림만. notifyExhaustedOnly와 **다른 케이스**다:
     /// 저쪽은 "이미 못 쓴다", 이쪽은 "아직 쓸 수 있는데 곧 찬다" — 문구가 섞이면 거짓말이 된다.
     case notifyAdvisoryOnly(UUID)
@@ -67,11 +71,17 @@ public final class AutoSwitchEngine: @unchecked Sendable {
     /// 새 활성 계정의 소진으로 오인해 연쇄 전환(B→C→D)되는 것을 막는다.
     public func onRateLimitHit(file: AccountsFile, hit: RateLimitHit, now: Date) -> Decision {
         guard let active = file.active(of: provider), !inCooldown(now) else { return .none }
-        // 이 풀의 자동 전환 꺼짐 — 스펙상 "끄면 소진 알림만": 전환 없이 알림 결정만 반환
-        guard file.isAutoSwitchEnabled(provider) else { return .notifyExhaustedOnly(active.id) }
         // 모델 전용 한도(Fable 등) + 사용자가 이 계정을 직접 고름(pin) → 전환하지 않고 머문다.
         // 계정은 다른 모델로 쓸 수 있고, 사용자가 "여기 있겠다"고 이미 선택했으므로.
+        // ★ 이 검사는 자동 전환 on/off보다 **먼저**다: 꺼져 있을 때도 핀은 존중해야 하고,
+        //   무엇보다 아래 알림 분기가 pin 케이스까지 삼키면 안 된다.
         if hit.modelScoped && active.userPinned { return .none }
+        // 이 풀의 자동 전환 꺼짐 — 스펙상 "끄면 소진 알림만": 전환 없이 알림 결정만 반환.
+        // ★ 모델 전용 한도는 문구가 다르다 — "계정 한도 소진"이라고 하면 거짓말이다.
+        guard file.isAutoSwitchEnabled(provider) else {
+            return hit.modelScoped ? .notifyModelLimitedOnly(active.id)
+                                   : .notifyExhaustedOnly(active.id)
+        }
         guard let next = firstAvailable(in: markedFile(file, activeID: active.id, hit: hit, now: now),
                                         excluding: active.id, now: now,
                                         avoidModelLimited: hit.modelScoped) else {
@@ -80,7 +90,7 @@ public final class AutoSwitchEngine: @unchecked Sendable {
             //   쓸 수 있다. 조용히 머문다(사용자는 CLI 에러로 이미 상황을 안다).
             return hit.modelScoped ? .none : .allExhausted
         }
-        return .switchTo(next, reason: .activeExhausted)
+        return .switchTo(next, reason: hit.modelScoped ? .modelExhausted : .activeExhausted)
     }
 
     /// hit를 반영한 가상의 file (호출자는 별도로 store.update로 실제 반영한다)
@@ -114,7 +124,8 @@ public final class AutoSwitchEngine: @unchecked Sendable {
         if active.autoSwitchMayLeave(now: now),
            let next = firstAvailable(in: file, excluding: active.id, now: now,
                                      avoidModelLimited: leavingForModelLimit) {
-            return .switchTo(next, reason: .activeExhausted)
+            return .switchTo(next, reason: leavingForModelLimit ? .modelExhausted
+                                                                : .activeExhausted)
         }
 
         // (B) primary 복귀 — 현재 fallback 활성이 "자동 전환"의 결과일 때만

@@ -68,7 +68,9 @@ final class AutoSwitchEngineTests: XCTestCase {
         file.accounts[0].userPinned = false
         XCTAssertEqual(
             AutoSwitchEngine().onRateLimitHit(file: file, hit: RateLimitHit(resetsAt: nil, modelScoped: true), now: t0),
-            .switchTo(fb1.id, reason: .activeExhausted))
+            // 사유가 .activeExhausted가 아니라 .modelExhausted다 — 알림 문구가 갈린다
+            // (계정은 다른 모델로 계속 쓸 수 있으므로 "한도 소진"이라고 하면 거짓말).
+            .switchTo(fb1.id, reason: .modelExhausted))
     }
 
     func testAccountWideLimitSwitchesEvenPinned() {
@@ -476,7 +478,7 @@ final class AutoSwitchEngineTests: XCTestCase {
         let d = AutoSwitchEngine().onRateLimitHit(
             file: file, hit: RateLimitHit(resetsAt: t0.addingTimeInterval(3600), modelScoped: true),
             now: t0)
-        XCTAssertEqual(d, .switchTo(fb2.id, reason: .activeExhausted))
+        XCTAssertEqual(d, .switchTo(fb2.id, reason: .modelExhausted))
     }
 
     /// 모델 한도인데 갈 곳이 전부 같은 모델로 막혔으면 **"모든 계정 한도 소진"은 거짓말**이다
@@ -530,6 +532,39 @@ final class AutoSwitchEngineTests: XCTestCase {
         file.accounts[1].rateLimit = RateLimitInfo(resetsAt: t0.addingTimeInterval(4 * 86400),
                                                    recordedAt: t0, modelScoped: true)
         XCTAssertEqual(AutoSwitchEngine().onTick(file: file, now: t0),
-                       .switchTo(fb2.id, reason: .activeExhausted))
+                       .switchTo(fb2.id, reason: .modelExhausted))
+    }
+
+    /// ★ 자동 전환이 꺼진 풀에서 **모델 전용 한도**가 걸리면 "계정 한도 소진"이라고 알리면
+    /// 안 된다 — 그 계정은 다른 모델로 멀쩡히 쓸 수 있다(문구를 섞지 않는 이 저장소의 규칙).
+    func testAutoSwitchOffNotifiesModelLimitSeparately() {
+        file.autoSwitchByProvider[.claude] = false
+        XCTAssertEqual(AutoSwitchEngine().onRateLimitHit(
+            file: file, hit: RateLimitHit(resetsAt: t0.addingTimeInterval(3600), modelScoped: true),
+            now: t0),
+                       .notifyModelLimitedOnly(primary.id))
+        // 계정 자체 소진은 기존 문구 그대로.
+        XCTAssertEqual(AutoSwitchEngine().onRateLimitHit(
+            file: file, hit: RateLimitHit(resetsAt: t0.addingTimeInterval(3600)), now: t0),
+                       .notifyExhaustedOnly(primary.id))
+    }
+
+    /// 자동 전환이 꺼져 있어도 **핀은 존중**한다 — 핀 검사가 알림 분기보다 먼저여야 한다.
+    /// (사용자가 "여기 있겠다"고 고른 계정에 모델 한도 알림을 띄우지 않는다.)
+    func testPinnedModelLimitStaysSilentEvenWhenAutoSwitchOff() {
+        file.autoSwitchByProvider[.claude] = false
+        file.accounts[0].userPinned = true
+        XCTAssertEqual(AutoSwitchEngine().onRateLimitHit(
+            file: file, hit: RateLimitHit(resetsAt: t0.addingTimeInterval(3600), modelScoped: true),
+            now: t0),
+                       .none)
+    }
+
+    /// 모델 한도로 옮길 때의 전환 사유는 `.modelExhausted` — 알림 문구가 갈린다.
+    func testModelLimitedSwitchCarriesItsOwnReason() {
+        XCTAssertEqual(AutoSwitchEngine().onRateLimitHit(
+            file: file, hit: RateLimitHit(resetsAt: t0.addingTimeInterval(3600), modelScoped: true),
+            now: t0),
+                       .switchTo(fb1.id, reason: .modelExhausted))
     }
 }
