@@ -1151,30 +1151,33 @@ final class AppState: ObservableObject {
                 MobiusNotification.postAccountsChanged()
                 let name = store.file.accounts.first { $0.id == id }?.nickname ?? "?"
                 let fromName = store.file.accounts.first { $0.id == fromID }?.nickname
+                // ★ [정정 2026-08-15] "새로 시작하는 세션부터 적용돼요"는 틀린 안내였다 —
+                //   실행 중 claude 세션은 **턴마다 자격증명을 다시 읽어** 다음 입력부터
+                //   새 계정으로 이어진다(옛 계정이 쓰이는 건 진행 중이던 한 턴뿐.
+                //   claude 2.1.232/2.1.233 기준). 필요 없는 세션 재시작을 시키고 있었다.
+                //   ★ Codex는 전제가 정반대다 — 실행 중 세션이 시작 시점 토큰을 계속 쓰고
+                //   토큰 갱신으로 로그인을 되돌리기까지 하므로(클로버, README 참조)
+                //   "이전 세션 종료"가 맞는 안내다. 한 문구로 합치지 말 것.
+                //   ★ if/else가 아니라 switch인 이유(셀프리뷰 반영): 프로바이더가 늘면
+                //   "claude가 아니면 codex"가 조용히 틀린 안내를 하게 된다 — 컴파일 에러로
+                //   드러나야 한다. 세 알림이 같은 note를 공유하므로 복귀 알림도 함께 맞는다.
+                let sessionNote: String
+                switch provider {
+                case .claude: sessionNote = loc("실행 중인 세션도 다음 입력부터 새 계정으로 이어져요.")
+                case .codex: sessionNote = loc("실행 중인 codex 세션은 종료해야 새 계정이 적용돼요.")
+                }
                 switch reason {
                 case .primaryRecovered:
                     notify(title: loc("✅ %@ 계정으로 복귀했어요", name),
-                           body: loc("한도가 초기화돼 주 계정으로 돌아왔어요."))
-                // ★ [정정 2026-08-15] "새로 시작하는 세션부터 적용돼요"는 틀린 안내였다 —
-                //   실행 중 claude 세션은 **턴마다 자격증명을 다시 읽어** 다음 입력부터
-                //   새 계정으로 이어진다(옛 계정이 쓰이는 건 진행 중이던 한 턴뿐).
-                //   필요 없는 세션 재시작을 시키고 있었다. 임계값 선제 전환(advisory)은
-                //   Claude 전용 경로라 프로바이더 분기가 없다.
-                //   ★ Codex는 전제가 다르다 — 실행 중 세션이 시작 시점 토큰을 계속 쓰고
-                //   토큰 갱신으로 로그인을 되돌리기까지 하므로(클로버, README 참조)
-                //   "이전 세션 종료"라는 정반대 안내가 맞다. 한 문구로 합치지 말 것.
+                           body: loc("한도가 초기화돼 주 계정으로 돌아왔어요. %@", sessionNote))
                 case .thresholdAdvisory:
                     // ★ 소진 표현 금지 — 아직 쓸 수 있는데 임계값에 가까워 미리 옮긴 것이다.
                     notify(title: loc("🔄 %@ 계정으로 미리 전환했어요", name),
-                           body: loc("%@ 계정이 한도에 가까워져 여유 있는 %@(으)로 미리 전환했어요. 실행 중인 세션도 다음 입력부터 새 계정으로 이어져요.",
-                                     fromName ?? "?", name))
+                           body: loc("%@ 계정이 한도에 가까워져 여유 있는 %@(으)로 미리 전환했어요. %@",
+                                     fromName ?? "?", name, sessionNote))
                 case .activeExhausted:
                     notify(title: loc("🔄 %@ 계정으로 전환했어요", name),
-                           body: provider == .claude
-                               ? loc("%@ 한도 소진 → %@. 실행 중인 세션도 다음 입력부터 새 계정으로 이어져요.",
-                                     fromName ?? "?", name)
-                               : loc("%@ 한도 소진 → %@. 실행 중인 codex 세션은 종료해야 새 계정이 적용돼요.",
-                                     fromName ?? "?", name))
+                           body: loc("%@ 한도 소진 → %@. %@", fromName ?? "?", name, sessionNote))
                 }
             } catch {
                 lastError = loc("자동 전환 실패: %@", error.localizedDescription)
