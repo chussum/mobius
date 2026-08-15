@@ -124,8 +124,23 @@ public struct AccountProfile: Codable, Equatable, Identifiable, Sendable {
     }
 
     /// 지금 한도에 걸려 있는가 (리셋 시각 전인가)
+    /// **계정 자체**(5시간/주간)가 막혔는가 = "지금 이 계정으로는 아무것도 못 한다".
+    ///
+    /// ★ 모델 전용 한도(Fable 등)는 **여기 포함하지 않는다**(2026-08-15, 이슈 #19 후속).
+    ///   그 계정은 다른 모델로 멀쩡히 쓸 수 있으므로 "못 쓰는 계정"이 아니다. 예전엔 둘을
+    ///   섞어 봤는데, 며칠짜리 모델 한도 하나가 계정을 통째로 후보에서 빼 **"모든 계정 한도
+    ///   소진"**이 뜨는 경로가 됐다(메뉴바·CLI 문구도 거짓말이 된다). 모델 한도는
+    ///   `isModelLimited`로 따로 보고, 그 한도 때문에 떠날 때만 후보에서 걸러낸다.
     public func isLimited(now: Date) -> Bool {
-        guard let rl = rateLimit else { return false }
+        guard let rl = rateLimit, !rl.modelScoped else { return false }
+        return now < rl.resetsAt
+    }
+
+    /// **모델 전용** 한도(Fable 등)로 막혔는가. 계정 자체는 여유가 있을 수 있다.
+    /// 이 계정으로 옮겨도 **같은 모델은 여전히 막혀 있으므로**, 모델 한도 때문에 떠나는
+    /// 전환에서는 후보에서 제외한다(그 외의 전환에서는 정상 후보다).
+    public func isModelLimited(now: Date) -> Bool {
+        guard let rl = rateLimit, rl.modelScoped else { return false }
         return now < rl.resetsAt
     }
 
@@ -142,9 +157,8 @@ public struct AccountProfile: Codable, Equatable, Identifiable, Sendable {
     /// 자동 전환이 이 계정을 밀어내도 되는가. 모델 전용 한도 + 사용자 핀이면 밀어내지 않는다.
     /// (계정 자체 한도로 걸린 경우엔 modelScoped=false라 핀과 무관하게 밀어낼 수 있다.)
     public func autoSwitchMayLeave(now: Date) -> Bool {
-        guard isLimited(now: now) || needsReauth else { return false }
-        if let rl = rateLimit, rl.modelScoped, userPinned { return false }
-        return true
+        if needsReauth || isLimited(now: now) { return true }
+        return isModelLimited(now: now) && !userPinned
     }
 }
 

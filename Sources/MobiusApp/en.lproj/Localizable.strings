@@ -3,11 +3,14 @@
 /* AppState — 알림/오류 */
 "계정 목록 로드 실패: %@" = "Failed to load accounts: %@";
 "전환 가능한 계정이 없습니다. 리셋을 기다려주세요." = "No account is available to switch to. Please wait for a reset.";
+"모델 한도 — 자동 전환이 꺼져 있습니다" = "Model limit — auto-switch is off";
+"%@ 계정에서 이 모델만 한도에 걸렸어요. 계정은 다른 모델로 계속 쓸 수 있어요." = "Only this model hit its limit on %@. The account still works with other models.";
 "한도 소진 — 자동 전환이 꺼져 있습니다" = "Limit reached — auto-switch is off";
 "%@ 계정이 한도에 도달했습니다. 수동으로 전환하세요." = "The account %@ reached its limit. Switch manually.";
 "✅ %@ 계정으로 복귀했어요" = "✅ Back on %@";
 "한도가 초기화돼 주 계정으로 돌아왔어요. %@" = "Your limit reset, so you're back on your primary account. %@";
 "🔄 %@ 계정으로 전환했어요" = "🔄 Switched to %@";
+"%@ 계정에서 이 모델의 한도에 걸려 %@(으)로 옮겼어요. %@" = "This model hit its limit on %@, so we moved to %@. %@";
 "%@ 한도 소진 → %@. %@" = "%@ hit its limit → %@. %@";
 "실행 중인 세션도 다음 입력부터 새 계정으로 이어져요." = "Open sessions pick up the new account with your next prompt.";
 "실행 중인 codex 세션은 종료해야 새 계정이 적용돼요." = "Close any running codex sessions for the new account to take effect.";
@@ -146,6 +149,8 @@
 "Claude Desktop 연결" = "Connect Claude Desktop";
 "이 계정으로 전환한 뒤 연결할 수 있어요" = "Switch to this account first to connect";
 "계정 삭제" = "Delete account";
+"모델 한도 · %d일 %d시간 후 초기화" = "Model limit · resets in %dd %dh";
+"모델 한도 · %d시간 %d분 후 초기화" = "Model limit · resets in %dh %dm";
 "리셋까지 %d시간 %d분" = "%dh %dm until reset";
 "5시간" = "5h";
 "주간" = "Weekly";

@@ -68,7 +68,9 @@ final class AutoSwitchEngineTests: XCTestCase {
         file.accounts[0].userPinned = false
         XCTAssertEqual(
             AutoSwitchEngine().onRateLimitHit(file: file, hit: RateLimitHit(resetsAt: nil, modelScoped: true), now: t0),
-            .switchTo(fb1.id, reason: .activeExhausted))
+            // 사유가 .activeExhausted가 아니라 .modelExhausted다 — 알림 문구가 갈린다
+            // (계정은 다른 모델로 계속 쓸 수 있으므로 "한도 소진"이라고 하면 거짓말).
+            .switchTo(fb1.id, reason: .modelExhausted))
     }
 
     func testAccountWideLimitSwitchesEvenPinned() {
@@ -452,5 +454,117 @@ final class AutoSwitchEngineTests: XCTestCase {
         XCTAssertEqual(engine.onTick(file: file, now: t0.addingTimeInterval(110)), .none)
         XCTAssertEqual(engine.onTick(file: file, now: t0.addingTimeInterval(161)),
                        .switchTo(primary.id, reason: .primaryRecovered))
+    }
+
+    // MARK: 모델 전용 한도와 계정 한도의 구분 (이슈 #19 후속)
+
+    /// ★ **모델 전용 한도가 걸린 폴백도 계정 소진 전환에서는 정상 후보다.**
+    /// Fable 주간 한도 하나(며칠짜리)가 폴백을 통째로 지우면, 주계정이 진짜로 소진됐을 때
+    /// 갈 곳이 없어 "모든 계정 한도 소진"이 뜬다 — 계정 자체는 멀쩡한데도. 이슈 #19의
+    /// 오귀인이 이 경로로 되살아났었다.
+    func testAccountExhaustionCanSwitchIntoModelLimitedFallback() {
+        file.accounts[1].rateLimit = RateLimitInfo(resetsAt: t0.addingTimeInterval(4 * 86400),
+                                                   recordedAt: t0, modelScoped: true)
+        let d = AutoSwitchEngine().onRateLimitHit(
+            file: file, hit: RateLimitHit(resetsAt: t0.addingTimeInterval(3600)), now: t0)
+        XCTAssertEqual(d, .switchTo(fb1.id, reason: .activeExhausted))
+    }
+
+    /// 반대로 **모델 한도 때문에 떠날 때**는 같은 모델이 막힌 계정을 건너뛴다 —
+    /// 옮겨봐야 그 모델은 여전히 못 쓴다.
+    func testModelLimitedSwitchSkipsModelLimitedFallback() {
+        file.accounts[1].rateLimit = RateLimitInfo(resetsAt: t0.addingTimeInterval(4 * 86400),
+                                                   recordedAt: t0, modelScoped: true)
+        let d = AutoSwitchEngine().onRateLimitHit(
+            file: file, hit: RateLimitHit(resetsAt: t0.addingTimeInterval(3600), modelScoped: true),
+            now: t0)
+        XCTAssertEqual(d, .switchTo(fb2.id, reason: .modelExhausted))
+    }
+
+    /// 모델 한도인데 갈 곳이 전부 같은 모델로 막혔으면 **"모든 계정 한도 소진"은 거짓말**이다
+    /// (계정들은 멀쩡하다). 조용히 머문다.
+    func testModelLimitedWithNoHeadroomStaysSilentInsteadOfAllExhausted() {
+        for i in 1...2 {
+            file.accounts[i].rateLimit = RateLimitInfo(resetsAt: t0.addingTimeInterval(4 * 86400),
+                                                       recordedAt: t0, modelScoped: true)
+        }
+        let d = AutoSwitchEngine().onRateLimitHit(
+            file: file, hit: RateLimitHit(resetsAt: t0.addingTimeInterval(3600), modelScoped: true),
+            now: t0)
+        XCTAssertEqual(d, .none)
+        // 계정 자체 소진이면 여전히 정직하게 allExhausted다.
+        for i in 1...2 {
+            file.accounts[i].rateLimit = RateLimitInfo(resetsAt: t0.addingTimeInterval(3600),
+                                                       recordedAt: t0, modelScoped: false)
+        }
+        XCTAssertEqual(AutoSwitchEngine().onRateLimitHit(
+            file: file, hit: RateLimitHit(resetsAt: t0.addingTimeInterval(3600)), now: t0),
+                       .allExhausted)
+    }
+
+    /// ★ **떠나는 이유가 모델 한도가 아니면** 모델 한도가 걸린 폴백을 걸러내면 안 된다.
+    /// 재인증이 필요한(= 못 쓰는) 계정에 머물러 있는데, 옛 Fable 기록이 남아 있다는 이유로
+    /// 갈 수 있는 폴백을 지워 버리면 사용자는 죽은 계정에 갇힌다.
+    func testReauthLeaveDoesNotFilterModelLimitedFallbacks() {
+        file.accounts[0].needsReauth = true
+        file.accounts[0].rateLimit = RateLimitInfo(resetsAt: t0.addingTimeInterval(4 * 86400),
+                                                   recordedAt: t0, modelScoped: true)
+        file.accounts[1].rateLimit = RateLimitInfo(resetsAt: t0.addingTimeInterval(4 * 86400),
+                                                   recordedAt: t0, modelScoped: true)
+        XCTAssertEqual(AutoSwitchEngine().onTick(file: file, now: t0),
+                       .switchTo(fb1.id, reason: .activeExhausted))
+    }
+
+    /// 계정 자체가 소진돼 떠날 때도 마찬가지 — 모델 한도 폴백은 정상 후보다.
+    func testAccountExhaustedLeaveDoesNotFilterModelLimitedFallbacks() {
+        file.accounts[0].rateLimit = RateLimitInfo(resetsAt: t0.addingTimeInterval(3600),
+                                                   recordedAt: t0, modelScoped: false)
+        file.accounts[1].rateLimit = RateLimitInfo(resetsAt: t0.addingTimeInterval(4 * 86400),
+                                                   recordedAt: t0, modelScoped: true)
+        XCTAssertEqual(AutoSwitchEngine().onTick(file: file, now: t0),
+                       .switchTo(fb1.id, reason: .activeExhausted))
+    }
+
+    /// 반대로 모델 한도**만** 걸려서 떠날 때는 같은 모델이 막힌 폴백을 건너뛴다.
+    func testModelLimitedLeaveSkipsModelLimitedFallbacksOnTick() {
+        file.accounts[0].rateLimit = RateLimitInfo(resetsAt: t0.addingTimeInterval(4 * 86400),
+                                                   recordedAt: t0, modelScoped: true)
+        file.accounts[1].rateLimit = RateLimitInfo(resetsAt: t0.addingTimeInterval(4 * 86400),
+                                                   recordedAt: t0, modelScoped: true)
+        XCTAssertEqual(AutoSwitchEngine().onTick(file: file, now: t0),
+                       .switchTo(fb2.id, reason: .modelExhausted))
+    }
+
+    /// ★ 자동 전환이 꺼진 풀에서 **모델 전용 한도**가 걸리면 "계정 한도 소진"이라고 알리면
+    /// 안 된다 — 그 계정은 다른 모델로 멀쩡히 쓸 수 있다(문구를 섞지 않는 이 저장소의 규칙).
+    func testAutoSwitchOffNotifiesModelLimitSeparately() {
+        file.autoSwitchByProvider[.claude] = false
+        XCTAssertEqual(AutoSwitchEngine().onRateLimitHit(
+            file: file, hit: RateLimitHit(resetsAt: t0.addingTimeInterval(3600), modelScoped: true),
+            now: t0),
+                       .notifyModelLimitedOnly(primary.id))
+        // 계정 자체 소진은 기존 문구 그대로.
+        XCTAssertEqual(AutoSwitchEngine().onRateLimitHit(
+            file: file, hit: RateLimitHit(resetsAt: t0.addingTimeInterval(3600)), now: t0),
+                       .notifyExhaustedOnly(primary.id))
+    }
+
+    /// 자동 전환이 꺼져 있어도 **핀은 존중**한다 — 핀 검사가 알림 분기보다 먼저여야 한다.
+    /// (사용자가 "여기 있겠다"고 고른 계정에 모델 한도 알림을 띄우지 않는다.)
+    func testPinnedModelLimitStaysSilentEvenWhenAutoSwitchOff() {
+        file.autoSwitchByProvider[.claude] = false
+        file.accounts[0].userPinned = true
+        XCTAssertEqual(AutoSwitchEngine().onRateLimitHit(
+            file: file, hit: RateLimitHit(resetsAt: t0.addingTimeInterval(3600), modelScoped: true),
+            now: t0),
+                       .none)
+    }
+
+    /// 모델 한도로 옮길 때의 전환 사유는 `.modelExhausted` — 알림 문구가 갈린다.
+    func testModelLimitedSwitchCarriesItsOwnReason() {
+        XCTAssertEqual(AutoSwitchEngine().onRateLimitHit(
+            file: file, hit: RateLimitHit(resetsAt: t0.addingTimeInterval(3600), modelScoped: true),
+            now: t0),
+                       .switchTo(fb1.id, reason: .modelExhausted))
     }
 }
