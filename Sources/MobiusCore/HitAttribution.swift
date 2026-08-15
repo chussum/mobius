@@ -45,9 +45,10 @@ public enum HitAttribution {
         case record(RateLimitHit)
         /// 창에 여유가 있다 = 이 hit은 **다른 계정 것**이었다 → 버린다.
         case discard
-        /// 모델 전용 한도 소진이 보이지만 **아직 믿을 수 없다**(최근 전환 직후).
-        /// `.inconclusive`와 달리 **더 신선한 데이터가 필요한 게 아니라 시간만 지나면 된다** —
-        /// 호출측은 트리거를 보류하되 **같은 스냅샷으로 다시 판정**하므로 추가 조회가 없다.
+        /// 모델 전용 한도 소진이 보이지만 **믿을 수 없다**(최근 전환 직후 = 오귀인 위험 구간).
+        /// 호출측은 이 트리거를 **버리되 `.discard`와 달리 백오프 카운터에는 넣지 않는다**
+        /// (우리가 스스로 만든 판정 불가라 "이 계정과 무관한 hit"의 증거가 아니다).
+        /// 진짜 모델 한도라면 창이 지난 뒤 **새 hit**이 와서 그때 기록된다.
         case notYetTrusted
         /// 소진은 맞는데 **쓸 수 있는 리셋 시각이 없다**(누락/파싱 실패/이미 지남).
         /// "여유"와 섞으면 안 된다 — 트리거를 보류해 다음 기회에 다시 본다(셀프리뷰 지적).
@@ -157,16 +158,25 @@ public enum HitAttribution {
     public static func verdict(usage: UsageSnapshot, now: Date,
                                trustModelScope: Bool = true) -> Verdict {
         if let hit = usage.exhaustionHit(now: now) { return .record(hit) }
+        // ★ **계정 창이 100%면 모델 한도보다 먼저 결론 낸다** — 리셋 시각을 못 얻어
+        //   `exhaustionHit`이 nil이었을 뿐, 계정은 실제로 막혀 있다. 여기서 모델 갈래로
+        //   내려가면 "그 모델만 막힘"으로 기록돼 **완전히 소진된 계정이 폴백 후보로 남고**
+        //   메뉴바도 빨강이 안 되며 핀이 걸려 있으면 자동 전환도 멈춘다(셀프리뷰 지적).
+        if usage.hasExhaustedAccountWindow() { return .inconclusive }
         if let scoped = usage.scopedExhaustionHit(now: now) {
-            // 전환 직후엔 이 증거를 안 믿는다 — 다만 **버리지도 않는다**: 필요한 건 새
-            // 데이터가 아니라 시간이므로, 같은 스냅샷으로 창이 지난 뒤 다시 판정한다.
+            // 전환 직후엔 이 증거를 안 믿는다 — 그리고 **기다린다고 믿을 수 있게 되지도
+            // 않는다**(그 100%는 며칠 그대로다). 그러니 이 트리거는 버린다. 진짜 모델 한도
+            // 사용자는 계속 그 에러를 만나므로, 창이 지난 뒤 **새로 도착한 hit**이 기록한다
+            // — 그게 "전환과 무관한 신호"라는 증거다. 같은 스냅샷을 나중에 다시 판정하면
+            // 신뢰 창은 오귀인을 5분 미루기만 할 뿐 막지 못한다(셀프리뷰 지적).
             return trustModelScope ? .record(scoped) : .notYetTrusted
         }
-        // ★ `.inconclusive`("소진은 맞는데 리셋 시각을 못 얻음")는 **계정 창에만** 적용한다.
-        //   모델 전용 한도는 며칠 100%로 남아 있을 수 있어, 그걸로 보류를 걸면 **멀쩡한
-        //   계정**에서 스쳐 지나간 hit 하나가 15분 동안 보류로 남아 60초마다 조회를 유발한다.
-        if usage.hasExhaustedAccountWindow() { return .inconclusive }
-        if usage.hasNearLimitAccountWindow(threshold: nearLimitPercent) { return .inconclusive }
+        // ★ 한도에 바짝 붙은 경우의 보류는 **5시간 창에만** 적용한다. 주간 사용률은 주말
+        //   즈음이면 정상적으로 95%를 넘는데, 거기에 이 규칙을 걸면 **남의 hit이 영영
+        //   `.discard`에 도달하지 못해** 15분 내내 60초마다 조회하는 상태로 굳는다
+        //   (discard 카운터도 안 올라 백오프가 안 걸린다 — 셀프리뷰 지적).
+        //   5시간 창은 갑자기 차오르는 쪽이라 API 지연이 실제로 문제되는 창이기도 하다.
+        if (usage.fiveHourPercent ?? 0) >= nearLimitPercent { return .inconclusive }
         return .discard
     }
 }

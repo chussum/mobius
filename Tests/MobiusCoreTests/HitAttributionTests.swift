@@ -247,4 +247,27 @@ final class HitAttributionTests: XCTestCase {
                                            now: now),
                        .fetchUsage)
     }
+
+    /// ★ 계정 창이 100%면 **모델 한도보다 먼저** 결론 낸다 — 리셋 시각을 못 얻어
+    /// exhaustionHit이 nil이었을 뿐, 계정은 실제로 막혀 있다. 순서가 뒤집히면 완전히
+    /// 소진된 계정이 "그 모델만 막힘"으로 기록돼 폴백 후보로 남고, 메뉴바도 빨강이 안 되며
+    /// 핀이 걸려 있으면 자동 전환까지 멈춘다.
+    func testExhaustedAccountWindowBeatsScopedEvenWithoutUsableReset() {
+        let usage = UsageSnapshot(
+            fiveHourPercent: 100, fiveHourResetsAt: nil,
+            sevenDayPercent: 30, sevenDayResetsAt: now.addingTimeInterval(3600),
+            scopedLimits: [ScopedUsageLimit(label: "Fable", percent: 100,
+                                            resetsAt: now.addingTimeInterval(4 * 86400))],
+            fetchedAt: now)
+        XCTAssertEqual(HitAttribution.verdict(usage: usage, now: now), .inconclusive)
+    }
+
+    /// 한도 근접 보류는 **5시간 창에만** 적용한다. 주간 사용률은 주말 즈음 정상적으로 95%를
+    /// 넘는데, 거기 걸면 남의 hit이 영영 `.discard`에 못 닿아 15분 내내 조회가 도는 상태로 굳는다.
+    func testWeeklyNearLimitDoesNotBlockDiscard() {
+        XCTAssertEqual(HitAttribution.verdict(usage: snapshot(fiveHour: 12, sevenDay: 97), now: now),
+                       .discard)
+        XCTAssertEqual(HitAttribution.verdict(usage: snapshot(fiveHour: 97, sevenDay: 12), now: now),
+                       .inconclusive)
+    }
 }

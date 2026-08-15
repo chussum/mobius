@@ -918,7 +918,7 @@ final class AppState: ObservableObject {
             // (2026-07-13 실측: 플랜 창 여유 상태에서도 뜨고 세션은 정상 동작).
             // 단 창 소진과 겹치면 이 메시지가 우선 표시돼 창 소진을 가리므로 usage로 교차 확인.
             guard hit.kind == .window else { sawMonthlySpend = true; continue }
-            await verifyAndRecordWindowHit(accountID: claudeActiveID, now: scannedAt)
+            await verifyAndRecordWindowHit(accountID: claudeActiveID, now: scannedAt, logHit: hit)
         }
         // 판정을 못 끝낸 트리거 재시도 — 로그 hit은 한 번만 배달되므로(오프셋 전진), 조회가
         // 실패한 트리거를 여기서 다시 보지 않으면 사용자가 타이핑을 멈춘 순간 그 소진은
@@ -994,6 +994,9 @@ final class AppState: ObservableObject {
         let firstSeenAt: Date
         /// 이 시각 **이후에 뜬** 스냅샷만 판정에 쓴다.
         var needsFresherThan: Date
+        /// 이 트리거를 만든 로그 hit(창 소진일 때만). 검증이 **끝내 불가능**할 때의
+        /// 최후 폴백에 쓴다 — 아래 giveUp 처리 참조. P3처럼 창 신호가 아닌 경우 nil.
+        let logHit: RateLimitHit?
     }
 
     /// **판정이 안 끝난 트리거**(계정 → 트리거).
@@ -1035,7 +1038,9 @@ final class AppState: ObservableObject {
     /// ★ 401을 여기서 needsReauth로 승격하지 않는다 — 이 경로는 "이 hit이 누구 것인가"만
     ///   판정한다. 재인증 판정은 기존 경로(refreshUsageIfStale)가 자기 조건으로 한다.
     /// - Parameter isRetry: 보류 트리거의 재시도인가(= 이번 틱에 새 로그 hit이 온 게 아니다).
-    private func verifyAndRecordWindowHit(accountID: UUID?, now: Date, isRetry: Bool = false) async {
+    private func verifyAndRecordWindowHit(accountID: UUID?, now: Date,
+                                          logHit: RateLimitHit? = nil,
+                                          isRetry: Bool = false) async {
         guard let accountID else { return }
         guard let account = store.file.accounts.first(where: { $0.id == accountID }) else {
             pendingHitVerify[accountID] = nil   // 계정이 사라졌다 — 보류도 함께 정리(누수 방지)
@@ -1058,7 +1063,8 @@ final class AppState: ObservableObject {
                 // 쉬는 사이에 수명이 차서, 재개하자마자 곧바로 다시 포기하게 된다.
                 if let held = pendingHitVerify[accountID] {
                     pendingHitVerify[accountID] = PendingTrigger(
-                        firstSeenAt: now, needsFresherThan: held.needsFresherThan)
+                        firstSeenAt: now, needsFresherThan: held.needsFresherThan,
+                        logHit: held.logHit)
                 }
                 backingOff = false
             }
@@ -1069,19 +1075,19 @@ final class AppState: ObservableObject {
         if isRetry {
             guard let previous = pendingHitVerify[accountID] else { return }
             guard now.timeIntervalSince(previous.firstSeenAt) <= Self.pendingHitVerifyTTL else {
-                pendingHitVerify[accountID] = nil    // 너무 오래된 트리거는 포기한다
-                verifyGiveUpUntil[accountID] = now.addingTimeInterval(Self.verifyGiveUpBackoff)
+                await giveUpVerification(previous, accountID: accountID, now: now)
                 return
             }
             trigger = previous
         } else if let previous = pendingHitVerify[accountID],
                   now.timeIntervalSince(previous.firstSeenAt) > Self.pendingHitVerifyTTL {
             // 새 hit이지만 이 계정의 판정은 이미 15분째 안 서고 있다 → 조회는 잠시 쉰다.
-            // ★ 단 **새 hit은 새 트리거로 남긴다**(셀프리뷰 지적): 낡은 트리거를 버리면서
-            //   방금 도착한 가장 신선한 증거까지 같이 버리면, 사용자가 (막혔으니) 타이핑을
-            //   멈추는 순간 그 소진은 영영 기록되지 않는다.
-            verifyGiveUpUntil[accountID] = now.addingTimeInterval(Self.verifyGiveUpBackoff)
-            pendingHitVerify[accountID] = PendingTrigger(firstSeenAt: now, needsFresherThan: now)
+            // ★ 단 **새 hit은 새 트리거로 남긴다**: 낡은 트리거를 버리면서 방금 도착한 가장
+            //   신선한 증거까지 같이 버리면, 사용자가 (막혔으니) 타이핑을 멈추는 순간 그
+            //   소진은 영영 기록되지 않는다.
+            await giveUpVerification(previous, accountID: accountID, now: now)
+            pendingHitVerify[accountID] = PendingTrigger(firstSeenAt: now, needsFresherThan: now,
+                                                         logHit: logHit)
             return
         } else {
             // 새 hit은 **새 데이터를 요구**한다 — 그 사이 팝오버가 떠 놓은 *소진 이전* 스냅샷이
@@ -1091,7 +1097,8 @@ final class AppState: ObservableObject {
             //   이어가는 한 hit이 계속 와 **수명이 영영 안 차고 60초마다 조회가 무한 반복**된다
             //   = 이 코드베이스가 피하는 배경 폴링(셀프리뷰 지적). 두 시각을 나눠 든 이유가 이것.
             trigger = PendingTrigger(firstSeenAt: pendingHitVerify[accountID]?.firstSeenAt ?? now,
-                                     needsFresherThan: now)
+                                     needsFresherThan: now,
+                                     logHit: logHit ?? pendingHitVerify[accountID]?.logHit)
         }
         pendingHitVerify[accountID] = trigger
 
@@ -1150,10 +1157,15 @@ final class AppState: ObservableObject {
             pendingHitVerify[accountID]?.needsFresherThan = verifiedAt
             return
         case .notYetTrusted:
-            // 모델 한도는 보이는데 전환 직후라 아직 못 믿는다 — 필요한 건 **새 데이터가
-            // 아니라 시간**이다. needsFresherThan을 그대로 두면 같은 스냅샷으로 창이 지난 뒤
-            // 공짜로 다시 판정된다(조회 0회). 이걸 discard로 처리하면 그 discard가 백오프
-            // 카운터를 채워, 신뢰 창이 열린 뒤에도 몇 분 더 기록이 늦어졌다(셀프리뷰 지적).
+            // 모델 한도는 보이는데 전환 직후라 못 믿는다 → **트리거를 버린다.**
+            // ★ 보류해 뒀다가 창이 지난 뒤 같은 스냅샷으로 다시 판정하면(7차에 그렇게 했다)
+            //   신뢰 창은 오귀인을 **5분 미루기만 할 뿐 막지 못한다** — 그 100%는 며칠
+            //   그대로라 시간이 지나도 새 증거가 아니다(셀프리뷰 지적). 진짜 모델 한도
+            //   사용자는 계속 그 에러를 만나므로, 창이 지난 뒤 **새로 도착한 hit**이
+            //   기록한다 — 그게 "전환과 무관하게 발생한 신호"라는 유일한 증거다.
+            // 단 백오프 카운터에는 넣지 않는다: 우리가 스스로 만든 판정 불가이지
+            // "이 계정과 무관한 hit"의 증거가 아니다.
+            pendingHitVerify[accountID] = nil
             return
         case .discard:
             pendingHitVerify[accountID] = nil   // 여유 있음 = 이 hit은 다른 계정 것이었다
@@ -1176,6 +1188,23 @@ final class AppState: ObservableObject {
             consecutiveDiscards[accountID] = 0
             await record(verified, on: accountID, at: verifiedAt)
         }
+    }
+
+    /// 15분 동안 판정을 못 냈다 — 포기하되, **안전한 경우에만** 로그 hit을 그대로 믿는다.
+    ///
+    /// ★ 이 폴백이 필요한 이유: 이 PR 이후로 소진 기록은 **오직 usage 엔드포인트를 통해서만**
+    ///   생긴다. 그래서 API가 죽거나 429를 뱉는 동안엔 claude 자체는 멀쩡히 돌아도 자동 전환이
+    ///   통째로 멈춘다 — 수정 전에는 로그만으로 네트워크 없이 전환했다(셀프리뷰 지적).
+    /// ★ 안전 조건: **최근에 전환이 없었을 것.** 오귀인은 전환 직후에만 생기므로(전환 전에
+    ///   시작된 턴이 뒤늦게 에러를 남긴다), 그 구간만 피하면 로그 hit의 귀속은 사실상 옳다.
+    ///   전환 직후라면 아무것도 기록하지 않는다 — 이 PR이 막으려는 바로 그 경우다.
+    private func giveUpVerification(_ trigger: PendingTrigger, accountID: UUID, now: Date) async {
+        pendingHitVerify[accountID] = nil
+        verifyGiveUpUntil[accountID] = now.addingTimeInterval(Self.verifyGiveUpBackoff)
+        guard let hit = trigger.logHit,
+              now.timeIntervalSince(claudeActiveChangedAt) > HitAttribution.modelScopeTrustWindow
+        else { return }
+        await record(hit, on: accountID, at: now)
     }
 
     /// 검증된 소진을 실제로 반영한다.
@@ -1394,7 +1423,8 @@ final class AppState: ObservableObject {
             do {
                 try switcher.switchTo(id)
                 engines[provider]?.noteSwitched(now: now,
-                                                forModelLimit: reason == .modelExhausted)
+                                                forModelLimit: reason == .modelExhausted,
+                                                leftAccount: fromID)
                 // 자동 전환의 결과인지 기록 — onTick의 primary 복귀는 이 플래그가
                 // true일 때만 일어난다 (수동 전환 자동 회귀 방지). 임계값 선제 전환도
                 // 자동 전환이므로 소진 전환과 동일하게 플래그를 세운다.

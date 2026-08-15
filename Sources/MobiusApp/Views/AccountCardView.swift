@@ -157,9 +157,13 @@ struct AccountCardView: View {
         //   보수적으로 true라, 이 분기가 없으면 모델 한도만 있는 계정에 계정 소진 카운트다운이
         //   뜬다(셀프리뷰 지적).
         if autoSwitchOn, let rl = profile.rateLimit, rl.resetsAt > now, rl.modelScoped {
+            // ★ 모델 스코프 한도는 **주간**이다 — 시간으로만 쓰면 "168시간 0분"이 된다
+            //   (셀프리뷰 지적). 하루를 넘으면 일 단위로 말한다.
             let mins = max(0, Int(rl.resetsAt.timeIntervalSince(now) / 60))
-            Label(loc("모델 한도 · %d시간 %d분 후 초기화", mins / 60, mins % 60),
-                  systemImage: "sparkles")
+            let text = mins >= 24 * 60
+                ? loc("모델 한도 · %d일 %d시간 후 초기화", mins / (24 * 60), (mins / 60) % 24)
+                : loc("모델 한도 · %d시간 %d분 후 초기화", mins / 60, mins % 60)
+            Label(text, systemImage: "sparkles")
                 .font(.system(size: 10)).foregroundStyle(.secondary)
         } else if autoSwitchOn, let rl = profile.rateLimit, rl.resetsAt > now, generallyLimited {
             let mins = max(0, Int(rl.resetsAt.timeIntervalSince(now) / 60))

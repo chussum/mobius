@@ -41,17 +41,24 @@ public final class AutoSwitchEngine: @unchecked Sendable {
 
     public init(provider: Provider = .claude) { self.provider = provider }
 
-    /// - Parameter forModelLimit: 이 전환이 **모델 전용 한도 때문**이었는가.
-    ///   primary 자동 복귀 게이트가 이 값을 본다 — 아래 `onTick` (B) 참조.
-    public func noteSwitched(now: Date = Date(), forModelLimit: Bool = false) {
+    /// - Parameters:
+    ///   - forModelLimit: 이 전환이 **모델 전용 한도 때문**이었는가.
+    ///   - leftAccount: 그때 떠난 계정. primary 자동 복귀 게이트가 본다 — 아래 `onTick` (B).
+    ///
+    /// ★ 불리언 하나로 기억하면 안 된다(셀프리뷰 지적): 모델 한도로 A→B로 떠난 뒤 **다른
+    ///   이유의 전환**(임계값·계정 소진)이 한 번이라도 일어나면 플래그가 지워져, 아직 모델
+    ///   한도가 걸린 A로 복귀했다가 다음 틱에 곧바로 다시 떠나는 **왕복**(전환 2회 + 알림
+    ///   2회)이 그 창이 리셋될 때까지 반복된다. "어느 계정을 그 이유로 떠났는지"를 기억한다.
+    public func noteSwitched(now: Date = Date(), forModelLimit: Bool = false,
+                             leftAccount: UUID? = nil) {
         lock.lock(); defer { lock.unlock() }
         lastSwitchAt = now
-        leftForModelLimit = forModelLimit
+        if forModelLimit { modelLimitLeftAccount = leftAccount }
     }
 
-    /// 마지막 자동 전환이 모델 전용 한도 때문이었는가(인메모리 — 재시작하면 false로 시작한다.
-    /// 그 경우 복귀가 조금 더 관대해질 뿐이라 안전한 방향이다).
-    private var leftForModelLimit = false
+    /// 모델 전용 한도 때문에 떠난 계정(인메모리 — 재시작하면 nil로 시작한다. 그 경우 복귀가
+    /// 조금 더 관대해질 뿐이라 안전한 방향이다).
+    private var modelLimitLeftAccount: UUID?
 
     private func inCooldown(_ now: Date) -> Bool {
         lock.lock(); defer { lock.unlock() }
@@ -150,7 +157,7 @@ public final class AutoSwitchEngine: @unchecked Sendable {
         //   멀쩡한 primary로 **일주일 내내 못 돌아온다** — 게다가 (A)의 firstAvailable은
         //   같은 상태의 계정을 다른 이유의 전환에서는 정상 후보로 고르므로 두 분기가 서로
         //   모순된 말을 하게 된다. 계정 자체 한도는 이유와 무관하게 늘 게이트다.
-        let modelGate = lock.withLock { leftForModelLimit }
+        let modelGate = lock.withLock { modelLimitLeftAccount } == primary.id
             ? primary.rateLimit.flatMap { $0.modelScoped ? $0.resetsAt : nil } : nil
         let accountGate = primary.rateLimit.flatMap { $0.modelScoped ? nil : $0.resetsAt }
         let gates = [accountGate, modelGate, primary.advisory?.resetsAt]
