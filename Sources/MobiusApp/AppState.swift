@@ -30,8 +30,10 @@ final class AppState: ObservableObject {
     // transient(네트워크/5xx) 실패 시 팝오버마다 회전 시도가 반복되지 않게 하는 계정당 재시도 쿨다운.
     private var lastCodexRefreshAttemptAt: [UUID: Date] = [:]
     // refresh_token_invalidated/invalid_grant(죽은 토큰) 계정의 긴 백오프 — 죽은 토큰은 어차피 401
-    // 이므로 이 시각 전까지 refresh/probe를 아예 건너뛴다(게이지는 마지막 값에 둔다).
+    // 이므로 이 시각 전까지 refresh/probe를 건너뛰고 재로그인 안내를 표시한다.
     private var codexRefreshDeadUntil: [UUID: Date] = [:]
+    @Published private(set) var codexUsageNeedsLogin: Set<UUID> = []
+    private var codexRejectedSnapshots: [UUID: Data] = [:]
     static let codexDeadRefreshCooldown: TimeInterval = 24 * 3600
     private var usageCacheLoaded = false
     private static let usageCacheKey = "usageCacheV1"
@@ -440,13 +442,10 @@ final class AppState: ObservableObject {
     /// refreshUsageIfStale와 대칭). 활성 codex 계정은 세션 로그 in-band 경로(tick의
     /// processCodexBatches)가 그대로 담당하므로 제외한다 — processCodexBatches는 손대지 않는다.
     ///
-    /// ★ **게이지 전용**: usage 캐시(usage[id])만 채운다. setNeedsReauth·엔진·rateLimit 기록을
-    /// 절대 호출하지 않고(CodexUsageProber의 안전 계약), 자격증명은 저장 스냅샷 바이트를 읽기
-    /// 전용으로만 쓴다(쓰기/refresh/codex 실행 없음). 401은 만료된 비활성 토큰이라 무해하게
-    /// 게이지를 stale로 둔다. wham/usage는 codex가 이미 폴링하는 상태 엔드포인트라 추가 쿼터
-    /// 부담이 없어(B1), showUsageGauges와 함께 기본 활성이다(별도 토글 없음 — Claude와 대칭).
-    /// 신선도/쿨다운 기준은 usage[id].fetchedAt(영속됨) — 재시작 후에도 엔드포인트를 난타하지 않는다.
+    /// 게이지 전용: 만료 access 토큰은 비활성 계정에 한해 갱신한다. 갱신 토큰이
+    /// 거부되면 옛 게이지 대신 재로그인 안내를 표시한다. 엔진/needsReauth는 변경하지 않는다.
     func refreshCodexUsageIfStale() {
+        clearRecoveredCodexUsageFailures()
         loadUsageCacheIfNeeded()
         guard UserDefaults.standard.object(forKey: "showUsageGauges") == nil
                 || UserDefaults.standard.bool(forKey: "showUsageGauges") else { return }
@@ -506,10 +505,19 @@ final class AppState: ObservableObject {
                         probeBytes = stored
                         lastCodexRefreshAttemptAt[profile.id] = nil   // 성공 — 쿨다운 해제
                         codexRefreshDeadUntil[profile.id] = nil
+                        codexUsageNeedsLogin.remove(profile.id)
+                        codexRejectedSnapshots[profile.id] = nil
                     case .invalidated:
                         // 죽은 refresh 토큰(세션 종료) — 게이지 전용 방화벽: 엔진/persisted reauth를
                         // 절대 건드리지 않고, 긴 백오프(codexRefreshDeadUntil)만 남기고 stale로 둔다.
+                        // HTTP 왕복 중 재로그인이 끝났으면 새 자격증명을 실패로 표시하지 않는다.
+                        guard (try? store.secretData(for: profile.id)) == authJSON,
+                              store.file.activeByProvider[.codex] != profile.id else { continue }
                         codexRefreshDeadUntil[profile.id] = now.addingTimeInterval(Self.codexDeadRefreshCooldown)
+                        codexRejectedSnapshots[profile.id] = authJSON
+                        codexUsageNeedsLogin.insert(profile.id)
+                        usage[profile.id] = nil
+                        updated = true
                         continue
                     case .transient:
                         // refresh POST는 위 Task {} 쉴드로 취소 비전파라 여기는 순수 네트워크/5xx다
@@ -528,6 +536,22 @@ final class AppState: ObservableObject {
                 }
             }
             if updated { saveUsageCache() }
+        }
+    }
+
+    /// 로컬 복구 판정은 게이지 옵션/네트워크 조회와 독립적이다.
+    private func clearRecoveredCodexUsageFailures() {
+        let ids = Set(store.file.accounts.filter { $0.provider == .codex }.map(\.id))
+        for (id, rejected) in codexRejectedSnapshots {
+            let removed = !ids.contains(id)
+            let recovered = (try? store.secretData(for: id)).map {
+                ReauthClearance.codexRefreshTokenRotated(previous: rejected, next: $0)
+            } ?? false
+            guard removed || recovered else { continue }
+            codexRejectedSnapshots[id] = nil
+            codexUsageNeedsLogin.remove(id)
+            codexRefreshDeadUntil[id] = nil
+            lastCodexRefreshAttemptAt[id] = nil
         }
     }
 
@@ -756,6 +780,7 @@ final class AppState: ObservableObject {
             try? store.replaceFile(with: fresh.file)
         }
         file = store.file
+        clearRecoveredCodexUsageFailures()
         // 플래그(hasDesktopSnapshot)를 진실의 원천으로 삼아 스냅샷 디렉토리를 정리 —
         // 실패한 캡처의 잔재 dir이 유효 스냅샷으로 오인돼 잘못 복원되는 것을 막는다.
         let flagged = Set(store.file.accounts.filter { $0.hasDesktopSnapshot }.map { $0.id })
@@ -828,6 +853,13 @@ final class AppState: ObservableObject {
             let activeBefore = store.file.activeByProvider
             _ = try? await switcher.adoptLiveAccountIfUnregistered()
             try? await switcher.reconcile()
+            // 같은 Codex 계정에 재로그인하면 reconcile은 활성 불변으로 되저장을 생략한다.
+            // 경고가 있는 활성 계정만 안정 읽기로 새 로그인 사본을 캡처한다(네트워크/회전 0).
+            if let active = store.file.activeByProvider[.codex],
+               codexUsageNeedsLogin.contains(active), pendingSwitchID == nil {
+                _ = await switcher.refreshActiveSnapshotIfStable(provider: .codex)
+            }
+            clearRecoveredCodexUsageFailures()
             // 외부 요인(재로그인, 또는 구 세션의 토큰 리프레시가 자격증명 파일을 되돌리는
             // 클로버 — Codex 실측)으로 활성이 바뀌면 조용히 넘어가지 않고 알린다.
             for provider in Provider.allCases {

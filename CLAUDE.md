@@ -194,6 +194,15 @@ Sources/MobiusApp/        SwiftUI 메뉴바 앱 + AppState + Views/ + LoginFlow 
   HTTP 창은 락이 아니라 **AppState 게이트**(비활성 게이지 refresh 시 활성 계정 fresh-read
   제외 + 전환 진입 시 codexUsageTask 정지·완료대기)로 닫는다.
 
+- **Codex 한도 갱신 실패 표시(2026-09-21)**: 갱신 API의 HTTP 400/401에서
+  `invalid_refresh_token` / `refresh_token_expired` / `refresh_token_reused`도 폐기 신호로 처리한다.
+  실측 `invalid_refresh_token` 401로 갱신이 막힌 계정은 옛 게이지를 지우고 재로그인 안내를
+  표시한다(게이지 전용 상태, persisted needsReauth/자동 전환 엔진은 그대로).
+  같은 계정의 refresh 토큰이 바뀌면 실패 안내와 24시간 백오프를 해제한다(메타데이터
+  변경만으로는 해제하지 않음). 경고가 있는 활성 Codex 계정은 15초 reconcile 때 라이브
+  인증 파일을 안정 읽기로 되저장해 동일 계정 재로그인도 포착한다. 게이지 표시 옵션과
+  독립적으로 경고를 정리하며, 라이브 토큰은 회전/수정하지 않는다.
+
 ### macOS 26 (Tahoe) 환경
 - 메뉴바 아이콘은 Control Center가 호스팅 — CGWindowList의 layer/owner로 존재 확인이 어려움.
 - **Bartender 같은 메뉴바 관리 앱이 새 앱 아이콘을 자동 숨김** → 안 보이면 Bartender 설정에서 표시.

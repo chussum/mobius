@@ -71,10 +71,12 @@ final class CodexTokenRefresherTests: XCTestCase {
     // MARK: classify (비-200 판정)
 
     func testClassifyInvalidatedForDeadCodes() {
-        for code in ["refresh_token_invalidated", "invalid_grant"] {
+        for code in ["refresh_token_invalidated", "invalid_refresh_token",
+                     "refresh_token_expired", "refresh_token_reused", "invalid_grant"] {
             let body = Data(#"{"error":{"code":"\#(code)","type":"invalid_request_error"}}"#.utf8)
             XCTAssertEqual(CodexTokenRefresher.classify(status: 401, data: body), .invalidated,
                            "\(code) → invalidated")
+            XCTAssertEqual(CodexTokenRefresher.classify(status: 500, data: body), .transient)
             XCTAssertEqual(CodexTokenRefresher.classify(status: 400, data: body), .invalidated)
         }
         // error가 문자열인 변형도 인식(방어)

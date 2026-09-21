@@ -108,7 +108,9 @@ public struct CodexTokenRefresher: Sendable {
             let code: String?
             if let err = obj["error"] as? [String: Any] { code = err["code"] as? String }
             else { code = obj["error"] as? String }
-            if code == "refresh_token_invalidated" || code == "invalid_grant" {
+            if (status == 400 || status == 401),
+               ["refresh_token_invalidated", "invalid_refresh_token", "refresh_token_expired",
+                "refresh_token_reused", "invalid_grant"].contains(code ?? "") {
                 return .invalidated   // refresh 토큰 폐기 확정 — refresh로 되살릴 수 없음
             }
         }

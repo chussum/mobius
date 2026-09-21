@@ -157,10 +157,9 @@ public final class Switcher: @unchecked Sendable {
     /// 호출자가 낡은 스냅샷을 신선하다고 믿고 판단해 조용히 틀린다. 그러므로 저장 실패는
     /// `try?`로 삼키지 말고 do/catch로 잡아 반드시 false로 보고한다.
     @discardableResult
-    public func refreshActiveSnapshotIfStable() async -> Bool {
-        // 활성 Claude 계정만 — 라이브(~/.claude)가 그 계정일 때 최신 토큰을 스냅샷에 반영.
-        // (Codex auth.json은 실행 세션이 수시로 다시 쓰는 "바쁜 파일"이라 이 경로에서 제외.)
-        let provider = Provider.claude
+    public func refreshActiveSnapshotIfStable(provider: Provider = .claude) async -> Bool {
+        // 정기 동기화는 기본값 Claude만. Codex는 거부된 계정의 재로그인 확인 때만 명시 호출.
+        // 양쪽 모두 어댑터의 안정 읽기를 사용하며, 라이브 토큰을 회전하거나 쓰지 않는다.
         guard let io = ios[provider],
               let key = try? io.liveAccountKey(),
               let profile = store.file.firstAccount(provider: provider, matching: key),
@@ -169,7 +168,15 @@ public final class Switcher: @unchecked Sendable {
         // 이메일은 같아도 조직이 달라, 이 프로필에 남의 조직 토큰을 저장하게 된다(파일 읽기 한 번).
         guard let (data, stableEmail) = await io.readStableLiveSecretData(),
               stableEmail == key.emailAddress,
+              store.file.activeByProvider[provider] == profile.id,
               (try? io.liveAccountKey()) == key else { return false }
+        // Codex의 프로필 열쇠는 이메일뿐이다. 같은 이메일의 다른 워크스페이스 사본으로
+        // 기존 계정을 덮지 않도록, 저장 사본의 account_id도 비교한다.
+        if provider == .codex {
+            guard let previous = try? store.secretData(for: profile.id),
+                  CodexAuthBlob.accountId(fromAuthJSON: previous) == CodexAuthBlob.accountId(fromAuthJSON: data)
+            else { return false }
+        }
         do {
             try saveLiveSecret(data, for: profile.id)
             return true

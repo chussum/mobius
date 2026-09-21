@@ -213,4 +213,38 @@ final class CodexSwitcherTests: XCTestCase {
         let store3 = try AccountStore(env: env, keychain: kc)
         XCTAssertEqual(store3.file.activeByProvider[.codex], cx2.id)
     }
+    func testCaptureSameActiveCodexReloginRecoversRejectedSnapshot() async throws {
+        let old = CodexFixtures.authJSON()
+        let fresh = CodexFixtures.authJSON(accessToken: "at-new", refreshToken: "rt-new")
+        let profile = try registerCodex("dev", email: "dev@corp.com", data: old)
+        try store.setActive(profile.id)
+        try codexIO.writeLiveSecretData(fresh)
+        // Identity is unchanged: normal reconcile intentionally leaves the stored snapshot alone.
+        try await switcher.reconcile()
+        XCTAssertEqual(try store.secretData(for: profile.id), old)
+
+        let captured = await switcher.refreshActiveSnapshotIfStable(provider: .codex)
+        XCTAssertTrue(captured)
+        let stored = try XCTUnwrap(store.secretData(for: profile.id))
+        XCTAssertEqual(stored, fresh)
+        XCTAssertTrue(ReauthClearance.codexRefreshTokenRotated(previous: old, next: stored))
+        XCTAssertEqual(try codexIO.readLiveSecretData(), fresh) // read-only: no rotation or live write
+        XCTAssertEqual(store.file.activeByProvider[.codex], profile.id)
+        XCTAssertFalse(store.file.accounts.first { $0.id == profile.id }!.needsReauth)
+    }
+
+    func testCodexRecoveryCaptureRejectsDifferentIdentity() async throws {
+        let old = CodexFixtures.authJSON()
+        let profile = try registerCodex("dev", email: "dev@corp.com", data: old)
+        try store.setActive(profile.id)
+        for other in [CodexFixtures.authJSON(email: "other@corp.com", refreshToken: "rt-new"),
+                      CodexFixtures.authJSON(refreshToken: "rt-new", accountID: "other-workspace")] {
+            try codexIO.writeLiveSecretData(other)
+            let captured = await switcher.refreshActiveSnapshotIfStable(provider: .codex)
+            XCTAssertFalse(captured)
+            XCTAssertEqual(try store.secretData(for: profile.id), old)
+            XCTAssertEqual(try codexIO.readLiveSecretData(), other)
+        }
+    }
+
 }

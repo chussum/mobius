@@ -67,4 +67,25 @@ final class ReauthClearanceTests: XCTestCase {
         let new = Data(#"{"refreshToken":"R1"}"#.utf8)
         XCTAssertTrue(ReauthClearance.refreshTokenRotated(previous: old, next: new))
     }
+    func testCodexRecoveryRequiresNewRefreshTokenForSameAccount() {
+        let old = CodexFixtures.authJSON()
+        let fresh = CodexFixtures.authJSON(accessToken: "at-new", refreshToken: "rt-new")
+        XCTAssertTrue(ReauthClearance.codexRefreshTokenRotated(previous: old, next: fresh))
+        for unchangedOrWrong in [
+            old,
+            CodexFixtures.authJSON(accessToken: "at-new"),
+            CodexFixtures.authJSON(refreshToken: ""),
+            CodexFixtures.authJSON(accessToken: "", refreshToken: "rt-new"),
+            CodexFixtures.authJSON(email: "other@corp.com", refreshToken: "rt-new"),
+            CodexFixtures.authJSON(refreshToken: "rt-new", accountID: "other-workspace"),
+            Data("broken".utf8),
+        ] {
+            XCTAssertFalse(ReauthClearance.codexRefreshTokenRotated(previous: old, next: unchangedOrWrong))
+        }
+        var metadataOnly = try! JSONSerialization.jsonObject(with: old) as! [String: Any]
+        metadataOnly["last_refresh"] = "2026-09-21T00:00:00Z"
+        let rewritten = try! JSONSerialization.data(withJSONObject: metadataOnly, options: .sortedKeys)
+        XCTAssertFalse(ReauthClearance.codexRefreshTokenRotated(previous: old, next: rewritten))
+    }
+
 }

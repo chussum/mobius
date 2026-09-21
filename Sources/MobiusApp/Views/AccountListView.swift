@@ -103,6 +103,9 @@ struct AccountListView: View {
         .animation(.spring(response: 0.3, dampingFraction: 0.85),
                    value: state.desktopCapture)
         .frame(width: 430)
+        .popover(isPresented: $showCodexAddGuide, arrowEdge: .bottom) {
+            codexAddGuide.padding(14).frame(width: 280)
+        }
         .onReceive(clock) { now = $0 }
         .onAppear { state.reload(); state.refreshUsageIfStale(); state.refreshCodexUsageIfStale(); state.validateFallbacksLocally(); now = Date() }
     }
@@ -323,7 +326,8 @@ struct AccountListView: View {
         return AccountCardView(profile: p, isActive: showActive,
                         isPrimary: isPrimary,
                         autoSwitchOn: state.file.isAutoSwitchEnabled(p.provider),
-                        usage: usageFor(p), codexAwaitingData: codexAwaitingData(p), now: now,
+                        usage: usageFor(p), codexAwaitingData: codexAwaitingData(p),
+                        codexUsageNeedsLogin: state.codexUsageNeedsLogin.contains(p.id), now: now,
                         onConnectDesktop: claudeCard && state.desktopSwitcher.isDesktopInstalled
                             ? { state.beginDesktopCapture(for: p.id) } : nil,
                         onDelete: { state.removeAccount(p.id) },
@@ -332,7 +336,9 @@ struct AccountListView: View {
                                 state.setPrimary(p.id)
                             }
                         },
-                        onReauth: (p.needsReauth || suspect) && claudeCard ? { state.addAccount() } : nil,
+                        onReauth: state.codexUsageNeedsLogin.contains(p.id)
+                            ? { showCodexAddGuide = true }
+                            : ((p.needsReauth || suspect) && claudeCard ? { state.addAccount() } : nil),
                         authSuspect: suspect, advisory: advisory)
             .onTapGesture {
                 guard !isActive(p) else { return }
@@ -444,9 +450,6 @@ struct AccountListView: View {
         case .codex:
             Button { showCodexAddGuide.toggle() } label: { label }
                 .buttonStyle(.plain).foregroundStyle(.secondary)
-                .popover(isPresented: $showCodexAddGuide, arrowEdge: .bottom) {
-                    codexAddGuide.padding(14).frame(width: 280)
-                }
         case .all:
             Button { showAddChooser.toggle() } label: { label }
                 .buttonStyle(.plain).foregroundStyle(.secondary)

@@ -10,6 +10,7 @@ struct AccountCardView: View {
     /// 활성 Codex 계정인데 아직 사용량 데이터가 없을 때(세션 로그 in-band라 codex 턴이 한 번
     /// 돌아야 생긴다) 빈 게이지 대신 안내를 띄운다. 리스트가 판정해 넘긴다.
     var codexAwaitingData: Bool = false
+    var codexUsageNeedsLogin: Bool = false
     let now: Date
     /// Desktop 설치 시에만 전달 — 눈에 보이는 ⋯ 메뉴에 "Claude Desktop 연결" 노출
     var onConnectDesktop: (() -> Void)? = nil
@@ -61,8 +62,8 @@ struct AccountCardView: View {
                             .background(accent.opacity(0.18), in: Capsule())
                             .foregroundStyle(accent)
                     }
-                    if profile.needsReauth || authSuspect {
-                        let confirmed = profile.needsReauth
+                    if profile.needsReauth || authSuspect || codexUsageNeedsLogin {
+                        let confirmed = profile.needsReauth || codexUsageNeedsLogin
                         Text(confirmed ? loc("재로그인 필요") : loc("인증 확인 필요"))
                             .font(.system(size: 9, weight: .medium))
                             .padding(.horizontal, 5).padding(.vertical, 2)
@@ -88,7 +89,11 @@ struct AccountCardView: View {
                 Text(profile.emailAddress)
                     .font(.system(size: 11)).foregroundStyle(.secondary)
                 statusLine
-                if let usage {
+                if codexUsageNeedsLogin {
+                    Text(loc("한도 갱신을 위해 Codex에 다시 로그인하세요"))
+                        .font(.system(size: 10)).foregroundStyle(.orange)
+                        .padding(.top, 3)
+                } else if let usage {
                     gauges(usage).padding(.top, 3)
                 } else if codexAwaitingData {
                     Text(loc("codex 사용 후 사용량이 표시돼요"))
@@ -103,7 +108,7 @@ struct AccountCardView: View {
             }
             if onConnectDesktop != nil || onDelete != nil || onSetPrimary != nil {
                 Menu {
-                    if profile.needsReauth || authSuspect, let onReauth {
+                    if profile.needsReauth || authSuspect || codexUsageNeedsLogin, let onReauth {
                         Button(loc("다시 로그인"), systemImage: "arrow.clockwise") { onReauth() }
                     }
                     if let onSetPrimary {

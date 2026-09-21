@@ -5,7 +5,8 @@ import Foundation
 /// 직접 조립한다 — 서명 검증을 하지 않으므로 유효한 서명이 필요 없다.
 enum CodexFixtures {
     static func authJSON(email: String = "dev@corp.com", plan: String = "pro",
-                         accessToken: String = "at-1") -> Data {
+                         accessToken: String = "at-1", refreshToken: String = "rt-1",
+                         accountID: String = "acct-123") -> Data {
         func b64url(_ obj: [String: Any]) -> String {
             let data = try! JSONSerialization.data(withJSONObject: obj)
             return data.base64EncodedString()
@@ -17,14 +18,14 @@ enum CodexFixtures {
             "email": email,
             "https://api.openai.com/auth": [
                 "chatgpt_plan_type": plan,
-                "chatgpt_account_id": "acct-123",
+                "chatgpt_account_id": accountID,
             ],
         ]
         let jwt = "\(b64url(["alg": "RS256"])).\(b64url(payload)).fakesig"
         let auth: [String: Any] = [
             "auth_mode": "chatgpt",
             "tokens": ["id_token": jwt, "access_token": accessToken,
-                       "refresh_token": "rt-1", "account_id": "acct-123"],
+                       "refresh_token": refreshToken, "account_id": accountID],
             "last_refresh": "2026-07-12T10:00:00Z",
             "OPENAI_API_KEY": NSNull(),
         ]

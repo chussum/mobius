@@ -31,6 +31,19 @@ public enum ReauthClearance {
         return old != new
     }
 
+    /// Codex 게이지 경고 해제: 같은 계정의 refresh 토큰이 새 값으로 교체된 경우만.
+    /// JSON 재직렬화/last_refresh 변경/손상/다른 계정의 로그인으로는 해제하지 않는다.
+    public static func codexRefreshTokenRotated(previous: Data, next: Data) -> Bool {
+        guard let email = CodexConfigIO.email(fromAuthJSON: previous),
+              CodexConfigIO.email(fromAuthJSON: next) == email,
+              CodexAuthBlob.accountId(fromAuthJSON: previous) == CodexAuthBlob.accountId(fromAuthJSON: next),
+              let old = CodexTokenRefresher.refreshToken(fromAuthJSON: previous), !old.isEmpty,
+              let new = CodexTokenRefresher.refreshToken(fromAuthJSON: next), !new.isEmpty,
+              let access = CodexAuthBlob.accessToken(fromAuthJSON: next), !access.isEmpty
+        else { return false }
+        return old != new
+    }
+
     /// 저장 secret 바이트에서 refresh 토큰을 꺼낸다.
     /// Claude의 secret은 **`CredentialsSnapshot` JSON**이고 토큰은 그 안의 `keychainBlob`에
     /// 들어 있다(`ClaudeConfigIO.readLiveSecretData`). 한 겹 벗기지 않고 바깥 JSON을 그대로
