@@ -323,7 +323,9 @@ struct AccountListView: View {
         return AccountCardView(profile: p, isActive: showActive,
                         isPrimary: isPrimary,
                         autoSwitchOn: state.file.isAutoSwitchEnabled(p.provider),
-                        usage: usageFor(p), codexAwaitingData: codexAwaitingData(p), now: now,
+                        usage: usageFor(p),
+                        usageRetryAt: claudeCard ? state.usageBackoff.retryDate(p.id, now: now) : nil,
+                        codexAwaitingData: codexAwaitingData(p), now: now,
                         onConnectDesktop: claudeCard && state.desktopSwitcher.isDesktopInstalled
                             ? { state.beginDesktopCapture(for: p.id) } : nil,
                         onDelete: { state.removeAccount(p.id) },

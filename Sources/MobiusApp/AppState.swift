@@ -17,6 +17,9 @@ final class AppState: ObservableObject {
     private var lastErrorAt: Date?
     static let lastErrorTTL: TimeInterval = 5 * 60
     @Published private(set) var usage: [UUID: UsageSnapshot] = [:]
+    /// 사용량 엔드포인트 429의 계정별 대기 시각(실패 기록 25). 모든 조회 경로가 `fetchUsage`를 거쳐
+    /// 이 표를 채우고, 조회 전에 `isBlocked`를 본다. 카드는 여기서 "조회 제한 중" 문구를 얻는다.
+    @Published private(set) var usageBackoff = UsageRateLimitBackoff()
     // 수동 전환 낙관적 표시 — 클릭 즉시 이 계정을 활성으로 보여주고(스무스), 실제 refresh+스왑은
     // 백그라운드에서. 완료되면 nil로 정착(실제 activeAccountID가 인계).
     @Published private(set) var pendingSwitchID: UUID?
@@ -319,15 +322,21 @@ final class AppState: ObservableObject {
         // needsReauth 계정도 계속 조회한다 — CLI에서 직접 `claude auth login`으로 복구하는
         // 경우, 조회가 200이면 그 복구를 감지해 needsReauth를 자동으로 푼다(아래 성공 경로).
         // 여전히 401이면 `!profile.needsReauth` 가드가 재알림을 막으므로 스팸은 없다.
+        // 사용량 조회가 요청 제한(429) 중인 계정은 건너뛴다 — 팝오버를 열 때마다 제한 중인
+        // 엔드포인트를 다시 부르지 않는다(실패 기록 25). 만료 토큰 refresh도 함께 쉰다.
         let stale = store.file.accounts.filter {
             $0.provider == .claude &&
-            (usage[$0.id]?.fetchedAt ?? .distantPast) < now.addingTimeInterval(-usageStaleness)
+            (usage[$0.id]?.fetchedAt ?? .distantPast) < now.addingTimeInterval(-usageStaleness) &&
+            !usageBackoff.isBlocked($0.id, now: now)
         }
         guard !stale.isEmpty else { return }
         usageTask = Task { @MainActor in
             defer { usageTask = nil }
             var reauthChanged = false
             for profile in stale {
+                // 대상을 고른 뒤 앞 계정을 조회하는 동안(await), 5분 폴링이나 한도 검증이 이 계정의
+                // 429를 기록했을 수 있다 — 막 막힌 계정을 한 번 더 부르지 않는다(리뷰 지적).
+                if usageBackoff.isBlocked(profile.id, now: Date()) { continue }
                 let isActive = store.file.activeAccountID == profile.id
                 // 활성 계정은 저장 스냅샷 대신 **라이브 토큰**으로 조회한다 — claude CLI가
                 // 라이브 토큰을 갱신하므로 저장본이 낡으면 401 오탐(잘 쓰는데 "재로그인 필요")이
@@ -339,7 +348,8 @@ final class AppState: ObservableObject {
                 //   스냅샷으로 내려온다 — 그건 계정 id로 꺼내므로 오귀인이 불가능하다.
                 guard let blob = usageQueryBlob(for: profile.id) else { continue }
                 // 비활성 계정의 저장 access 토큰이 만료됐으면 게이지를 못 읽어 얼어붙는다
-                // (429/401 → 조용히 continue). 폴백 refresh 기계로 미리 갱신한다 — 활성은
+                // (만료 토큰의 401은 재인증 딱지 없이 건너뛴다). 429는 따로 다룬다 — 대기 시각을
+                // 기록하고 그동안 이 계정을 대상에서 뺀다(실패 기록 25). 폴백 refresh 기계로 미리 갱신한다 — 활성은
                 // check의 첫 guard가 절대 건드리지 않고, 회전 토큰은 원자 저장되며,
                 // refresh 토큰이 만료/폐기면 needsReauth로 마킹된다(계정당 access TTL≈1h라
                 // 갱신 후엔 만료 조건이 풀려 재-refresh가 자연히 멈춘다 = 스톰 없음).
@@ -382,9 +392,8 @@ final class AppState: ObservableObject {
                         continue   // 갱신 실패/불가 — 쿨다운 뒤 재시도
                     }
                 }
-                do {
-                    guard let snap = try await UsageFetcher.fetch(keychainBlob: fetchBlob)
-                    else { continue }
+                switch await fetchUsage(accountID: profile.id, keychainBlob: fetchBlob) {
+                case .ok(let snap):
                     usage[profile.id] = snap
                     // 조회 성공 = 토큰 살아있음 → 잘못 남은 재로그인 마킹 자가 해제
                     if profile.needsReauth {
@@ -404,7 +413,9 @@ final class AppState: ObservableObject {
                         }
                         reauthChanged = true // reload 유발용 (상태 변경 반영)
                     }
-                } catch is UsageFetcherError {
+                case .unauthorized:
+                    // ★ 이 갈래는 401/403만 받는다. 429(`rateLimited`)는 `fetchUsage`가 대기 시각으로
+                    //   기록했고, 인증 판정에 섞이면 멀쩡한 계정에 재로그인 딱지가 붙는다.
                     // 401/403 = 이 계정의 토큰이 거부됨. 계정별 토큰으로 조회하므로 오귀인 불가.
                     // 단 자연 만료 토큰의 401은 **활성/비활성 모두** 오탐이라 마킹하지 않는다 —
                     // 활성도 잠자기 등으로 claude가 안 돌면 라이브 토큰이 만료된 채 남는다
@@ -424,7 +435,9 @@ final class AppState: ObservableObject {
                     // 위 규칙이 못 잡는 죽음(활성 계정의 진짜 폐기)은 이제 무상태 배지
                     // (AuthSuspicion.cheapConditionsHold/confirmed — recomputeBadgeCheap/Live)가
                     // 세션 활동 × 토큰 만료 상관으로 감지한다. 여기서 401을 누적하지 않는다.
-                } catch { continue }   // 네트워크 오류 — 토큰 문제가 아니므로 누적하지 않는다
+                case .rateLimited, .failed:
+                    continue   // 요청 제한(대기 시각 기록됨)·네트워크 오류 — 토큰 문제가 아니므로 누적하지 않는다
+                }
             }
             if reauthChanged {
                 MobiusNotification.postAccountsChanged()
@@ -1010,6 +1023,25 @@ final class AppState: ObservableObject {
         }
     }
 
+    /// Claude 사용량 조회의 **단일 관문**(실패 기록 25). 모든 경로(팝오버·5분 폴링·한도 검증·후보
+    /// 확인)가 이 함수를 거친다. 429면 그 계정의 대기 시각을 기록하고, 성공하면 기록을 지운다.
+    /// 결과는 종류별 값(`UsageFetchOutcome`)으로 돌려준다 — 401/403의 재인증 판정과, 무엇을 실패로
+    /// 셀지(`countsAsPollFailure`)는 호출자 몫이다.
+    /// 호출자는 조회 **전에** `usageBackoff.isBlocked`를 봐서 제한 중인 계정을 부르지 않는다.
+    private func fetchUsage(accountID: UUID, keychainBlob: Data) async -> UsageFetchOutcome {
+        let outcome = await UsageFetcher.fetchOutcome(keychainBlob: keychainBlob)
+        switch outcome {
+        case .ok:
+            // 기록이 있을 때만 지운다 — `@Published`라 변경 메서드를 부르기만 해도 화면 갱신 신호가 나간다.
+            if usageBackoff.hasRecord(accountID) { usageBackoff.recordSuccess(accountID) }
+        case .rateLimited(let retryAfter):
+            usageBackoff.recordRateLimited(accountID, retryAfter: retryAfter, now: Date())
+        case .unauthorized, .failed:
+            break
+        }
+        return outcome
+    }
+
     /// usage 조회에 쓸 자격증명 blob. **활성 계정은 라이브 토큰**을 쓴다 — 저장 스냅샷은 앱
     /// 시작 직후 만료 토큰일 수 있다(claude CLI가 라이브를 갱신한다).
     ///
@@ -1044,35 +1076,13 @@ final class AppState: ObservableObject {
     /// 계정별 마지막 **네트워크** 검증 시도 시각 — 실패 시 백오프용(HitAttribution.cooldown).
     private var lastHitVerifyAttempt: [UUID: Date] = [:]
 
-    /// 판정이 안 끝난 트리거 하나.
-    /// 두 시각을 **따로** 들고 있다: 언제까지 재시도할지(TTL)와, 어떤 스냅샷을 믿을지(신선도).
-    /// 하나로 합치면 둘 중 하나가 반드시 틀린다 — 신선도 기준을 갱신하면 TTL이 영영 안 오고,
-    /// TTL 기준을 그대로 쓰면 이미 "모르겠다"고 판정한 스냅샷으로 계속 같은 답을 낸다.
-    private struct PendingTrigger {
-        /// TTL 기준 — 이 트리거를 처음 본 시각.
-        let firstSeenAt: Date
-        /// 이 시각 **이후에 뜬** 스냅샷만 판정에 쓴다.
-        var needsFresherThan: Date
-        /// 이 트리거를 만든 로그 hit(창 소진일 때만). 검증이 **끝내 불가능**할 때의
-        /// 최후 폴백에 쓴다 — 아래 giveUp 처리 참조. P3처럼 창 신호가 아닌 경우 nil.
-        let logHit: RateLimitHit?
-        /// 마지막 판정이 **모델 전용 한도** 때문에 보류됐는가(계정 창은 여유였다).
-        ///
-        /// ★ 로그 라인에는 **모델 이름이 없어서** `logHit.modelScoped`는 항상 false다
-        ///   (`RateLimitParser`가 true를 세우는 곳은 P3 경로뿐이고 그건 여기 안 온다).
-        ///   그래서 이 값 없이 최후 폴백을 쓰면 "그 모델만 막힘"이어야 할 상황이
-        ///   **계정 전체 소진**으로 기록된다 — 메뉴바가 빨개지고, CLI 라벨이 틀리고,
-        ///   무엇보다 `autoSwitchMayLeave`가 `isLimited`에서 **핀을 보기 전에 단락**해
-        ///   사용자가 고정해 둔 계정에서 15분 뒤 강제로 밀려난다(셀프리뷰 H1).
-        var lastInconclusiveWasModelScoped = false
-    }
 
     /// **판정이 안 끝난 트리거**(계정 → 트리거).
     /// ★ 로그 hit은 워처 오프셋이 전진해 **한 번만 배달된다.** 조회가 실패했다고 그 자리에서
     ///   버리면, 사용자가 한도 에러를 보고 타이핑을 멈춘 순간 새 에러가 안 나와 **진짜 소진이
     ///   영영 기록되지 않는다**(자동 전환이 통째로 사라짐 — 셀프리뷰 지적). 그래서 트리거를
     ///   여기 남겨 다음 틱에 다시 판정한다(쿨다운이 재시도 주기를 잡는다).
-    private var pendingHitVerify: [UUID: PendingTrigger] = [:]
+    private var pendingHitVerify: [UUID: PendingHitTrigger] = [:]
     /// 보류 트리거의 수명 — 이 시간이 지나도록 판정을 못 했으면 버린다(오프라인이 길어질 때
     /// 옛 트리거로 뒤늦게 엉뚱한 기록을 남기지 않도록).
     /// ★ `HitAttribution.modelLimitedSteadyRecheck`(15분)와 **같은 값을 쓰지 않는다**(셀프리뷰 M1).
@@ -1132,19 +1142,14 @@ final class AppState: ObservableObject {
             } else {
                 verifyGiveUpUntil[accountID] = nil
                 consecutiveDiscards[accountID] = 0
-                // 백오프 동안은 시도조차 안 했으므로 수명 시계를 다시 건다 — 안 그러면
-                // 쉬는 사이에 수명이 차서, 재개하자마자 곧바로 다시 포기하게 된다.
-                if let held = pendingHitVerify[accountID] {
-                    pendingHitVerify[accountID] = PendingTrigger(
-                        firstSeenAt: now, needsFresherThan: held.needsFresherThan,
-                        logHit: held.logHit)
-                }
+                // 백오프 동안은 시도조차 안 했으므로 수명 시계를 다시 건다(`restartingLifetime`).
+                pendingHitVerify[accountID] = pendingHitVerify[accountID]?.restartingLifetime(at: now)
                 backingOff = false
             }
         } else {
             backingOff = false
         }
-        let trigger: PendingTrigger
+        let trigger: PendingHitTrigger
         if isRetry {
             guard let previous = pendingHitVerify[accountID] else { return }
             guard now.timeIntervalSince(previous.firstSeenAt) <= Self.pendingHitVerifyTTL else {
@@ -1159,19 +1164,15 @@ final class AppState: ObservableObject {
             //   신선한 증거까지 같이 버리면, 사용자가 (막혔으니) 타이핑을 멈추는 순간 그
             //   소진은 영영 기록되지 않는다.
             await giveUpVerification(previous, accountID: accountID, now: now)
-            pendingHitVerify[accountID] = PendingTrigger(firstSeenAt: now, needsFresherThan: now,
-                                                         logHit: logHit)
+            pendingHitVerify[accountID] = PendingHitTrigger(logHit: logHit, arrivedAt: now,
+                                                            lastActiveChangeAt: claudeActiveChangedAt)
             return
+        } else if let held = pendingHitVerify[accountID] {
+            // 새 신호는 새 데이터를 요구하고, TTL 기준은 물려받는다(`PendingHitTrigger.receiving`).
+            trigger = held.receiving(logHit, at: now, lastActiveChangeAt: claudeActiveChangedAt)
         } else {
-            // 새 hit은 **새 데이터를 요구**한다 — 그 사이 팝오버가 떠 놓은 *소진 이전* 스냅샷이
-            // "트리거보다 나중"으로 통과해 진짜 소진을 "여유"로 판정하는 걸 막는다.
-            // ★ 단 **TTL 기준(firstSeenAt)은 물려받는다**: 새 hit마다 수명을 리셋하면, 판정이
-            //   계속 "모르겠다"로 끝나는 상황(리셋 시각을 안 주는 창)에서 사용자가 작업을
-            //   이어가는 한 hit이 계속 와 **수명이 영영 안 차고 60초마다 조회가 무한 반복**된다
-            //   = 이 코드베이스가 피하는 배경 폴링(셀프리뷰 지적). 두 시각을 나눠 든 이유가 이것.
-            trigger = PendingTrigger(firstSeenAt: pendingHitVerify[accountID]?.firstSeenAt ?? now,
-                                     needsFresherThan: now,
-                                     logHit: logHit ?? pendingHitVerify[accountID]?.logHit)
+            trigger = PendingHitTrigger(logHit: logHit, arrivedAt: now,
+                                        lastActiveChangeAt: claudeActiveChangedAt)
         }
         pendingHitVerify[accountID] = trigger
 
@@ -1200,11 +1201,28 @@ final class AppState: ObservableObject {
             //   막으면, 그 사이 진짜 소진이 나도 기록이 없어 자동 전환이 최대 10분 늦는다.
             snapshot = usage[accountID]
         case .fetchUsage:
-            if backingOff { return }            // 트리거는 남기고 조회만 쉰다
+            // 트리거는 남기고 조회만 쉰다.
+            if backingOff { return }
+            // 사용량 조회가 요청 제한(429) 중이어도 조회만 쉰다. 제한이 트리거의 수명(TTL) 안에
+            // 풀리면 재시도 루프가 잇는다. 풀리는 시각이 수명 끝 이후면 기다려도 이 트리거로는 한 번도
+            // 조회하지 못하고 최후 폴백(giveUpVerification)으로 끝나므로, 최후 폴백이 이 hit을 기록할
+            // 수 있으면(전환 뒤 충분히 지나 도착한 hit) 지금 넘긴다 — 수명 끝까지 미루면 자동 전환만
+            // 최대 20분 늦어진다(리뷰 지적). 전환 직후에 도착한 hit은 어차피 기록되지 않으므로 트리거를
+            // 붙들어 둔다. 그사이 새 hit이 오면 트리거의 hit이 바뀌어 다음 재시도에서 넘어간다
+            // (`HitAttribution.givesUpEarlyWhileRateLimited`).
+            if let retryAt = usageBackoff.retryDate(accountID, now: now) {
+                if HitAttribution.givesUpEarlyWhileRateLimited(
+                    retryAt: retryAt, firstSeenAt: trigger.firstSeenAt, ttl: Self.pendingHitVerifyTTL,
+                    hitTrusted: trigger.hitTrusted) {
+                    await giveUpVerification(trigger, accountID: accountID, now: now)
+                }
+                return
+            }
             judgedByFetch = true
             lastHitVerifyAttempt[accountID] = now
             guard let blob = usageQueryBlob(for: accountID),
-                  let fetched = try? await UsageFetcher.fetch(keychainBlob: blob) else { return }
+                  let fetched = await fetchUsage(accountID: accountID, keychainBlob: blob).snapshot
+            else { return }
             usage[accountID] = fetched      // 게이지도 같이 신선해진다 (같은 계정의 같은 값)
             saveUsageCache()                // 다른 usage 갱신 지점과 동일하게 디스크에도 반영
             snapshot = fetched
@@ -1214,12 +1232,14 @@ final class AppState: ObservableObject {
         //   틱의 낡은 now가 아니라 **지금**을 쓴다. 안 그러면 그 사이 리셋이 지난 창을
         //   소진으로 인정해, 이미 지난 resetsAt을 기록하면서 전환 알림까지 띄운다.
         let verifiedAt = Date()
-        // ★ 모델 전용 한도는 **최근에 전환이 없었을 때만** 귀속 증거로 쓴다 — 그 100%는
-        //   며칠 가는 상태라 "누가 이 에러를 냈는지"를 말해 주지 않는다. 오귀인은 전환 직후에만
-        //   생기므로, 그 구간에서는 이 증거를 안 쓴다(셀프리뷰 지적). 계정 창 100%는 "지금
+        // ★ 모델 전용 한도는 **hit이 전환 직후에 도착하지 않았을 때만** 귀속 증거로 쓴다 — 그 100%는
+        //   며칠 가는 상태라 "누가 이 에러를 냈는지"를 말해 주지 않는다. 오귀인은 전환 직후에 도착한
+        //   hit에서만 생기므로, 그런 hit에는 이 증거를 안 쓴다(셀프리뷰 지적). 계정 창 100%는 "지금
         //   막혀 있다"라 시점 정보가 있어 이 제약이 필요 없다.
-        let trustModelScope = verifiedAt.timeIntervalSince(claudeActiveChangedAt)
-            > HitAttribution.modelScopeTrustWindow
+        //   ★ 검증 시각(verifiedAt)으로 재지 않는다(리뷰 지적) — 조회가 실패하거나 429로 미뤄졌다가
+        //   전환 5분 뒤에 처음 성공하면, 전환 17초 뒤 도착한 다른 계정의 에러가 이 계정의 모델 한도로
+        //   기록되고 멀쩡한 이 계정에서 전환한다. 도착하는 순간의 판정(`hitTrusted`)을 쓴다.
+        let trustModelScope = trigger.hitTrusted
         switch HitAttribution.verdict(usage: snapshot, now: verifiedAt,
                                       trustModelScope: trustModelScope) {
         case .inconclusive:
@@ -1267,20 +1287,22 @@ final class AppState: ObservableObject {
         }
     }
 
-    /// 15분 동안 판정을 못 냈다 — 포기하되, **안전한 경우에만** 로그 hit을 그대로 믿는다.
+    /// 판정을 끝내 못 냈다(수명 20분이 찼거나, 429 대기가 수명을 넘는다) — 포기하되, **안전한 경우에만**
+    /// 로그 hit을 그대로 믿는다.
     ///
     /// ★ 이 폴백이 필요한 이유: 이 PR 이후로 소진 기록은 **오직 usage 엔드포인트를 통해서만**
     ///   생긴다. 그래서 API가 죽거나 429를 뱉는 동안엔 claude 자체는 멀쩡히 돌아도 자동 전환이
     ///   통째로 멈춘다 — 수정 전에는 로그만으로 네트워크 없이 전환했다(셀프리뷰 지적).
-    /// ★ 안전 조건: **최근에 전환이 없었을 것.** 오귀인은 전환 직후에만 생기므로(전환 전에
-    ///   시작된 턴이 뒤늦게 에러를 남긴다), 그 구간만 피하면 로그 hit의 귀속은 사실상 옳다.
-    ///   전환 직후라면 아무것도 기록하지 않는다 — 이 PR이 막으려는 바로 그 경우다.
-    private func giveUpVerification(_ trigger: PendingTrigger, accountID: UUID, now: Date) async {
+    /// ★ 안전 조건: **hit이 전환 직후에 도착하지 않았을 것.** 오귀인은 전환 직후에 도착한 hit에서만
+    ///   생기므로(전환 전에 시작된 턴이 뒤늦게 에러를 남긴다), 그 hit만 피하면 로그 hit의 귀속은
+    ///   사실상 옳다. 그런 hit이면 아무것도 기록하지 않는다 — 이 PR이 막으려는 바로 그 경우다.
+    ///   ★ 포기하는 시각(now)이 아니라 **hit이 도착하는 순간에** 판정한 값(`hitTrusted`)을 쓴다. 포기는
+    ///   수명 끝(20분)이나 429 대기 중에 일어나므로 now로 재면 이 조건은 거의 늘 참이 되고, 도착 시각을
+    ///   지금의 마지막 전환과 비교하면 도착 뒤에 사용자가 전환했을 때 진짜 소진을 버린다(둘 다 리뷰 지적).
+    private func giveUpVerification(_ trigger: PendingHitTrigger, accountID: UUID, now: Date) async {
         pendingHitVerify[accountID] = nil
         verifyGiveUpUntil[accountID] = now.addingTimeInterval(Self.verifyGiveUpBackoff)
-        guard let hit = trigger.logHit,
-              now.timeIntervalSince(claudeActiveChangedAt) > HitAttribution.modelScopeTrustWindow
-        else { return }
+        guard let hit = trigger.logHit, trigger.hitTrusted else { return }
         // ★ 보류가 모델 전용 한도 때문이었다면 **그 종류로** 기록한다 — 로그 hit 자체는
         //   모델을 모르므로(modelScoped=false) 그대로 쓰면 계정 전체 소진이 된다(H1).
         let attributed = trigger.lastInconclusiveWasModelScoped
@@ -1360,8 +1382,12 @@ final class AppState: ObservableObject {
         // 저장 secret으로 조회 — 방금 fresh sync됐으므로 라이브를 한 번 더 읽지 않는다.
         // 실패(네트워크/타임아웃/5xx 등)는 서킷 브레이커 카운터를 올린다. 3연속이면 위
         // 5분 블록이 다음부터 폴을 건너뛴다. 성공하면 0으로 리셋.
-        guard let snap = try? await UsageFetcher.fetch(keychainBlob: blob) else {
-            consecutiveUsagePollFailures += 1
+        // 사용량 조회가 요청 제한(429) 중이면 이번 폴은 쉰다. 서킷 브레이커 실패로도 세지 않는다 —
+        // 브레이커는 네트워크 이상을 위한 것이고, 제한은 서버가 준 시각에 스스로 풀린다(실패 기록 25).
+        guard !usageBackoff.isBlocked(active.id, now: now) else { return }
+        let outcome = await fetchUsage(accountID: active.id, keychainBlob: blob)
+        guard case .ok(let snap) = outcome else {
+            if outcome.countsAsPollFailure { consecutiveUsagePollFailures += 1 }
             return
         }
         consecutiveUsagePollFailures = 0
@@ -1433,6 +1459,9 @@ final class AppState: ObservableObject {
         let active = store.file.activeByProvider[.claude]
         for p in store.file.accounts where p.provider == .claude
             && p.id != active && !p.isLimited(now: now) && !p.needsReauth {
+            // 사용량 조회가 요청 제한(429) 중인 후보는 확인할 수 없다 — 건너뛴다. 만료 토큰 refresh로
+            // 승격하는 것도 함께 쉰다(조회를 못 할 거면 토큰을 회전시킬 이유가 없다).
+            if usageBackoff.isBlocked(p.id, now: now) { continue }
             guard let secret = try? store.secret(for: p.id) else { continue }
             var fetchBlob = secret.keychainBlob
             switch AutoSwitchEngine.candidateProbeAction(
@@ -1458,7 +1487,7 @@ final class AppState: ObservableObject {
                                // checker가 이미 마킹, 추가 알림 없이 스킵(stale sweep 전담)
                 }
             }
-            guard let snap = try? await UsageFetcher.fetch(keychainBlob: fetchBlob) else { continue }
+            guard let snap = await fetchUsage(accountID: p.id, keychainBlob: fetchBlob).snapshot else { continue }
             usage[p.id] = snap
             if (snap.fiveHourPercent ?? 0) < threshold { return p.id }   // 임계값 미만 = 검증된 후보
         }

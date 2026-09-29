@@ -41,6 +41,8 @@ Sources/MobiusCore/       앱·CLI 공유 코어 (전부 의존성 주입 → �
                            modelBlocked = 호출자가 usage 캐시로 계산한 "모델 창 소진" 계정 집합)
   UsageFetcher.swift       Claude usage 엔드포인트 조회 (게이지용, 팝오버 열 때만; Codex는 로그로 대체)
                            모델 스코프 주간 한도(weekly_scoped)도 파싱 → ScopedUsageLimit
+  UsageRateLimitBackoff.swift usage 엔드포인트 429의 계정별 대기 시각 (모든 조회 경로가 먼저 본다)
+  PendingHitTrigger.swift  판정 못 한 창 소진 트리거와 그 갱신 규칙 (hit 신뢰 판정은 도착 순간 한 번)
   SyncEngine.swift         멀티 Mac 동기화 (클라우드 폴더 미러, ★ 아래 '동기화 원칙')
   UpdateChecker.swift      GitHub 릴리스 업데이트 확인 (하루 1회)
 Sources/mobius/           CLI (list/switch/status/capture/auto)
@@ -107,6 +109,17 @@ Sources/MobiusApp/        SwiftUI 메뉴바 앱 + AppState + Views/ + LoginFlow 
   (임계값 선제 알림용, 아래 QA 참조).
   **기본 꺼짐 — 끄면 폴링 0**(설정 게이트가 첫 검사라 요청 바이트 동일). 폴백 계정은 상시 폴링
   안 함(전환 후보 검증 때만, 그것도 저장 토큰 만료+쿨다운 경과 시에만 네트워크 refresh).
+- ★ **이 엔드포인트는 429 `rate_limit_error`를 준다**(실측 2026-09-24). 같은 계정을 부르는 모든
+  클라이언트가 한 제한을 나눠 쓴다 — Mobius, 상태줄 도구(예: ccstatusline, 3분 캐시), claude 자신
+  (`/usage`, 한도 도달 시 `?at_wall=1` 조회 — claude 2.1.281 바이너리 실측). `Retry-After`는 초 단위로
+  오고 3600초까지 관찰됐다(ccstatusline이 받은 값이다. 같은 날 Mobius가 보낸 요청은 126초를 받았다).
+  제한 중에도 claude 터미널의 한도 표시는 실시간이다 — claude는 매 API 응답의
+  `anthropic-ratelimit-unified-*` 헤더로 값을 얻기 때문이다. 그래서 "Mobius 값이 터미널보다
+  한 시간 늦다"로 보인다. → 모든 조회가 `AppState.fetchUsage` 한 곳을 거치고, 429면
+  `UsageRateLimitBackoff`에 계정별 대기 시각(`Retry-After`, 없으면 5분, 30초~1시간으로 제한)을 남긴다.
+  팝오버·5분 폴링·한도 검증·후보 확인이 그 시각 전까지 그 계정을 부르지 않으며, 카드는 게이지
+  아래에 "조회 제한 중, N분 후 다시 조회"를 적는다(실패 기록 25). 조회 결과는 종류별 값
+  (`UsageFetchOutcome`: 성공·429·401/403·그 밖의 실패)으로 돌려받는다.
 
 ### ★ OAuth 토큰 refresh (폴백 로그인 생사 판정 — claude 2.1.207 바이너리 실측)
 - `POST https://platform.claude.com/v1/oauth/token`, `Content-Type: application/json`,
@@ -565,8 +578,8 @@ Sources/MobiusApp/        SwiftUI 메뉴바 앱 + AppState + Views/ + LoginFlow 
     ★ **`weekly_scoped`의 `resets_at`은 null로 온다**(라이브 응답 실측, 2026-08-16). 그러면
     `scopedExhaustionHit`의 `compactMap(\.resetsAt)`이 조용히 떨어뜨려 "여유"와 구분되지
     않는다 → `hasUnresolvableScopedLimit`으로 `.inconclusive` 처리(그 모델로 막힌 사용자의
-    hit이 버려지고 백오프까지 걸리는 것 방지). 보류는 TTL 15분 뒤 최후 폴백으로 기록되고
-    그 뒤 `.skipAlreadyRecorded`로 끊겨 **유한하다**.
+    hit이 버려지고 백오프까지 걸리는 것 방지). 보류는 수명(20분) 뒤 최후 폴백으로 넘어가(전환 직후
+    도착한 hit이면 기록 없이 버린다) 그 뒤 `.skipAlreadyRecorded`로 끊겨 **유한하다**.
     ★ **막다른 길로 확인된 것**(제보자가 대신 파 줌): `~/.claude.json`의
     `cachedUsageUtilization`은 `accountUuid`가 있어 네트워크 0 판정이 가능해 보이지만,
     번들 구현상 **라이브 계정만 기록 + 계정 불일치 시 캐시 삭제 + 5분 쓰로틀 + 1h TTL**이라
@@ -578,7 +591,7 @@ Sources/MobiusApp/        SwiftUI 메뉴바 앱 + AppState + Views/ + LoginFlow 
     경로뿐이고 그건 이 경로로 안 온다). 그래서 모델 한도 때문에 보류된 트리거를 15분 뒤
     최후 폴백이 그대로 기록하면 **계정 전체 소진**이 된다 → 메뉴바 빨강, CLI 라벨 오류,
     그리고 `autoSwitchMayLeave`가 `isLimited`에서 **핀을 보기 전에 단락**하므로 사용자가
-    고정해 둔 계정에서 강제로 밀려난다. → `PendingTrigger.lastInconclusiveWasModelScoped`
+    고정해 둔 계정에서 강제로 밀려난다. → `PendingHitTrigger.lastInconclusiveWasModelScoped`
     (판별은 `HitAttribution.inconclusiveIsModelScoped` — 테스트 가능하게 코어 순수 함수).
     ★ **`pendingHitVerifyTTL`(20분)과 `modelLimitedSteadyRecheck`(15분)은 일부러 벌려 둔다** —
     같은 값이면 "다시 조회할 때"와 "포기할 때"가 같은 틱에 겹치고 TTL 검사가 먼저라
@@ -590,10 +603,12 @@ Sources/MobiusApp/        SwiftUI 메뉴바 앱 + AppState + Views/ + LoginFlow 
     **기다려도 새 증거가 되지 않는다.** 보류했다가 창이 지난 뒤 같은 스냅샷으로 판정하면
     신뢰 창은 오귀인을 5분 미루기만 한다. 진짜 모델 한도 사용자는 창이 지난 뒤 **새로
     도착한 hit**으로 기록된다 — 그게 "전환과 무관하게 난 신호"라는 유일한 증거다.
-    ★ **검증이 끝내 불가능하면(15분) 로그 hit을 최후 폴백으로 쓴다 — 단 최근 전환이 없을 때만**
-    (`giveUpVerification`). 이 수정 이후 소진 기록이 **usage 엔드포인트에만** 의존하게 돼,
-    API가 죽으면 claude가 멀쩡해도 자동 전환이 통째로 멈춘다(수정 전엔 로그만으로 네트워크
-    없이 전환했다). 오귀인은 전환 직후에만 생기므로 그 구간만 피하면 로그 귀속은 사실상 옳다.
+    ★ **검증이 끝내 불가능하면(수명 20분) 로그 hit을 최후 폴백으로 쓴다 — 단 그 hit이 전환 직후에
+    도착하지 않았을 때만**(`giveUpVerification`, `PendingHitTrigger.hitTrusted`). 이 수정 이후 소진
+    기록이 **usage 엔드포인트에만** 의존하게 돼, API가 죽으면 claude가 멀쩡해도 자동 전환이 통째로
+    멈춘다(수정 전엔 로그만으로 네트워크 없이 전환했다). 오귀인은 전환 직후에 도착한 hit에서만 생기므로
+    그 hit만 피하면 로그 귀속은 사실상 옳다. 판정은 hit이 도착하는 순간에 한 번 한다 — 처음에는
+    포기하는 시각으로 쟀는데, 그러면 이 조건은 거의 늘 참이었다(실패 기록 25에서 고침).
     ★ **P3(월 지출) 교차확인도 이 경로로 합쳤다** — 전용 코드는 나이 기반 캐시(4분)를 쓰고
     재시도 장치가 없어, 같은 판정을 하면서 이 PR의 보호를 하나도 못 받고 있었다.
     ★ **모델 한도 기록에는 "어느 모델인지"가 없다**(RateLimitInfo에 모델 식별자 없음) —
@@ -790,6 +805,58 @@ Sources/MobiusApp/        SwiftUI 메뉴바 앱 + AppState + Views/ + LoginFlow 
     좁히면서, 전에는 무해하던 불일치(같은 이메일의 다른 조직)가 오염이 됐다. 식별 규칙을 좁히는 변경은
     그 식별자를 **쓰는 쪽**의 일관성까지 따져야 한다. (3) 같은 이메일로 조직을 둘 이상 쓰고 claude 세션을
     여럿 띄워 두는 사용 방식이 조건이다. 13·17·20·21·23과 같은 클래스다.
+
+25. **usage 조회의 429를 "값 없음"으로 삼켜, 제한 중인 엔드포인트를 계속 부르며 한 시간 넘게 옛 값을
+    보여 줌 (실사용, 2026-09-24)** — 사용자가 "Mobius 값이 터미널에서 실시간으로 보이는 것보다 한 시간쯤
+    늦다"고 보고했다. 사용량 캐시(`usageCacheV1`)의 `fetchedAt`이 두 Claude 계정 모두 70분째 멈춰 있었고,
+    같은 요청을 한 번 보내 보니 `429 rate_limit_error`와 `Retry-After: 126`이 왔다. 같은 계정을 부르는
+    상태줄 도구(ccstatusline)도 11:23에 제한을 받아 한 시간 동안 호출을 멈춘 상태였다. 한편 claude의
+    터미널 한도 표시는 API 응답 헤더로 값을 얻어 이 제한과 무관하게 실시간이었다.
+    `UsageFetcher.fetch`는 200이 아니면 조용히 nil을 돌려줬고, 네 호출부(팝오버, 5분 폴링, 한도 검증,
+    후보 확인)는 모두 `try?`나 "nil이면 건너뛰기"라 429를 알 수 없었다. 그래서 팝오버를 열 때마다
+    (캐시 4분이 지난 계정마다) 제한 중인 엔드포인트를 다시 불렀고, 5분 폴링은 이것을 네트워크 실패로
+    세다 서킷 브레이커를 걸었다. 카드는 "N분 전 값"만 보여 이유를 알 수 없었다.
+    → `UsageFetcherError.rateLimited(retryAfter:)`를 따로 던지고(`Retry-After`는 초와 HTTP 날짜 둘 다
+    해석), 조회를 `AppState.fetchUsage` 한 관문으로 모아 계정별 대기 시각을 `UsageRateLimitBackoff`에
+    남긴다. 네 경로 모두 조회 **전에** 그 시각을 본다: 팝오버는 그 계정을 건너뛰고(만료 토큰 refresh도
+    함께 쉰다), 5분 폴링은 쉬되 서킷 브레이커 실패로 세지 않으며, 한도 검증은 트리거를 남긴 채 조회만
+    쉬고(끝내 판정이 안 서면 기존 최후 폴백), 후보 확인은 그 후보를 건너뛴다. 카드는 게이지 아래에
+    "조회 제한 중, N분 후 다시 조회"를 붙인다(남은 분은 올림 — 내림이면 "0분 후"가 보인다).
+    조회 결과는 `UsageFetchOutcome`(성공·429·401/403·그 밖의 실패)으로 돌려받는다 — 처음에는 스냅샷이
+    nil이면 대기 표를 다시 읽어 "방금 429였나"를 거꾸로 추측했는데, 그 추측은 대기 하한(`minWait`)이
+    충분히 길다는 가정에 기댄다(리뷰 지적). 서킷 브레이커가 무엇을 실패로 세는지는
+    `UsageFetchOutcome.countsAsPollFailure`에 두고 테스트로 고정했다.
+    ★ **대기가 보류 트리거의 수명(`pendingHitVerifyTTL` 20분)을 넘으면 재시도는 한 번도 일어나지 않는다**
+    (리뷰 지적). 수명 동안 조회를 쉬다가 수명이 다하면 최후 폴백으로 끝나므로, 결과를 20분 미루기만
+    한다 — claude도 한도에 닿을 때 이 엔드포인트를 불러서, 429는 활성 계정이 막힌 바로 그 순간에
+    몰리기 쉽다. 그래서 다시 조회할 시각이 수명 끝 이후면 최후 폴백을 바로 쓴다
+    (`HitAttribution.givesUpEarlyWhileRateLimited`). 단 최후 폴백이 **그 hit을 기록할 때만** 앞당긴다.
+    ★ 최후 폴백의 "최근 전환 없음" 검사는 **hit이 도착하는 순간에** 그때의 마지막 전환으로 한 번
+    판정해 트리거에 담는다(`PendingHitTrigger.hitTrusted`, 리뷰 지적). 처음에는 포기하는 시각
+    (now)으로 쟀는데, 트리거는 수명이나 429 대기 동안 붙들려 있으므로 전환 17초 뒤에 도착한 오귀인 hit도
+    전환 5분 뒤에는 기록됐다 — 실패 기록 21의 폴백부터 있던 결함이고, 이 PR에서 이 경로를 더 자주, 더
+    빨리 타게 되어 드러났다. 도착 시각만 들고 있다가 그때그때의 마지막 전환과 비교해도 안 된다 — hit이
+    도착한 **뒤에** 사용자가 전환하면 차이가 음수가 되어 진짜 소진을 끝내 버린다(셀프리뷰 지적).
+    모델 전용 한도를 귀속 증거로 믿을지(`trustModelScope`)도 같은 값을 쓴다 — 검증 시각으로 재면, 첫
+    조회가 429로 전환 5분 뒤까지 미뤄질 때 다른 계정의 에러가 이 계정의 모델 한도로 기록된다.
+    트리거를 바꾸는 규칙(새 hit, 백오프 해제)은 테스트할 수 있게 코어의 `PendingHitTrigger`로 옮겼다.
+    새 창 hit은 트리거의 hit과 판정을 바꾸되, 믿을 만한 hit을 믿지 못할 hit으로 덮어쓰지는 않는다.
+    `lastInconclusiveWasModelScoped`는 트리거가 바뀌어도 물려받는다 — 예전에는 새 hit이 올 때마다
+    false로 돌아가, 앞당긴 폴백이 모델 한도만 걸린 계정을 계정 전체 소진으로 기록할 수 있었다(#21부터).
+    그래서 전환 직후 도착한 hit은 앞당기든 수명 끝이든 기록되지 않고, 앞당기지도 않는다 — 트리거를
+    붙들어 두면 그 뒤에 온 hit(전환과 무관한 신호)이 트리거의 hit을 바꿔 다음 재시도에서 곧바로
+    기록된다. 일찍 버리면 그 hit이 포기 뒤 백오프에 걸린다.
+    계정 단위인 이유는 제한이 토큰에 걸리기 때문이다 —
+    한 계정이 막혔다고 멀쩡한 폴백의 게이지와 후보 확인까지 멈추면 안 된다. 대기 시각은 인메모리라
+    앱을 다시 켜면 한 번 더 부른다(다시 429면 다시 기록된다).
+    ★ **다른 클라이언트의 User-Agent를 흉내 내 제한을 피하지 않는다.** 서비스가 건 제한을 우회하는
+    일이고, refresh 요청에 claude UA를 싣는 이유(형식 거부 회피, 실패 기록 14)와 성격이 다르다.
+    ★ `refreshUsageIfStale`의 인증 실패 분기는 `catch UsageFetcherError.unauthorized`로 좁혔다 —
+    `catch is UsageFetcherError`로 두면 오류 종류가 늘 때 429가 재인증 판정에 섞인다.
+    교훈: (1) 원격 호출의 실패를 한 가지 "nil"로 뭉치면, 기다려야 하는 실패(429)와 다시 해도 되는
+    실패(네트워크)를 가를 수 없어 호출자가 가장 나쁜 쪽(계속 재시도)을 택하게 된다. (2) 공유 자원의
+    제한은 우리 호출만 줄여서는 안 풀린다 — 같은 계정의 다른 클라이언트가 함께 쓴다. 우리가 할 일은
+    서버가 준 대기 시간을 지키고, 사용자에게 값이 멈춘 **이유**를 보여 주는 것이다.
 
 ## QA / 진행 상황
 

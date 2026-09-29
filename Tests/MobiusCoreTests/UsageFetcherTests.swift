@@ -219,4 +219,102 @@ final class UsageFetcherTests: XCTestCase {
         var requests: [URLRequest] = []
         func record(_ req: URLRequest) { requests.append(req) }
     }
+
+    // MARK: 429 요청 제한 (실패 기록 25)
+
+    private func fetch(status: Int, headers: [String: String]? = nil) async throws -> UsageSnapshot? {
+        try await UsageFetcher.fetch(
+            keychainBlob: Data(#"{"claudeAiOauth":{"accessToken":"tok"}}"#.utf8),
+            transport: { _ in
+                (Data(#"{"error":{"type":"rate_limit_error"}}"#.utf8),
+                 HTTPURLResponse(url: UsageFetcher.endpoint, statusCode: status,
+                                 httpVersion: nil, headerFields: headers)!)
+            })
+    }
+
+    /// 예전엔 200이 아니면 조용히 nil이라, 제한 중에도 호출자가 매번 다시 불렀다.
+    func testRateLimitedIsDistinctErrorCarryingRetryAfter() async {
+        do {
+            _ = try await fetch(status: 429, headers: ["Retry-After": "3600"])
+            XCTFail("429는 rateLimited로 던져야 한다")
+        } catch {
+            XCTAssertEqual(error as? UsageFetcherError, .rateLimited(retryAfter: 3600))
+        }
+        do {
+            _ = try await fetch(status: 429)
+            XCTFail("429는 rateLimited로 던져야 한다")
+        } catch {
+            XCTAssertEqual(error as? UsageFetcherError, .rateLimited(retryAfter: nil), "헤더가 없으면 nil")
+        }
+    }
+
+    func testOtherStatusesKeepTheirMeaning() async throws {
+        do {
+            _ = try await fetch(status: 401)
+            XCTFail("401은 unauthorized")
+        } catch {
+            XCTAssertEqual(error as? UsageFetcherError, .unauthorized)
+        }
+        let serverError = try await fetch(status: 500)
+        XCTAssertNil(serverError, "5xx는 예전처럼 nil — 제한이 아니므로 대기 시각을 남기지 않는다")
+    }
+
+    func testRetryAfterParsesSecondsAndHTTPDate() {
+        let now = Date(timeIntervalSince1970: 1_790_000_000)
+        XCTAssertEqual(UsageFetcher.retryAfterSeconds("126", now: now), 126)
+        XCTAssertEqual(UsageFetcher.retryAfterSeconds(" 30 ", now: now), 30)
+        XCTAssertNil(UsageFetcher.retryAfterSeconds("-5", now: now))
+        XCTAssertNil(UsageFetcher.retryAfterSeconds("soon", now: now))
+        XCTAssertNil(UsageFetcher.retryAfterSeconds(nil, now: now))
+        // HTTP 날짜: now + 90초
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = TimeZone(identifier: "GMT")
+        f.dateFormat = "EEE, dd MMM yyyy HH:mm:ss 'GMT'"
+        let header = f.string(from: now.addingTimeInterval(90))
+        XCTAssertEqual(UsageFetcher.retryAfterSeconds(header, now: now) ?? -1, 90, accuracy: 1)
+    }
+
+    // MARK: 조회 결과값 (실패 기록 25)
+
+    private func outcome(status: Int, headers: [String: String]? = nil,
+                         body: String = #"{"five_hour":{"utilization":42}}"#) async -> UsageFetchOutcome {
+        await UsageFetcher.fetchOutcome(
+            keychainBlob: Data(#"{"claudeAiOauth":{"accessToken":"tok"}}"#.utf8),
+            transport: { _ in
+                (Data(body.utf8),
+                 HTTPURLResponse(url: UsageFetcher.endpoint, statusCode: status,
+                                 httpVersion: nil, headerFields: headers)!)
+            })
+    }
+
+    /// 호출자가 "방금 429였나"를 대기 표에서 거꾸로 추측하지 않도록 결과의 종류를 값으로 받는다.
+    func testFetchOutcomeKeepsTheKindOfResult() async {
+        let ok = await outcome(status: 200)
+        XCTAssertEqual(ok.snapshot?.fiveHourPercent, 42)
+        let limited = await outcome(status: 429, headers: ["Retry-After": "126"])
+        XCTAssertEqual(limited, .rateLimited(retryAfter: 126))
+        let denied = await outcome(status: 401)
+        XCTAssertEqual(denied, .unauthorized)
+        let serverError = await outcome(status: 500)
+        XCTAssertEqual(serverError, .failed)
+        let garbage = await outcome(status: 200, body: "not json")
+        XCTAssertEqual(garbage, .failed, "해석할 수 없는 200도 실패다")
+        let offline = await UsageFetcher.fetchOutcome(
+            keychainBlob: Data(#"{"claudeAiOauth":{"accessToken":"tok"}}"#.utf8),
+            transport: { _ in throw URLError(.notConnectedToInternet) })
+        XCTAssertEqual(offline, .failed)
+    }
+
+    /// 서킷 브레이커는 네트워크 이상을 위한 것이다 — 429는 서버가 준 시각에 스스로 풀리므로 세지 않는다.
+    /// 401/403은 결과값을 도입하기 전과 같이 센다.
+    func testPollBreakerCountsEverythingButSuccessAndRateLimit() {
+        let snap = UsageSnapshot(fiveHourPercent: 1, fiveHourResetsAt: nil, sevenDayPercent: nil,
+                                 sevenDayResetsAt: nil, fetchedAt: Date())
+        XCTAssertFalse(UsageFetchOutcome.ok(snap).countsAsPollFailure)
+        XCTAssertFalse(UsageFetchOutcome.rateLimited(retryAfter: 3600).countsAsPollFailure)
+        XCTAssertFalse(UsageFetchOutcome.rateLimited(retryAfter: nil).countsAsPollFailure)
+        XCTAssertTrue(UsageFetchOutcome.unauthorized.countsAsPollFailure)
+        XCTAssertTrue(UsageFetchOutcome.failed.countsAsPollFailure)
+    }
 }

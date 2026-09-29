@@ -128,6 +128,34 @@ public enum HitAttribution {
     ///   이 창이 지난 뒤의 hit에서 정상적으로 기록된다(최대 이만큼 늦어질 뿐).
     public static let modelScopeTrustWindow: TimeInterval = 300
 
+    /// 검증을 못 한 로그 hit을 그대로 기록하는 최후 폴백(`AppState.giveUpVerification`)을 써도
+    /// 되는가 — 그 hit이 마지막 활성 계정 변경보다 `modelScopeTrustWindow` 넘게 **뒤에 도착했을**
+    /// 때만. 오귀인은 전환 직후에 도착한 hit에서만 생기므로(전환 전에 시작된 턴이 뒤늦게 에러를
+    /// 남긴다) 그 hit만 피하면 로그 귀속은 사실상 옳다(실패 기록 21).
+    /// ★ hit이 **도착하는 순간에** 그때의 마지막 전환으로 한 번만 판정한다(`PendingHitTrigger.hitTrusted`).
+    ///   포기하는 시각(now)으로 재면 트리거가 수명(20분)이나 429 대기 동안 붙들려 있는 사이 전환 17초 뒤에
+    ///   도착한 hit도 "전환 뒤 5분이 지났다"가 되고, 도착 뒤에 일어난 전환과 비교하면 차이가 음수가 되어
+    ///   진짜 소진을 끝내 믿지 못한다(둘 다 리뷰 지적).
+    public static func logFallbackAllowed(hitArrivedAt: Date, lastActiveChangeAt: Date) -> Bool {
+        hitArrivedAt.timeIntervalSince(lastActiveChangeAt) > modelScopeTrustWindow
+    }
+
+    /// 사용량 조회가 요청 제한(429) 중인 보류 트리거를 수명(`ttl`)이 차기 전에 최후 폴백으로
+    /// 넘길까(실패 기록 25).
+    ///
+    /// 다시 조회할 수 있는 시각(`retryAt`)이 트리거의 수명 끝(`firstSeenAt + ttl`) 이후면, 기다려도
+    /// 이 트리거로는 한 번도 조회하지 못하고 수명이 다해 최후 폴백으로 끝난다. 그 결과를 수명 끝까지
+    /// 미루면 자동 전환만 그만큼 늦어진다 — claude도 한도에 닿을 때 이 엔드포인트를 불러서, 429는
+    /// 활성 계정이 막힌 바로 그 순간에 몰리기 쉽다.
+    /// ★ 단 최후 폴백이 **그 hit을 기록할 때만**(`hitTrusted`, 최후 폴백과 같은 값) 앞당긴다.
+    ///   전환 직후에 도착한 hit은 앞당기든 수명 끝이든 기록되지 않으므로 앞당겨 얻을 것이 없고,
+    ///   오히려 트리거를 일찍 버리면 그 뒤에 도착한 hit(전환과 무관한 신호)이 포기 뒤 백오프에 걸린다.
+    ///   트리거를 붙들고 있으면 그런 hit이 트리거의 hit을 바꾸고, 다음 재시도에서 곧바로 앞당겨 기록된다.
+    public static func givesUpEarlyWhileRateLimited(retryAt: Date, firstSeenAt: Date,
+                                                    ttl: TimeInterval, hitTrusted: Bool) -> Bool {
+        hitTrusted && retryAt >= firstSeenAt.addingTimeInterval(ttl)
+    }
+
     /// **계정 창(5시간/주간)을 먼저 본다.** 계정 자체가 소진이면 그걸로 기록한다.
     ///
     /// 계정 창은 여유인데 **모델 전용 한도**(`weekly_scoped`, 예: Fable)가 100%면 그것도
@@ -157,7 +185,8 @@ public enum HitAttribution {
     }
 
     /// - Parameter trustModelScope: 모델 전용 한도를 귀속 증거로 써도 되는가
-    ///   (= 마지막 활성 계정 변경으로부터 `modelScopeTrustWindow`가 지났는가).
+    ///   (= 그 hit이 마지막 활성 계정 변경보다 `modelScopeTrustWindow` 넘게 뒤에 도착했는가,
+    ///   `PendingHitTrigger.hitTrusted`).
     /// API가 아직 100%를 안 보여줘도 "곧 그렇게 될" 수준이면 판정을 미루는 경계.
     ///
     /// ★ 로그 hit은 **CLI가 실제로 막혔다는 사실**이고, `utilization`은 다른 서비스의

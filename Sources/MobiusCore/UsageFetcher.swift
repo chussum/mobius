@@ -115,6 +115,45 @@ public enum UsageFetcherError: Error, Equatable {
     /// 401/403 — 토큰이 거부됨. 저장된 expiresAt이 아직 유효한데 이 에러면
     /// 진짜 재로그인 필요(토큰 폐기)로 판단할 수 있다 (만료 토큰의 401은 오탐).
     case unauthorized
+    /// 429 — 이 토큰의 사용량 조회가 요청 제한에 걸렸다. `retryAfter`는 응답의 `Retry-After`(초),
+    /// 없으면 nil. 토큰 문제가 아니므로 재인증 판정에 쓰지 않는다.
+    /// ★ 실측 2026-09-24: 같은 계정을 Mobius·ccstatusline·claude(`/usage`, 한도 도달 시 조회)가 함께
+    ///   부르다 `rate_limit_error`를 받았고, `Retry-After`는 3600초까지 왔다. 예전엔 200이 아니면
+    ///   조용히 nil이라 게이지가 한 시간 넘게 얼어붙은 채 팝오버를 열 때마다 다시 호출했다.
+    case rateLimited(retryAfter: TimeInterval?)
+}
+
+/// 사용량 조회 한 번의 결과(실패 기록 25). 앱의 조회는 모두 `UsageFetcher.fetchOutcome`을 거친다.
+///
+/// 결과의 **종류**를 값으로 돌려주는 이유: 예전 호출자는 스냅샷이 nil이면 "방금 429였나"를
+/// 대기 표(`UsageRateLimitBackoff.isBlocked`)를 다시 읽어 거꾸로 추측했다. 그 추측은 대기 하한
+/// (`minWait`)이 충분히 길고 다른 경로가 기록을 지우지 않는다는 가정에 기대므로, 가정이 깨지면
+/// 조용히 틀어진다(리뷰 지적).
+public enum UsageFetchOutcome: Equatable, Sendable {
+    /// 200 — 스냅샷을 얻었다.
+    case ok(UsageSnapshot)
+    /// 429 — 이 토큰의 조회가 요청 제한에 걸렸다. `retryAfter`는 `Retry-After`(초), 없으면 nil.
+    case rateLimited(retryAfter: TimeInterval?)
+    /// 401/403 — 토큰이 거부됐다. 재인증 판정은 호출자가 자기 조건으로 한다.
+    case unauthorized
+    /// 그 밖의 실패 — 네트워크 오류·타임아웃·5xx·응답 해석 실패·토큰 없음.
+    case failed
+
+    public var snapshot: UsageSnapshot? {
+        if case .ok(let snap) = self { return snap }
+        return nil
+    }
+
+    /// 임계값 폴의 서킷 브레이커(`UsagePollBreaker`)가 이 결과를 연속 실패로 세는가.
+    /// 429는 세지 않는다 — 브레이커는 네트워크 이상을 위한 것이고, 제한은 서버가 준 시각에
+    /// 스스로 풀린다. 401/403은 이 결과값을 도입하기 전과 같이 센다(예전엔 `try?`가 nil로 바꿔
+    /// 다른 실패와 함께 셌다).
+    public var countsAsPollFailure: Bool {
+        switch self {
+        case .ok, .rateLimited: return false
+        case .unauthorized, .failed: return true
+        }
+    }
 }
 
 /// Claude OAuth usage 엔드포인트 조회. 사용자가 게이지 표시를 켰을 때만,
@@ -229,6 +268,23 @@ public enum UsageFetcher {
                              scopedLimits: scoped.isEmpty ? nil : scoped, fetchedAt: now)
     }
 
+    /// `fetch`의 결과를 종류별 값으로 돌려준다 — 던지지 않는다(`UsageFetchOutcome` 참조).
+    public static func fetchOutcome(keychainBlob: Data,
+                                    transport: Transport = defaultTransport) async -> UsageFetchOutcome {
+        do {
+            guard let snap = try await fetch(keychainBlob: keychainBlob, transport: transport) else {
+                return .failed
+            }
+            return .ok(snap)
+        } catch UsageFetcherError.rateLimited(let retryAfter) {
+            return .rateLimited(retryAfter: retryAfter)
+        } catch UsageFetcherError.unauthorized {
+            return .unauthorized
+        } catch {
+            return .failed
+        }
+    }
+
     public static func fetch(keychainBlob: Data,
                              transport: Transport = defaultTransport) async throws -> UsageSnapshot? {
         guard let token = accessToken(from: keychainBlob) else { return nil }
@@ -241,7 +297,24 @@ public enum UsageFetcher {
         if http.statusCode == 401 || http.statusCode == 403 {
             throw UsageFetcherError.unauthorized
         }
+        if http.statusCode == 429 {
+            throw UsageFetcherError.rateLimited(
+                retryAfter: retryAfterSeconds(http.value(forHTTPHeaderField: "Retry-After"), now: Date()))
+        }
         guard http.statusCode == 200 else { return nil }
         return parse(data)
+    }
+
+    /// `Retry-After` 헤더 → 기다릴 초. 정수 초와 HTTP 날짜(RFC 9110 IMF-fixdate) 둘 다 받는다.
+    /// 해석할 수 없거나 음수면 nil — 호출자가 기본 대기 시간을 쓴다.
+    static func retryAfterSeconds(_ header: String?, now: Date) -> TimeInterval? {
+        guard let raw = header?.trimmingCharacters(in: .whitespaces), !raw.isEmpty else { return nil }
+        if let secs = TimeInterval(raw) { return secs >= 0 ? secs : nil }
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = TimeZone(identifier: "GMT")
+        f.dateFormat = "EEE, dd MMM yyyy HH:mm:ss zzz"
+        guard let date = f.date(from: raw) else { return nil }
+        return max(0, date.timeIntervalSince(now))
     }
 }

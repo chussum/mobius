@@ -164,6 +164,8 @@
 "%d시간 %d분 전" = "%dh %dm ago";
 "%d분 전" = "%dm ago";
 "%@ 값" = "as of %@";
+"%@ 값 · 조회 제한 중, %@ 다시 조회" = "as of %@ · rate-limited, retry %@";
+"조회 제한 중, %@ 다시 조회" = "Rate-limited, retry %@";
 
 /* AccountListView */
 "뫼비우스" = "";

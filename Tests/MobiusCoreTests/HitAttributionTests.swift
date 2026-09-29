@@ -322,4 +322,45 @@ final class HitAttributionTests: XCTestCase {
         XCTAssertEqual(HitAttribution.verdict(usage: nearLimit, now: now), .inconclusive)
         XCTAssertFalse(HitAttribution.inconclusiveIsModelScoped(usage: nearLimit))
     }
+
+    // MARK: 사용량 조회가 요청 제한(429) 중인 보류 트리거 (실패 기록 25)
+
+    private let ttl: TimeInterval = 20 * 60
+
+    /// 다시 조회할 시각이 수명 끝 이후면 기다려도 조회하지 못한다 → 최후 폴백을 바로 쓴다.
+    func testRateLimitBeyondTTLGivesUpEarly() {
+        XCTAssertTrue(HitAttribution.givesUpEarlyWhileRateLimited(
+            retryAt: now.addingTimeInterval(3600), firstSeenAt: now, ttl: ttl, hitTrusted: true))
+        XCTAssertTrue(HitAttribution.givesUpEarlyWhileRateLimited(
+            retryAt: now.addingTimeInterval(ttl), firstSeenAt: now, ttl: ttl, hitTrusted: true),
+            "수명 끝과 같은 시각도 조회할 틈이 없다")
+    }
+
+    /// 수명 안에 풀리면 재시도 루프가 잇는다 — 앞당기지 않는다.
+    func testRateLimitWithinTTLKeepsWaiting() {
+        XCTAssertFalse(HitAttribution.givesUpEarlyWhileRateLimited(
+            retryAt: now.addingTimeInterval(126), firstSeenAt: now, ttl: ttl, hitTrusted: true))
+        // 수명의 절반이 지난 트리거는 남은 수명으로 따진다.
+        XCTAssertTrue(HitAttribution.givesUpEarlyWhileRateLimited(
+            retryAt: now.addingTimeInterval(ttl / 2 + 1), firstSeenAt: now.addingTimeInterval(-ttl / 2),
+            ttl: ttl, hitTrusted: true))
+    }
+
+    /// 최후 폴백이 기록하지 않을 hit(전환 직후 도착)으로는 앞당기지 않는다 — 앞당겨 얻을 것이 없고,
+    /// 트리거를 붙들어 둬야 그 뒤에 온 hit이 트리거를 바꿔 기록될 수 있다.
+    func testUntrustedHitDoesNotGiveUpEarly() {
+        XCTAssertFalse(HitAttribution.givesUpEarlyWhileRateLimited(
+            retryAt: now.addingTimeInterval(3600), firstSeenAt: now, ttl: ttl, hitTrusted: false))
+    }
+
+    /// 도착 판정의 경계 — 전환보다 신뢰 창 **넘게** 뒤에 도착한 hit만 믿는다.
+    func testLogFallbackAllowedBoundary() {
+        let window = HitAttribution.modelScopeTrustWindow
+        XCTAssertFalse(HitAttribution.logFallbackAllowed(
+            hitArrivedAt: now.addingTimeInterval(17), lastActiveChangeAt: now))
+        XCTAssertFalse(HitAttribution.logFallbackAllowed(
+            hitArrivedAt: now.addingTimeInterval(window), lastActiveChangeAt: now))
+        XCTAssertTrue(HitAttribution.logFallbackAllowed(
+            hitArrivedAt: now.addingTimeInterval(window + 1), lastActiveChangeAt: now))
+    }
 }

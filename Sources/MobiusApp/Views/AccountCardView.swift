@@ -7,6 +7,10 @@ struct AccountCardView: View {
     let isPrimary: Bool
     let autoSwitchOn: Bool
     let usage: UsageSnapshot?
+    /// 사용량 조회가 요청 제한(429) 중이면 다시 조회할 시각(실패 기록 25). 리스트가 Claude 카드에만
+    /// 넘긴다. 값이 얼어붙은 **이유**를 게이지 아래에 밝힌다 — "N분 전 값"만으로는 조회 실패인지
+    /// 단순 미갱신인지 알 수 없어, 터미널의 실시간 값과 다른 이유를 사용자가 추측하게 된다.
+    var usageRetryAt: Date? = nil
     /// 활성 Codex 계정인데 아직 사용량 데이터가 없을 때(세션 로그 in-band라 codex 턴이 한 번
     /// 돌아야 생긴다) 빈 게이지 대신 안내를 띄운다. 리스트가 판정해 넘긴다.
     var codexAwaitingData: Bool = false
@@ -214,6 +218,17 @@ struct AccountCardView: View {
         return agoText(age)
     }
 
+    /// 게이지 아래 캡션 — 기준 시각(오래됐을 때만)과 요청 제한 사유(제한 중일 때만)를 잇는다.
+    private func staleCaption(_ stale: String?) -> String? {
+        let retry = usageRetryAt.flatMap { $0 > now ? remainText(until: $0, roundUp: true) : nil }
+        switch (stale, retry) {
+        case let (stale?, retry?): return loc("%@ 값 · 조회 제한 중, %@ 다시 조회", stale, retry)
+        case let (nil, retry?): return loc("조회 제한 중, %@ 다시 조회", retry)
+        case let (stale?, nil): return loc("%@ 값", stale)
+        case (nil, nil): return nil
+        }
+    }
+
     private func gauges(_ u: UsageSnapshot) -> some View {
         let stale = staleAgeText(u)
         return VStack(alignment: .leading, spacing: 3) {
@@ -229,8 +244,9 @@ struct AccountCardView: View {
             }
             // 실패인지 단순 미갱신인지는 여기서 단정하지 않는다 — Codex는 "그동안 codex를 안
             // 썼다"는 뜻이기도 하다. 기준 시각만 정직하게 밝히고 판단은 사용자에게 맡긴다.
-            if let stale {
-                Text(loc("%@ 값", stale))
+            // 단 요청 제한(429)은 **확인된 원인**이라 함께 밝힌다(리스트가 넘긴 경우에만).
+            if let caption = staleCaption(stale) {
+                Text(caption)
                     .font(.system(size: 9.5)).foregroundStyle(.tertiary)
                     .lineLimit(1).fixedSize()
             }
@@ -287,8 +303,11 @@ struct AccountCardView: View {
         return loc("%d분 전", m)
     }
 
-    private func remainText(until date: Date) -> String {
-        let mins = max(0, Int(date.timeIntervalSince(now) / 60))
+    /// 남은 시간 문구. `roundUp`이면 분을 **올림**한다 — 다시 조회할 시각처럼 "0분 후"가 보이면
+    /// 안 되는 곳에 쓴다(`UsageRateLimitBackoff.minutesUntilRetry` 참조). 기본은 초기화 시각처럼 내림이다.
+    private func remainText(until date: Date, roundUp: Bool = false) -> String {
+        let mins = roundUp ? UsageRateLimitBackoff.minutesUntilRetry(date, now: now)
+                           : max(0, Int(date.timeIntervalSince(now) / 60))
         let (d, h, m) = (mins / 1440, (mins % 1440) / 60, mins % 60)
         if d > 0 { return loc("%d일 %d시간 후", d, h) }
         if h > 0 { return loc("%d시간 %d분 후", h, m) }
