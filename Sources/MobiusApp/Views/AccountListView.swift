@@ -56,6 +56,11 @@ struct AccountListView: View {
     /// 카드 행의 실측 콘텐츠 높이 (행 인셋 제외). poolCards의 List frame 계산에 사용 —
     /// 계정 삭제 후 남는 키는 무해(참조 안 됨).
     @State private var rowHeights: [UUID: CGFloat] = [:]
+    /// 이 팝오버를 담은 창. 열림 신호(didBecomeKey)를 이 창 것만 받으려고 쥔다 —
+    /// 설정 창·로그인 창이 앞으로 올라와도 팝오버 조회가 돌지 않게.
+    @State private var hostWindow: NSWindow?
+    /// 마지막 열림 처리 시각. 첫 열기에는 onAppear와 didBecomeKey가 함께 오므로 한 번으로 합친다.
+    @State private var lastOpenedAt = Date.distantPast
     private let clock = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
 
     /// ★ 저장된 선택이 지금 노출되는 탭에 없으면 `.all`로 **읽는다** — 저장값은 덮어쓰지 않는다.
@@ -104,7 +109,27 @@ struct AccountListView: View {
                    value: state.desktopCapture)
         .frame(width: 430)
         .onReceive(clock) { now = $0 }
-        .onAppear { state.reload(); state.refreshUsageIfStale(); state.refreshCodexUsageIfStale(); state.validateFallbacksLocally(); now = Date() }
+        // 팝오버 열림 신호는 둘이다(이슈 #31). MenuBarExtra(.window)는 닫혀도 콘텐츠를 버리지
+        // 않을 수 있고, 그때 onAppear가 다시 오는지는 링크된 SDK 버전에 따라 달라진다 — SDK가
+        // 14.0으로 기록된 빌드는 첫 열기에만 onAppear가 와서 비활성 계정 게이지가 멈췄다.
+        // 창이 앞으로 올라오는 것(didBecomeKey)은 SDK와 무관하게 매번 온다.
+        .background(WindowReader(window: $hostWindow))
+        .onAppear { popoverDidOpen() }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { note in
+            guard let hostWindow, (note.object as? NSWindow) === hostWindow else { return }
+            popoverDidOpen()
+        }
+    }
+
+    private func popoverDidOpen() {
+        let openedAt = Date()
+        guard openedAt.timeIntervalSince(lastOpenedAt) > 1 else { return }
+        lastOpenedAt = openedAt
+        state.reload()
+        state.refreshUsageIfStale()
+        state.refreshCodexUsageIfStale()
+        state.validateFallbacksLocally()
+        now = openedAt
     }
 
     private var header: some View {
@@ -497,5 +522,29 @@ struct AccountListView: View {
         }
         .buttonStyle(.plain).foregroundStyle(.secondary)
         .help(help)
+    }
+}
+
+/// 자기를 담은 NSWindow를 바인딩에 넣는다. SwiftUI에는 MenuBarExtra 창을 직접 얻는 API가 없다.
+private struct WindowReader: NSViewRepresentable {
+    @Binding var window: NSWindow?
+
+    func makeNSView(context: Context) -> NSView {
+        let view = ReportingView()
+        view.onWindowChange = { newWindow in
+            // 뷰 갱신 도중 상태를 바꾸지 않도록 다음 런루프로 미룬다.
+            DispatchQueue.main.async { window = newWindow }
+        }
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {}
+
+    private final class ReportingView: NSView {
+        var onWindowChange: ((NSWindow?) -> Void)?
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            onWindowChange?(window)
+        }
     }
 }
