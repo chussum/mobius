@@ -858,6 +858,19 @@ Sources/MobiusApp/        SwiftUI 메뉴바 앱 + AppState + Views/ + LoginFlow 
     제한은 우리 호출만 줄여서는 안 풀린다 — 같은 계정의 다른 클라이언트가 함께 쓴다. 우리가 할 일은
     서버가 준 대기 시간을 지키고, 사용자에게 값이 멈춘 **이유**를 보여 주는 것이다.
 
+26. **팝오버 열림을 `.onAppear` 하나로만 감지해, SDK 기록값이 바뀐 빌드에서 재조회가 멈춤 (이슈 #31, 외부
+    제보 @chirichidi)** — Swift 6.4의 기본 빌드 시스템으로 만든 실행파일은 `LC_BUILD_VERSION`에 sdk 14.0
+    (배포 최소 버전)이 기록된다. SwiftUI는 이 값에 따라 동작을 바꾸고, 그 빌드에서는 MenuBarExtra(.window)
+    콘텐츠의 `.onAppear`가 **첫 열기에만** 왔다. 그 자리가 `refreshUsageIfStale`의 유일한 호출부라 비활성
+    계정 게이지가 "N분 전 값"에 멈췄다. 제보자가 `vtool`로 sdk 값만 26.0으로 바꿔 재서명하자 고쳐지는 것으로
+    원인을 분리했다. 우리 릴리스(Swift 6.2/SDK 26.0)는 영향 없었다 — Xcode를 올리는 순간 터질 문제였다.
+    → (a) 팝오버 창의 `NSWindow.didBecomeKeyNotification`도 열림 신호로 받는다(`AccountListView.popoverDidOpen`,
+    첫 열기의 onAppear와 겹치면 1초 안에서 합친다). (b) `make-app.sh`가 빌드 뒤 기록된 sdk가 설치된 SDK보다
+    낮으면 실패한다. `--build-system native`는 sdk는 맞지만 `Bundle.module`이 빌드 폴더를 먼저 찾는다는
+    제보가 있어(#27 크래시와 같은 계열일 수 있음, 미확인) 쓰지 않았다.
+    교훈: 화면이 "보일 때" 오는 SwiftUI 콜백은 링크된 SDK에 따라 의미가 바뀐다. 네트워크 조회 같은 부작용의
+    유일한 트리거로 쓰지 말고, 창 수준의 신호를 함께 받아라.
+
 ## QA / 진행 상황
 
 - `docs/qa/m1-checklist.md` 수동 QA: 2·3·6·7·9·10 완료(2026-07-11). 남은 항목: 1·4·5·8.

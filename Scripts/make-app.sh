@@ -3,6 +3,20 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 swift build -c release
+# 실행파일에 기록된 SDK 버전 확인 (이슈 #31). Swift 6.4의 기본 빌드 시스템은 SDK 27.0으로
+# 빌드해도 sdk 14.0(배포 최소 버전)을 기록한다. SwiftUI는 이 값에 따라 동작을 바꿔서, 그렇게
+# 만든 앱은 팝오버를 다시 열어도 onAppear가 오지 않았다. 설치된 SDK보다 낮게 기록되면 멈춘다.
+EXPECTED_SDK=$(xcrun --show-sdk-version)
+# otool 출력을 먼저 변수에 담는다 — awk가 일찍 끝나 파이프가 닫히면 pipefail로 조용히 멈출 수 있다.
+LOAD_COMMANDS=$(otool -l .build/release/MobiusApp)
+BUILT_SDK=$(awk '/LC_BUILD_VERSION/{f=1} f && $1=="sdk" && !done {print $2; done=1}' <<<"$LOAD_COMMANDS")
+if ! [[ "$BUILT_SDK" =~ ^[0-9]+ && "$EXPECTED_SDK" =~ ^[0-9]+ ]] ||
+   [ "${BUILT_SDK%%.*}" -lt "${EXPECTED_SDK%%.*}" ]; then
+  echo "ERROR: MobiusApp에 기록된 SDK가 '${BUILT_SDK:-없음}'인데 설치된 SDK는 $EXPECTED_SDK 입니다."
+  echo "  SwiftUI가 옛 SDK 동작으로 돌아가 팝오버 사용량 조회가 멈출 수 있습니다(이슈 #31)."
+  echo "  확인: otool -l .build/release/MobiusApp | grep -A4 LC_BUILD_VERSION"
+  exit 1
+fi
 APP=dist/Mobius.app
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS"
