@@ -137,6 +137,7 @@ Claude Desktop 토글 2개는 **설치 현황 → Claude 탭**의 Claude Desktop
 
 ```
 mobius list                        # 계정 목록 — 프로바이더별 섹션 (활성 ●, 우선순위, 한도 상태)
+mobius list --usage                # + Claude 계정별 5시간·7일 사용률과 리셋 시각 (usage API 호출)
 mobius switch <name>               # 닉네임으로 전환 (중복 닉네임은 --provider claude|codex)
 mobius status                      # 프로바이더별 현재 활성 계정, 리셋까지 남은 시간
 mobius capture <name>              # 현재 claude 로그인 계정을 프로필로 등록

@@ -60,8 +60,45 @@ func fmtReset(_ p: AccountProfile) -> String {
     return "  [\(label) — \(mins / 60)시간 \(mins % 60)분 후 리셋]"
 }
 
+/// `list --usage`가 usage 조회에 쓸 자격증명 blob. **활성 계정은 라이브 토큰**을 쓴다 — 저장 스냅샷은
+/// claude가 라이브를 갱신하는 동안 만료돼 있을 수 있다. 라이브 열쇠(이메일+조직)가 이 프로필과 일치할
+/// 때만 쓴다(AppState.usageQueryBlob과 같은 규칙 — 어긋난 라이브 토큰으로 조회해 다른 계정의 값을
+/// 보여주지 않는다). 아니면 저장 스냅샷으로 내려온다.
+func usageBlob(for p: AccountProfile, store: AccountStore, io: ClaudeConfigIO) -> Data? {
+    if store.file.activeByProvider[.claude] == p.id,
+       let idx = store.file.accounts.firstIndex(where: { $0.id == p.id }),
+       let liveKey = try? io.liveAccountKey(),
+       store.file.firstIndex(provider: io.provider, matching: liveKey) == idx,
+       let live = try? io.readLiveSnapshot() {
+        return live.keychainBlob
+    }
+    return (try? store.secret(for: p.id))?.keychainBlob
+}
+
+/// 계정 한 줄 아래에 붙일 사용량 행. 429면 서버가 준 대기 시간을 그대로 밝힌다(재시도하지 않는다).
+func usageLines(for p: AccountProfile, store: AccountStore, io: ClaudeConfigIO) async -> [String] {
+    guard let blob = usageBlob(for: p, store: store, io: io) else { return ["사용량: 저장된 자격증명 없음"] }
+    switch await UsageFetcher.fetchOutcome(keychainBlob: blob) {
+    case .ok(let snap):
+        return snap.summaryLines(now: Date())
+    case .rateLimited(let retryAfter):
+        let wait = retryAfter.map { " — \(UsageRateLimitBackoff.minutesUntilRetry(Date().addingTimeInterval($0), now: Date()))분 후 다시 시도" } ?? ""
+        return ["사용량: 조회 제한 중\(wait)"]
+    case .unauthorized:
+        return ["사용량: 토큰 거부됨 (만료됐을 수 있음 — claude를 한 번 실행해 보세요)"]
+    case .failed:
+        return ["사용량: 조회 실패"]
+    }
+}
+
 struct List: AsyncParsableCommand {
     static let configuration = CommandConfiguration(abstract: "계정 목록")
+
+    // 기본은 네트워크 0 — usage 엔드포인트는 429를 주고 같은 계정을 부르는 모든 클라이언트가 제한을
+    // 나눠 쓰므로(CLAUDE.md '사용량 엔드포인트'), 요청이 나가는 것은 사용자가 명시했을 때만이다.
+    @Flag(help: "Claude 계정별 5시간·7일 사용률과 리셋 시각도 표시 (usage API를 호출한다)")
+    var usage = false
+
     func run() async throws {
         let ctx = try makeContext()
         try await ctx.switcher.reconcile()
@@ -79,6 +116,12 @@ struct List: AsyncParsableCommand {
                 let reauth = p.needsReauth ? "  [재로그인 필요]" : ""
                 // 회사 조직(Team/Enterprise) 이름을 함께 적는다 — 같은 이메일의 계정이 여럿일 때 구분 근거.
                 print("  \(active) \(role)  \(p.nickname)  <\(p.emailAddress)>  \(p.subtitle)\(fmtReset(p))\(reauth)")
+                // needsReauth 계정은 건너뛴다 — 토큰이 죽었다고 이미 표시했고, 죽은 토큰으로 부를 이유가 없다.
+                if usage, provider == .claude, !p.needsReauth {
+                    for line in await usageLines(for: p, store: ctx.store, io: ctx.io) {
+                        print("        \(line)")
+                    }
+                }
             }
         }
     }

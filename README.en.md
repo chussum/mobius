@@ -144,6 +144,7 @@ available (app **Settings → Installed Tools → Mobius CLI → Install**):
 
 ```
 mobius list                        # account list per provider (active ●, priority, limit status)
+mobius list --usage                # + 5-hour/7-day usage and reset time per Claude account (calls the usage API)
 mobius switch <name>               # switch by nickname (--provider claude|codex if ambiguous)
 mobius status                      # active account per provider, time until reset
 mobius capture <name>              # register the currently logged-in claude account

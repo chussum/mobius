@@ -42,6 +42,7 @@ Sources/MobiusCore/       앱·CLI 공유 코어 (전부 의존성 주입 → �
   UsageFetcher.swift       Claude usage 엔드포인트 조회 (게이지용, 팝오버 열 때만; Codex는 로그로 대체)
                            모델 스코프 주간 한도(weekly_scoped)도 파싱 → ScopedUsageLimit
   UsageRateLimitBackoff.swift usage 엔드포인트 429의 계정별 대기 시각 (모든 조회 경로가 먼저 본다)
+  UsageSummary.swift       CLI `list --usage` 표시 문자열 (5시간·7일 사용률 + 리셋 남은 시간·절대 시각)
   PendingHitTrigger.swift  판정 못 한 창 소진 트리거와 그 갱신 규칙 (hit 신뢰 판정은 도착 순간 한 번)
   SyncEngine.swift         멀티 Mac 동기화 (클라우드 폴더 미러, ★ 아래 '동기화 원칙')
   UpdateChecker.swift      GitHub 릴리스 업데이트 확인 (하루 1회)
@@ -103,6 +104,9 @@ Sources/MobiusApp/        SwiftUI 메뉴바 앱 + AppState + Views/ + LoginFlow 
   `anthropic-beta: oauth-2025-04-20`. 응답: `five_hour.{utilization, resets_at}`,
   `seven_day.{...}` (utilization=백분율, resets_at=ISO8601 마이크로초).
 - 게이지는 **팝오버 열 때만** 조회(캐시 4분). 상시 폴링 없음 → 계정 리스크 최소화.
+  CLI는 `mobius list --usage`를 **명시했을 때만** 계정당 1회 조회한다(기본 `list`는 네트워크 0).
+  CLI는 별도 프로세스라 앱의 `UsageRateLimitBackoff`(인메모리)를 못 본다 — 429면 대기 시간만
+  표시하고 재시도하지 않는다.
   ★ **예외(옵트인, 2026-07-21)**: '한도 차기 전 미리 전환'(advisorySwitchEnabled) 토글과
   **'자동 전환'(Claude)이 둘 다 켜져 있으면**(2026-07-24부터 하위 옵션 종속 —
   advisoryEffectivelyEnabled) **활성 Claude 계정의 5시간 usage를 약 5분마다** 폴링한다
