@@ -262,6 +262,9 @@ Sources/MobiusApp/        SwiftUI 메뉴바 앱 + AppState(+Antigravity) + Views
   저장한다. 전환도 설치할 바이트의 열쇠가 대상 프로필과 맞지 않으면 `secretIdentityMismatch` 로 거부하고, CLI
   `capture --provider codex` 는 저장할 바이트에서 신원을 꺼낸다(병합 리뷰 Codex P1-2·P1-3, upstream 에서 이어진 결함).
   CLI 읽기 전용 대사(`reflectLiveActiveWithoutSaving`)도 열쇠로 고른다(이메일만 보면 같은 이메일의 다른 조직 카드를 활성으로 보인다).
+  이 표시는 **신원(oauthAccount) 기준**이다 — Keychain 을 읽지 않으므로 토큰과 신원이 어긋난 라이브(실패 기록 24 의
+  "신원만 옛 조직으로 되돌려진" 상태)에서는 토큰의 조직이 아니라 신원 쪽 카드를 활성으로 보인다. 저장하지 않으므로
+  데이터는 바뀌지 않는다(병합 리뷰 Codex P2-1·Claude P3-2, 고치지 않고 기록).
 - **agy 항목의 값 읽기·쓰기는 `CLIKeychain` 만**: security CLI, 5초 제한, 네이티브 폴백 없음(`SystemKeychain` 은
   CLI 실패 시 SecItemUpdate 로 떨어져 파티션을 재도장한다 — 실패 기록 12). 쓰기는 `-i` 표준 입력만, 4,096B
   한 줄 가드. **쓰기가 실패하거나 시간을 넘기면 "모름"** — 값을 읽어 확인할 때까지(1분→5분→15분) 쓰기·자동 전환을
