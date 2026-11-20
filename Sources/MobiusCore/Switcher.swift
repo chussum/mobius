@@ -133,11 +133,7 @@ public final class Switcher: @unchecked Sendable {
                   let identity = ClaudeConfigIO.identity(fromSnapshot: snap),
                   !identity.organizationUuid.isEmpty
             else { continue }
-            try store.update(account.id) {
-                $0.organizationUuid = identity.organizationUuid
-                if !identity.organizationName.isEmpty { $0.organizationName = identity.organizationName }
-                if !identity.tierDescription.isEmpty { $0.tierDescription = identity.tierDescription }
-            }
+            try store.update(account.id) { $0.applyBackfilledIdentity(identity) }
             filled.append(account.id)
         }
         return filled

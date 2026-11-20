@@ -136,7 +136,11 @@ public final class AccountStore: @unchecked Sendable {
     }
 
     /// 구버전이 저장한 파일에서 Antigravity 계정을 되살린다(순수에 가까운 함수 — secrets 디렉터리만 읽는다).
-    /// - Claude·Codex 는 디스크 값 그대로.
+    /// - Claude·Codex 는 디스크 값 그대로. 단 v0.5.4 미만 판이 저장하면 Claude 프로필의 `organizationUuid` 가
+    ///   빠지므로, 비어 있는 프로필은 **저장 스냅샷**에서 채운다(`Switcher.backfillOrganizationUUIDs` 와 같은 규칙).
+    ///   스냅샷 파일이 없으면 메모리의 같은 id 값을 옮긴다. 비운 채 두면 같은 이메일의 다른 조직 로그인이 이메일
+    ///   폴백으로 그 프로필을 덮는다(실패 기록 23). backfill 은 시작 때 한 번만 돌므로, 떠 있는 동안의 다시 읽기와
+    ///   시작 실패 뒤 복구가 이 경로에서 조직을 잃었다(병합 리뷰 Codex P1-1·Claude P2-1).
     /// - Antigravity 프로필과 순서는 **메모리 값**(앱이 떠 있는 동안 — primary 가 바뀌지 않게).
     ///   메모리에 없으면 `secrets/` 의 프로필 없는 파일 가운데 Antigravity 형태인 것을 수정 시각 순으로.
     ///   `*.bak` 과 `.removed` 표시가 있는 UUID 는 건너뛰고, 같은 이메일은 한 번만.
@@ -146,6 +150,16 @@ public final class AccountStore: @unchecked Sendable {
     public static func restoringAfterLegacySave(_ disk: AccountsFile, memory: AccountsFile?,
                                                 env: MobiusEnvironment) -> (AccountsFile, Bool) {
         var out = disk
+        for i in out.accounts.indices
+        where out.accounts[i].provider == .claude && out.accounts[i].organizationUuid.isEmpty {
+            let id = out.accounts[i].id
+            if let identity = savedClaudeIdentity(env: env, id: id), !identity.organizationUuid.isEmpty {
+                out.accounts[i].applyBackfilledIdentity(identity)
+            } else if let known = memory?.accounts.first(where: { $0.id == id && $0.provider == .claude }),
+                      !known.organizationUuid.isEmpty {
+                out.accounts[i].organizationUuid = known.organizationUuid
+            }
+        }
         let restoredProvider = Provider.antigravity
         // 메모리에서 가져오는 프로필에도 `.removed` 표시를 적용한다 — 다른 인스턴스가 지운 계정이
         // 앱 메모리에 남아 있다가 되살아나지 않게(리뷰 1회차 Codex P2-5).
@@ -168,6 +182,14 @@ public final class AccountStore: @unchecked Sendable {
         out.autoSwitchedByProvider[restoredProvider] = nil
         out.autoSwitchByProvider[restoredProvider] = false
         return (out, !restored.isEmpty)
+    }
+
+    /// Claude 프로필의 저장 스냅샷 **파일**에 든 신원. 파일이 없으면 nil — 구버전 Keychain 폴백(승인창)은 타지 않는다.
+    static func savedClaudeIdentity(env: MobiusEnvironment, id: UUID) -> ProviderIdentity? {
+        guard let data = try? Data(contentsOf: env.secretFile(for: id)),
+              let snap = try? JSONDecoder().decode(CredentialsSnapshot.self, from: data)
+        else { return nil }
+        return ClaudeConfigIO.identity(fromSnapshot: snap)
     }
 
     /// `secrets/` 의 프로필 없는 secret 파일(UUID 이름, `.bak` 제외, `.removed` 표시 제외) —

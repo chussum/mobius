@@ -351,6 +351,63 @@ final class SwitcherTests: XCTestCase {
         return (team, max)
     }
 
+    /// v0.5.4 미만 판(v0.5.3 모델)이 지금 파일을 다시 저장한다 — Claude 프로필의 organizationUuid 가 빠진다.
+    private func saveAsV053() throws {
+        let legacy = try JSONDecoder().decode(V053AccountsFile.self, from: Data(contentsOf: env.accountsFile))
+        try JSONEncoder().encode(legacy).write(to: env.accountsFile)
+    }
+
+    /// 떠 있는 앱이 구버전이 저장한 파일을 다시 읽어도(팝오버, Antigravity 의 fresh commit) 조직을 잃지 않는다 —
+    /// 잃으면 같은 이메일의 다른 조직 로그인이 이메일 폴백으로 그 프로필을 덮는다(실패 기록 23, 병합 리뷰 Claude P2-1).
+    func testLegacySaveThenReloadKeepsOrganizationFromSnapshot() async throws {
+        let team = try store.upsertProfile(nickname: "team", snapshot: orgSnap(token: "team", refresh: "T0", account: Self.teamAccount))
+        try saveAsV053()
+        try store.reloadFromDisk()
+        XCTAssertEqual(store.file.accounts.first { $0.id == team.id }?.organizationUuid, "org-team")
+
+        // 등록하지 않은 같은 이메일의 개인 Max 로 로그인한다(활성은 personal).
+        try io.writeLiveSnapshot(orgSnap(token: "max", refresh: "M0", account: Self.maxAccount))
+        try await switcher.reconcile()
+
+        XCTAssertEqual(try storedRefresh(team.id), "T0", "Team 저장본에 Max 토큰이 들어가면 안 된다")
+        XCTAssertNotEqual(store.file.activeAccountID, team.id)
+    }
+
+    /// 앱 시작 때 읽기에 실패해 빈 스토어로 떴다가(backfill 이 빈 목록에서 끝남) 다시 읽기에 성공해도, 라이브 저장을
+    /// 재개하기 전에 조직이 채워져 있다(병합 리뷰 Codex P1-1).
+    func testReloadAfterStartupLoadFailureFillsOrganizationBeforeActiveSync() async throws {
+        let team = try store.upsertProfile(nickname: "team", snapshot: orgSnap(token: "team", refresh: "T0", account: Self.teamAccount))
+        try store.setActive(team.id)
+        try saveAsV053()
+
+        let recovering = AccountStore(env: env, keychain: kc, afterLoadFailure: CocoaError(.fileReadNoPermission))
+        let sw = Switcher(env: env, keychain: kc, store: recovering, io: io)
+        _ = try? sw.backfillOrganizationUUIDs()                       // 시작 때 빈 목록에서 끝난 backfill
+        try recovering.reloadFromDisk()
+        XCTAssertEqual(recovering.file.accounts.first { $0.id == team.id }?.organizationUuid, "org-team")
+
+        // 라이브는 같은 이메일의 개인 Max(등록 안 함). 5분 동기화가 Team 을 이메일로 고르면 Max 토큰을 Team 에 저장한다.
+        try io.writeLiveSnapshot(orgSnap(token: "max", refresh: "M0", account: Self.maxAccount))
+        _ = await sw.refreshActiveSnapshotIfStable()
+
+        XCTAssertEqual(CredentialBlob.refreshToken(from: try XCTUnwrap(recovering.secret(for: team.id)).keychainBlob), "T0")
+    }
+
+    /// 스냅샷 파일이 없으면(구버전 Keychain 전용 스냅샷) 메모리의 같은 id 값을 옮긴다.
+    func testLegacyRestoreCarriesOrganizationFromMemoryWhenSnapshotFileMissing() throws {
+        let team = try store.upsertProfile(nickname: "team", snapshot: orgSnap(token: "team", refresh: "T0", account: Self.teamAccount))
+        let memory = store.file
+        try saveAsV053()
+        try FileManager.default.removeItem(at: env.secretFile(for: team.id))
+        let disk = try JSONDecoder().decode(AccountsFile.self, from: Data(contentsOf: env.accountsFile))
+        XCTAssertEqual(disk.accounts.first { $0.id == team.id }?.organizationUuid, "")
+
+        let (restored, _) = AccountStore.restoringAfterLegacySave(disk, memory: memory, env: env)
+        XCTAssertEqual(restored.accounts.first { $0.id == team.id }?.organizationUuid, "org-team")
+        let (noMemory, _) = AccountStore.restoringAfterLegacySave(disk, memory: nil, env: env)
+        XCTAssertEqual(noMemory.accounts.first { $0.id == team.id }?.organizationUuid, "", "근거가 없으면 비워 둔다")
+    }
+
     /// CLI `list`·`status`(읽기 전용 대사)는 라이브를 **계정 열쇠(이메일 + 조직)** 로 골라 메모리에만 반영한다 —
     /// 이메일만 보면 같은 이메일의 다른 조직 카드를 활성으로 보인다(Antigravity 브랜치 rebase 때 합친 경로).
     func testReadOnlyDisplayPicksProfileByOrganization() async throws {

@@ -131,6 +131,16 @@ public struct AccountKey: Equatable, Sendable {
     }
 }
 
+extension AccountProfile {
+    /// 저장 스냅샷의 신원으로 조직을 채운다 — 이름·등급도 같은 신원에서 맞추되 빈 값으로는 덮어쓰지 않는다.
+    /// `Switcher.backfillOrganizationUUIDs` 와 구버전 저장 뒤 복원(`AccountStore.restoringAfterLegacySave`)이 같이 쓴다.
+    mutating func applyBackfilledIdentity(_ identity: ProviderIdentity) {
+        organizationUuid = identity.organizationUuid
+        if !identity.organizationName.isEmpty { organizationName = identity.organizationName }
+        if !identity.tierDescription.isEmpty { tierDescription = identity.tierDescription }
+    }
+}
+
 public struct AccountProfile: Codable, Equatable, Identifiable, Sendable {
     public var id: UUID
     public var provider: Provider

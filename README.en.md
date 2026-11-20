@@ -229,7 +229,7 @@ Usage gauges are fetched only when the popover opens (4-minute cache) — never 
   Antigravity accounts drop out of it, but the new version restores them from the saved
   credentials and leaves Antigravity auto-switch off. If a version older than v0.5.4 saves the list,
   the information that tells several organizations of one email apart is dropped, and the new version
-  fills it back in from the saved credentials when it starts. Mixing with versions older than v0.3.0 is
+  fills it back in from the saved credentials when it reads the list again. Mixing with versions older than v0.3.0 is
   not supported.
 - **Running `claude` sessions**: switching does **not** interrupt running sessions
   (measured through many switch round-trips). You don't need to restart them

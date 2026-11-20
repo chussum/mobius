@@ -353,9 +353,12 @@ Sources/MobiusApp/        SwiftUI 메뉴바 앱 + AppState(+Antigravity) + Views
   은 10초 제한(`ProcessSecurityRunner` 재사용 — stdout·stderr 를 별도 큐에서 끝까지 읽는다).
 - **다운그레이드 호환(실패 기록 13 의 연장)**: 테스트는 구버전 모델의 고정 사본 두 개로 한다 — `Legacy053Models`(v0.5.3)와
   `Legacy054Models`(v0.5.4, v0.5.5 의 Models.swift 와 같다 — organizationUuid 가 들어간 첫 판). v0.5.4 보다 오래된 판이
-  목록을 저장하면 Claude 프로필의 `organizationUuid` 가 빠지고, 새 버전은 시작할 때(앱·CLI 변경 명령)
-  `backfillOrganizationUUIDs` 로 저장 스냅샷에서 다시 채운다(그 전까지 같은 이메일의 두 조직은 `firstIndex` 가 모호로 보고
-  손대지 않는다). 구버전(v0.3.0~, v0.5.5 포함)의 `AccountProfile` 은 모르는 provider 에서 throw →
+  목록을 저장하면 Claude 프로필의 `organizationUuid` 가 빠진다. 새 버전은 그 파일을 **읽을 때마다**(앱 시작·
+  `reloadFromDisk`·fresh commit·`peekDisk`·CLI) 구버전 저장 뒤 복원 함수(`restoringAfterLegacySave`)에서 저장 스냅샷
+  파일로 다시 채우고, 스냅샷 파일이 없으면 메모리의 같은 id 값을 옮긴다(규칙은 `backfillOrganizationUUIDs` 와 같은
+  `applyBackfilledIdentity`). 시작 때 한 번 도는 backfill 만으로는 떠 있는 동안의 다시 읽기와 시작 실패 뒤 복구가 조직을
+  잃고, 같은 이메일의 다른 조직 로그인이 이메일 폴백으로 그 프로필을 덮었다(병합 리뷰 Codex P1-1·Claude P2-1). 앱은 시작
+  실패 뒤 다시 읽기에 성공하면 시작 때 건너뛴 heal·backfill·등급 갱신을 한 번 더 돌린다(`repairAfterRecoveredLoad`). 구버전(v0.3.0~, v0.5.5 포함)의 `AccountProfile` 은 모르는 provider 에서 throw →
   파일 전체 디코드 실패 → 목록 덮어쓰기. 그래서 **`accounts` 에는 claude·codex 만**, 그 밖은 `extraProviderAccounts`
   (비어 있어도 **항상** 씀). `accounts` 에서 읽은 **모르는** provider 항목도 `extraProviderAccounts` 로 옮겨 쓴다
   (`accounts` 에 다시 쓰면 구버전 디코더가 배열 전체를 거부한다). 이 키가 없는 파일 = 구버전이 저장한 파일 → `AccountStore.restoringAfterLegacySave` 하나가

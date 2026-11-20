@@ -847,7 +847,9 @@ final class AppState: ObservableObject {
         // AccountStore는 자기 인스턴스 상태를 유지하므로 디스크에서 재로드.
         // ★ 구버전 저장 뒤 복원 함수를 지나는 같은 경로다(설계 4.4-4, 5회차 P2-2) — 앱이 떠 있는
         //   동안에는 메모리의 Antigravity 프로필 순서를 쓴다.
+        let wasBlocked = store.loadFailure != nil
         try? store.reloadFromDisk()
+        if wasBlocked && store.loadFailure == nil { repairAfterRecoveredLoad() }
         file = store.file
         // ★ 메모리가 디스크를 대표하지 않으면(읽기 실패로 저장을 막은 상태 — 시작 실패면 빈 목록이다)
         //   메모리를 기준으로 무엇도 지우지 않는다. 빈 목록 기준 정리는 계정마다의 Desktop 스냅샷을 모두
@@ -1080,6 +1082,21 @@ final class AppState: ObservableObject {
         })
     }
 
+    /// 시작 때 읽기에 실패하면 heal·backfill·등급 갱신이 빈 목록에서 끝난다. 다시 읽기에 성공한 직후, 라이브 저장
+    /// (대사·스냅샷 동기화·adopt)을 재개하기 전에 한 번 더 돌린다 — 조직을 모르는 프로필이 남으면 같은 이메일의 다른
+    /// 조직 로그인이 이메일 폴백으로 그 프로필을 덮는다(실패 기록 23, 병합 리뷰 Codex P1-1). 구버전이 저장한 파일의
+    /// 조직은 스토어의 복원 함수(`restoringAfterLegacySave`)가 다시 읽을 때마다 이미 채운다.
+    private func repairAfterRecoveredLoad() {
+        if let reassigned = try? switcher.healMisassignedProviders(), !reassigned.isEmpty {
+            let names = reassigned
+                .map { "\($0.nickname) (\($0.from.displayName)→\($0.to.displayName))" }
+                .joined(separator: ", ")
+            lastError = loc("구버전이 저장한 계정 목록에서 프로바이더 정보가 소실돼 복구했습니다: %@", names)
+        }
+        _ = try? switcher.backfillOrganizationUUIDs()
+        _ = try? switcher.refreshTierLabels()
+    }
+
     /// accounts.json 읽기 실패(파일은 있다)로 저장이 막혀 있으면 15초마다 다시 읽어 보고, 처음 한 번
     /// 사용자에게 알린다. 다시 읽기에 성공하면 true(리뷰 2회차 Codex P1-1).
     func storeLoadIsHealthy(now: Date) -> Bool {
@@ -1089,6 +1106,7 @@ final class AppState: ObservableObject {
             if (try? store.reloadFromDisk()) != nil {
                 storeLoadFailureNotified = false
                 if lastError?.hasPrefix(loc("계정 목록 로드 실패: %@", "")) == true { lastError = nil }
+                repairAfterRecoveredLoad()
                 publishStoreFile()
                 return true
             }
