@@ -256,7 +256,11 @@ Sources/MobiusApp/        SwiftUI 메뉴바 앱 + AppState(+Antigravity) + Views
   꺼낸다(`ProviderConfigIO.email(fromSecret:)`, Codex 도 같다). 따로 읽은 이메일과 짝짓지 않는다(실패 기록 1·2).
   계정 열쇠(`AccountKey`, 실패 기록 23)와의 관계: 되저장의 열쇠는 `Switcher.identityKey` 가 정한다 — 신원이 바이트 안에
   있는 Codex·Antigravity 는 **바이트 이메일**이 열쇠다(조직 개념이 없어 `organizationUuid` 는 ""), Claude 는
-  `liveAccountKey`(이메일 + 조직)다. adopt·reconcile 도 열쇠로 프로필을 고른 뒤, 바이트 이메일 대조를 한 번 더 한다.
+  스냅샷에 함께 캡처한 oauthAccount 의 열쇠(`identity(fromSecret:)`, 이메일 + 조직)이고 따로 읽은 `liveAccountKey` 와
+  같을 때만 쓴다. adopt·reconcile·5분 동기화도 열쇠로 프로필을 고른 뒤, **저장할 바이트의 신원**이 그 열쇠와 같은지 한 번
+  더 본다. 따로 읽은 열쇠만 쓰면 바이트를 읽은 뒤 같은 이메일의 다른 조직으로 바뀐 순간 A 조직의 바이트를 B 프로필에
+  저장한다. 전환도 설치할 바이트의 열쇠가 대상 프로필과 맞지 않으면 `secretIdentityMismatch` 로 거부하고, CLI
+  `capture --provider codex` 는 저장할 바이트에서 신원을 꺼낸다(병합 리뷰 Codex P1-2·P1-3, upstream 에서 이어진 결함).
   CLI 읽기 전용 대사(`reflectLiveActiveWithoutSaving`)도 열쇠로 고른다(이메일만 보면 같은 이메일의 다른 조직 카드를 활성으로 보인다).
 - **agy 항목의 값 읽기·쓰기는 `CLIKeychain` 만**: security CLI, 5초 제한, 네이티브 폴백 없음(`SystemKeychain` 은
   CLI 실패 시 SecItemUpdate 로 떨어져 파티션을 재도장한다 — 실패 기록 12). 쓰기는 `-i` 표준 입력만, 4,096B

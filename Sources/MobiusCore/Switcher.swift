@@ -223,10 +223,22 @@ public final class Switcher: @unchecked Sendable {
     /// 저장·설치할 바이트의 계정 열쇠. 신원이 바이트 안에 있는 프로바이더(Codex·Antigravity)는
     /// **바이트에서만** 이메일을 꺼낸다 — 값과 이메일을 따로 읽어 짝짓는 틈(실패 기록 1·2)이 생기지
     /// 않게(설계 4.1). 이 프로바이더들에는 조직 개념이 없어 열쇠는 이메일뿐이다(`AccountKey` 기본값).
-    /// 바이트에 신원이 없는 Claude 만 따로 읽은 열쇠(이메일 + 조직, `liveAccountKey`)로 대조한다.
+    /// Claude 는 스냅샷에 함께 캡처한 oauthAccount 의 열쇠(이메일 + 조직)를 쓰고, 따로 읽은 열쇠
+    /// (`liveAccountKey`)와 같을 때만 돌려준다 — 바이트를 읽은 뒤 신원이 같은 이메일의 다른 조직으로 바뀌었으면
+    /// 이번에는 건너뛴다. 따로 읽은 열쇠만 쓰면 A 조직의 바이트를 B 프로필에 저장한다(병합 리뷰 Codex P1-2).
     private func identityKey(of data: Data, io: any ProviderConfigIO) throws -> AccountKey? {
         if let email = io.email(fromSecret: data) { return AccountKey(emailAddress: email) }
-        return io.identityIsInSecret ? nil : try io.liveAccountKey()
+        if io.identityIsInSecret { return nil }
+        guard let captured = io.identity(fromSecret: data)?.key,
+              try io.liveAccountKey() == captured else { return nil }
+        return captured
+    }
+
+    /// 저장할 바이트의 주인이 따로 읽은 열쇠와 같은가. 바이트에서 신원을 꺼낼 수 없으면, 신원이 바이트 안에
+    /// 있어야 하는 프로바이더(Codex·Antigravity)는 거부하고 Claude(oauthAccount 없는 옛 스냅샷)는 통과한다.
+    private func secret(_ data: Data, io: any ProviderConfigIO, belongsTo key: AccountKey) -> Bool {
+        guard let captured = io.identity(fromSecret: data)?.key else { return !io.identityIsInSecret }
+        return captured == key
     }
 
     /// 라이브 자격증명을 프로필 스냅샷으로 저장한다. refresh 토큰이 **다른 값으로 교체**됐으면
@@ -285,7 +297,8 @@ public final class Switcher: @unchecked Sendable {
         // 이메일은 같아도 조직이 달라, 이 프로필에 남의 조직 토큰을 저장하게 된다(파일 읽기 한 번).
         guard let (data, stableEmail) = await io.readStableLiveSecretData(),
               stableEmail == key.emailAddress,
-              (try? io.liveAccountKey()) == key else { return false }
+              (try? io.liveAccountKey()) == key,
+              secret(data, io: io, belongsTo: key) else { return false }
         // 토큰과 신원이 맞으면 그대로, 어긋났으면 토큰이 활성 프로필의 것으로 보일 때만 보정해 저장한다.
         // 둘 다 아니면(다른 조직 토큰, 로그인 없는 blob) 저장하지 않는다 — false는 "이번 사이클은 신선하지
         // 않다"는 뜻이라 호출자 계약과도 맞는다(실패 기록 24).
@@ -330,8 +343,10 @@ public final class Switcher: @unchecked Sendable {
         try store.withCredentialLock(id) {
             guard let target = try store.secretData(for: id) else { throw SwitcherError.noStoredSecret }
             guard !io.secretIsMixed(target) else { throw SwitcherError.mixedSnapshot }
-            // 설치할 바이트의 이메일이 대상 프로필과 다르면 쓰지 않는다(설계 4.1·4.5).
-            if let byteEmail = io.email(fromSecret: target), byteEmail != profile.emailAddress {
+            // 설치할 바이트의 신원이 대상 프로필과 다르면 쓰지 않는다(설계 4.1·4.5). Claude 는 스냅샷에 캡처한
+            // oauthAccount 의 열쇠(이메일 + 조직)로 본다 — 다른 조직의 바이트가 저장돼 있으면 토큰과 신원이 서로 맞아
+            // `secretIsMixed` 를 통과하고, 설치하면 사용자가 고른 카드와 다른 조직으로 로그인된다(병합 리뷰 Codex P1-2).
+            if let byteKey = io.identity(fromSecret: target)?.key, !byteKey.matches(profile.key) {
                 throw SwitcherError.secretIdentityMismatch
             }
 
@@ -482,8 +497,8 @@ public final class Switcher: @unchecked Sendable {
             rememberRejectedLive(provider, io: io, live: live, fingerprint: fingerprint)
             return nil
         }
-        // 신원이 바이트 안에 있으면 **저장하는 바이트의 이메일**과 다시 대조한다(설계 4.1).
-        if io.identityIsInSecret, io.email(fromSecret: live) != key.emailAddress { return nil }
+        // **저장하는 바이트의 신원**과 다시 대조한다(설계 4.1, 병합 리뷰 Codex P1-2).
+        guard secret(live, io: io, belongsTo: key) else { return nil }
         guard let identity = try io.liveIdentity(), identity.key == key else { return nil }
         forgetDeferredLive(provider)
         let nickname = store.file.suggestedNickname(provider: provider, for: identity)
@@ -585,8 +600,8 @@ public final class Switcher: @unchecked Sendable {
             rememberRejectedLive(provider, io: io, live: live, fingerprint: fingerprint)
             return nil
         }
-        // 신원이 바이트 안에 있으면 **저장하는 바이트의 이메일**과 다시 대조한다(설계 4.1).
-        if io.identityIsInSecret, io.email(fromSecret: live) != profile.emailAddress { return nil }
+        // **저장하는 바이트의 신원**과 다시 대조한다(설계 4.1, 병합 리뷰 Codex P1-2).
+        guard secret(live, io: io, belongsTo: key) else { return nil }
         forgetDeferredLive(provider)
         try saveLiveSecret(live, for: profile.id)
         guard !activeUnchanged else { return nil }

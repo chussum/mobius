@@ -91,6 +91,12 @@ public protocol ProviderConfigIO: Sendable {
     /// 고르고 대조한다 — 값과 이메일을 따로 읽는 틈(실패 기록 1·2)을 없앤다(설계 4.1).
     func email(fromSecret data: Data) -> String?
 
+    /// secret 바이트 **자체에** 담긴 신원(이메일·조직·표시 정보). 저장하거나 설치할 바이트의 주인을 그 바이트에서
+    /// 꺼내 대조한다 — 따로 읽은 신원과 짝지으면 두 읽기 사이에 로그인이 바뀐 순간 남의 바이트를 다른 프로필에
+    /// 붙인다(실패 기록 1·2·23, 병합 리뷰 Codex P1-2·P1-3). Claude 는 스냅샷에 함께 캡처한 oauthAccount 블록에서,
+    /// Codex 는 id_token 에서 꺼낸다. 신원을 꺼낼 수 없으면 nil.
+    func identity(fromSecret data: Data) -> ProviderIdentity?
+
     /// 신원이 secret 바이트 안에 있는가. true 면 바이트에서 이메일을 못 꺼낸 값은 "신원 없음"이고,
     /// 따로 읽은 이메일(`liveEmail`)로 대신하지 않는다.
     var identityIsInSecret: Bool { get }
@@ -114,6 +120,11 @@ extension ProviderConfigIO {
 
     /// 기본: 섞일 수 없다.
     public func secretIsMixed(_ data: Data) -> Bool { false }
+
+    /// 기본: 바이트의 이메일만(조직·표시 정보 없음).
+    public func identity(fromSecret data: Data) -> ProviderIdentity? {
+        email(fromSecret: data).map { ProviderIdentity(emailAddress: $0, organizationName: "", tierDescription: "") }
+    }
 
     public func readStableLiveSecretData() async -> (data: Data, email: String)? {
         await readStableLiveSecretData(gap: .milliseconds(700))

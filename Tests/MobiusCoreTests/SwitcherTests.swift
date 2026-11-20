@@ -712,4 +712,93 @@ final class SwitcherTests: XCTestCase {
         XCTAssertEqual(store.file.accounts.first { $0.id == max.id }?.tierDescription, "Max 20x")
         XCTAssertEqual(try switcher.refreshTierLabels(), [], "이미 맞으면 건드리지 않는다")
     }
+
+    // MARK: 저장·설치할 바이트의 신원 대조 (병합 리뷰 Codex P1-2)
+    // 라이브 바이트(Keychain 토큰 + 그때의 oauthAccount)를 읽은 뒤, 열쇠를 따로 읽기 전에 라이브 신원이 같은 이메일의
+    // 다른 조직으로 바뀐 순간. `RacingClaudeIO` 가 바이트는 Team 스냅샷, 따로 읽는 열쇠는 Max 로 돌려준다.
+
+    private func racingSwitcher(liveBytes: CredentialsSnapshot) throws -> Switcher {
+        let racing = RacingClaudeIO(base: io, liveBytes: try JSONEncoder().encode(liveBytes))
+        return Switcher(env: env, keychain: kc, store: store, io: io, extraIOs: [racing])
+    }
+
+    func testResaveDoesNotPairBytesWithSeparatelyReadKey() throws {
+        let (team, max) = try setUpTwoOrganizations()   // 라이브 신원은 Max
+        let sw = try racingSwitcher(liveBytes: orgSnap(token: "team", refresh: "T1", account: Self.teamAccount))
+        XCTAssertNil(try sw.resaveLiveIntoMatchingProfile(provider: .claude))
+        XCTAssertEqual(try storedRefresh(max.id), "M0", "Team 바이트를 Max 프로필에 저장하면 안 된다")
+        XCTAssertEqual(try storedRefresh(team.id), "T0")
+    }
+
+    func testReconcileDoesNotPairBytesWithSeparatelyReadKey() async throws {
+        let (team, max) = try setUpTwoOrganizations()
+        try store.setActive(team.id)                    // 라이브 열쇠(Max)가 활성과 달라 대사가 바이트를 읽는다
+        let sw = try racingSwitcher(liveBytes: orgSnap(token: "team", refresh: "T1", account: Self.teamAccount))
+        try await sw.reconcile()
+        XCTAssertEqual(try storedRefresh(max.id), "M0")
+        XCTAssertEqual(store.file.activeAccountID, team.id, "바이트의 주인이 열쇠와 다르면 활성도 옮기지 않는다")
+    }
+
+    func testActiveSyncDoesNotPairBytesWithSeparatelyReadKey() async throws {
+        let (_, max) = try setUpTwoOrganizations()
+        let sw = try racingSwitcher(liveBytes: orgSnap(token: "team", refresh: "T1", account: Self.teamAccount))
+        let wrote = await sw.refreshActiveSnapshotIfStable()
+        XCTAssertFalse(wrote)
+        XCTAssertEqual(try storedRefresh(max.id), "M0")
+    }
+
+    /// 이미 다른 조직의 바이트가 저장된 프로필로 전환하면 설치하지 않는다 — 설치하면 사용자가 고른 카드와 다른
+    /// 조직으로 로그인된다(바이트 안의 토큰과 신원은 서로 맞아 `secretIsMixed` 는 통과한다).
+    func testSwitchRefusesStoredBytesOfOtherOrganization() throws {
+        let (team, max) = try setUpTwoOrganizations()
+        try store.setSecret(orgSnap(token: "team", refresh: "T9", account: Self.teamAccount), for: max.id)
+        try io.writeLiveSnapshot(orgSnap(token: "team", refresh: "T0", account: Self.teamAccount))
+        try store.setActive(team.id)
+        XCTAssertThrowsError(try switcher.switchTo(max.id)) {
+            guard case SwitcherError.secretIdentityMismatch = $0 else { return XCTFail("\($0)") }
+        }
+        XCTAssertEqual(store.file.activeAccountID, team.id)
+        XCTAssertEqual(CredentialBlob.refreshToken(from: try XCTUnwrap(io.readLiveSnapshot()).keychainBlob), "T0")
+    }
+
+    func testClaudeIdentityFromSecretIsCapturedOAuthAccount() throws {
+        let data = try JSONEncoder().encode(orgSnap(token: "team", refresh: "T0", account: Self.teamAccount))
+        XCTAssertEqual(io.identity(fromSecret: data)?.key,
+                       AccountKey(emailAddress: "t@x.com", organizationUuid: "org-team"))
+    }
+
+    /// `mobius capture --provider codex` 는 저장할 바이트에서 신원을 꺼낸다(병합 리뷰 Codex P1-3) — 두 번 읽으면
+    /// 그 사이 auth.json 이 바뀐 순간 A 의 바이트를 B 프로필에 쓴다.
+    func testCodexIdentityFromSecretCarriesPlan() {
+        let identity = CodexConfigIO(env: env).identity(fromSecret: CodexFixtures.authJSON(email: "a@c.com", plan: "plus"))
+        XCTAssertEqual(identity?.emailAddress, "a@c.com")
+        XCTAssertEqual(identity?.tierDescription, "Plus")
+    }
+}
+
+/// 라이브 바이트는 고정값을, 나머지는 실제 Claude 어댑터를 돌려준다 — 바이트를 읽은 뒤 따로 읽는 신원이 바뀐 순간.
+private struct RacingClaudeIO: ProviderConfigIO {
+    let base: ClaudeConfigIO
+    let liveBytes: Data
+    var provider: Provider { .claude }
+    func readLiveSecretData() throws -> Data? { liveBytes }
+    func readStableLiveSecretData(gap: Duration) async -> (data: Data, email: String)? {
+        guard let email = try? base.liveEmail() else { return nil }
+        return (liveBytes, email)
+    }
+    func liveEmail() throws -> String? { try base.liveEmail() }
+    func liveAccountKey() throws -> AccountKey? { try base.liveAccountKey() }
+    func liveIdentity() throws -> ProviderIdentity? { try base.liveIdentity() }
+    func liveIdentityFingerprint() throws -> Data? { try base.liveIdentityFingerprint() }
+    func writeLiveSecretData(_ data: Data) throws { try base.writeLiveSecretData(data) }
+    func recognizesSecret(_ data: Data) -> Bool { base.recognizesSecret(data) }
+    func canStoreLiveSecret(_ data: Data) -> Bool { base.canStoreLiveSecret(data) }
+    func liveSecretLacksLogin(_ data: Data) -> Bool { base.liveSecretLacksLogin(data) }
+    func liveSecret(_ live: Data, reattributedTo stored: Data) -> Data? { base.liveSecret(live, reattributedTo: stored) }
+    func liveToken(_ live: Data, couldBelongTo stored: Data?) -> Bool { base.liveToken(live, couldBelongTo: stored) }
+    func secretIsMixed(_ data: Data) -> Bool { base.secretIsMixed(data) }
+    func email(fromSecret data: Data) -> String? { base.email(fromSecret: data) }
+    func identity(fromSecret data: Data) -> ProviderIdentity? { base.identity(fromSecret: data) }
+    var identityIsInSecret: Bool { base.identityIsInSecret }
+    var rollsBackFailedSwitch: Bool { base.rollsBackFailedSwitch }
 }

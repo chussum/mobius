@@ -228,8 +228,10 @@ struct Capture: ParsableCommand {
                                                         identity: identity, store: ctx.store)
             p = try ctx.store.upsertProfile(nickname: name, snapshot: snap)
         case .codex:
+            // 신원은 저장할 바이트에서 꺼낸다 — auth.json 을 두 번 읽으면 그 사이 다른 로그인으로 바뀐 순간
+            // A 의 바이트를 B 프로필에 쓴다(병합 리뷰 Codex P1-3).
             guard let data = try ctx.codexIO.readLiveSecretData(),
-                  let identity = try ctx.codexIO.liveIdentity() else {
+                  let identity = ctx.codexIO.identity(fromSecret: data) else {
                 throw ValidationError("codex 로그인 상태가 아닙니다. 먼저 `codex login` 하세요.")
             }
             try Self.rejectNicknameTakenByAnotherAccount(name, provider: .codex,
