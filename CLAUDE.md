@@ -384,6 +384,16 @@ Sources/MobiusApp/        SwiftUI 메뉴바 앱 + AppState(+Antigravity) + Views
 - 메뉴바 아이콘은 Control Center가 호스팅 — CGWindowList의 layer/owner로 존재 확인이 어려움.
 - **Bartender 같은 메뉴바 관리 앱이 새 앱 아이콘을 자동 숨김** → 안 보이면 Bartender 설정에서 표시.
 - 서명 안 된/ad-hoc 앱도 실행되지만 Keychain ACL이 서명 정체성에 묶임.
+- ★ **바이너리에 기록된 SDK 버전이 MenuBarExtra 동작을 바꾼다**(실측 2026-09-24·2026-11-20). Swift 6.4 SwiftPM 의
+  기본 빌드 시스템은 `LC_BUILD_VERSION` 의 sdk 를 14.0 으로 기록하는데, 그 앱은 팝오버 창이 내용이 줄어도
+  줄지 않아(탭을 바꾸면 카드가 메뉴바에서 떨어져 창 가운데 뜬다) 다시 열 때 `onAppear` 도 부르지 않는다.
+  `make-app.sh` 가 `vtool` 로 실제 SDK 버전을 기록한다. 확인: `otool -l …/MobiusApp | grep -A4 LC_BUILD_VERSION`.
+- ★ **팝오버는 상태 아이템 버튼으로 닫는다**(`AccountListView.dismissPopover`). 창을 `close()` 하면 SwiftUI 는
+  열려 있다고 보고 다음 아이콘 클릭 한 번을 닫기로 써서 두 번 눌러야 열린다. 설정 창을 열 때 닫지 않으면
+  활성화 정책이 `.regular` 로 바뀌며 팝오버가 메인 디스플레이로 옮겨 붙은 채 남는다(외부 디스플레이에서 연 경우).
+- UI E2E 는 접근성 API(클릭·트리 덤프)와 `screencapture -l <창 ID>` 로 한다. TCC 권한은 터미널 앱이 아니라
+  **명령을 띄운 책임 프로세스**(Claude Code 면 `~/.local/share/claude/versions/<ver>`)에 줘야 한다 — tccd 로그의
+  `AUTHREQ_ATTRIBUTION` 의 `responsible` 로 확인한다.
 
 ### 서명 (Keychain 승인창 영구 방지)
 - ad-hoc 서명(`-s -`)은 **리빌드마다 정체성이 바뀌어** "항상 허용"이 매번 리셋됨.

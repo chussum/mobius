@@ -189,9 +189,11 @@ struct AccountCardView: View {
                     .fixedSize()
                 subtitleTrailer
             }
-        } else {
+        } else if !profile.subtitle.isEmpty {
             // 회사 조직(Team/Enterprise)이면 이름을 앞에 적는다 — 같은 이메일의 계정이 여럿일 때 구분 근거.
             // `lineLimit(1)`: 긴 조직 이름이 줄바꿈으로 카드 높이를 바꾸지 않게(이슈 #5 계열).
+            // 비어 있으면(Antigravity — 등급 정보가 없다) 줄을 그리지 않는다. 빈 Text 도 한 줄
+            // 높이를 차지해 이메일과 게이지 사이에 빈 줄이 생긴다(E2E 2026-11-20).
             Text(profile.subtitle)
                 .font(.system(size: 10)).foregroundStyle(.tertiary)
                 .lineLimit(1).truncationMode(.tail)

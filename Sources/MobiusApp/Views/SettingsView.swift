@@ -244,7 +244,7 @@ struct SettingsView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.04)))
             if provider == .codex {
-                Text(loc("터미널에서 `codex logout` 후 `codex login`으로 추가할 계정에 로그인하면, Mobius가 몇 초 안에 자동으로 등록합니다."))
+                Text(locMarkdown("터미널에서 `codex logout` 후 `codex login`으로 추가할 계정에 로그인하면, Mobius가 몇 초 안에 자동으로 등록합니다."))
                     .font(.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 Text(loc("지금 쓰던 계정은 이미 카드에 저장돼 있어 카드를 눌러 언제든 되돌아올 수 있어요."))
@@ -252,7 +252,7 @@ struct SettingsView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             if provider == .antigravity {
-                Text(loc("터미널에서 `agy` 를 실행해 로그인하면 자동으로 등록돼요. 다른 계정을 더하려면 agy 에서 로그아웃한 뒤 그 계정으로 로그인하세요."))
+                Text(locMarkdown("터미널에서 `agy` 를 실행해 로그인하면 자동으로 등록돼요. 다른 계정을 더하려면 agy 에서 로그아웃한 뒤 그 계정으로 로그인하세요."))
                     .font(.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }

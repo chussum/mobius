@@ -216,7 +216,10 @@ struct AccountListView: View {
                 .fill(Color.primary.opacity(0.08))
                 .frame(height: 1)
             // 라벨·크기는 풀 탭 헤더 토글과 동일 (미세하게 다르면 어색 — 사용자 피드백)
+            // fixedSize: 줄어드는 쪽은 헤어라인이어야 한다. 없으면 긴 라벨("Antigravity CLI
+            // 자동 전환")이 "자동…"으로 잘린다(E2E 2026-11-20).
             autoSwitchToggle(provider)
+                .fixedSize()
         }
         .padding(.leading, 2)
     }
@@ -371,7 +374,8 @@ struct AccountListView: View {
                         state.beginDesktopCapture(for: p.id)
                     }
                 }
-                Button(loc("삭제"), role: .destructive) { state.removeAccount(p.id) }
+                // ⋯ 메뉴와 같은 이름 — 같은 동작이 두 메뉴에서 다른 이름으로 보이지 않게
+                Button(loc("계정 삭제"), role: .destructive) { state.removeAccount(p.id) }
             }
     }
 
@@ -388,10 +392,7 @@ struct AccountListView: View {
             .buttonStyle(.borderedProminent)
             .controlSize(.small)
             // Codex(터미널 adopt)·CLI 설치 등은 설정에서
-            Button(loc("설정에서 추가 (Codex 포함)")) {
-                NSApp.activate(ignoringOtherApps: true)
-                openSettings()
-            }
+            Button(loc("설정에서 추가 (Codex 포함)")) { openSettingsFromPopover() }
             .buttonStyle(.plain)
             .font(.system(size: 10)).foregroundStyle(.tertiary)
         }
@@ -437,13 +438,41 @@ struct AccountListView: View {
                 TruncatingErrorText(text: err)
             }
             Spacer()
-            // SettingsLink는 accessory(메뉴바 전용) 앱에서 창을 활성화하지 못해 무반응 —
-            // 앱을 먼저 활성화한 뒤 openSettings 환경 액션으로 연다
-            footerButton("gearshape", help: loc("설정")) {
-                NSApp.activate(ignoringOtherApps: true)
-                openSettings()
-            }
+            footerButton("gearshape", help: loc("설정")) { openSettingsFromPopover() }
             footerButton("power", help: loc("종료")) { NSApp.terminate(nil) }
+        }
+    }
+
+    /// 팝오버에서 설정 창을 연다. ★ 팝오버(MenuBarExtra 창)를 **먼저 닫는다** — 설정 창이 뜨며
+    /// 활성화 정책이 `.regular`로 바뀌면(SettingsView.onAppear), 열려 있던 팝오버가 메인
+    /// 디스플레이의 메뉴바 아래로 옮겨 붙은 채 닫히지 않고 남는다(E2E 실측 2026-11-20, 외부
+    /// 디스플레이의 메뉴바에서 연 경우). 버튼을 누른 순간의 key 창이 팝오버다.
+    /// 닫기는 `openSettings()` **뒤에** 한다 — 먼저 닫으면 이 뷰의 환경 액션이 무반응이 되어
+    /// 설정 창이 아예 뜨지 않는다(실측).
+    private func openSettingsFromPopover() {
+        let popover = NSApp.keyWindow
+        // SettingsLink는 accessory(메뉴바 전용) 앱에서 창을 활성화하지 못해 무반응 —
+        // 앱을 먼저 활성화한 뒤 openSettings 환경 액션으로 연다
+        NSApp.activate(ignoringOtherApps: true)
+        openSettings()
+        Self.dismissPopover(fallback: popover)
+    }
+
+    /// 팝오버를 **상태 아이템 버튼을 눌러** 닫는다 — 사용자가 아이콘을 다시 누른 것과 같은 경로라
+    /// SwiftUI 의 표시 상태가 맞게 유지된다. 창을 직접 `close()` 하면 SwiftUI 는 아직 열려 있다고
+    /// 보고, 다음 아이콘 클릭 한 번을 "닫기"로 써 버려 두 번 눌러야 열린다(실측 2026-11-20).
+    /// 상태 아이템을 찾지 못하면(비공개 속성이 바뀐 macOS) 창을 닫는 것으로 물러선다.
+    @MainActor static func dismissPopover(fallback popover: NSWindow?) {
+        let key = "statusItem"
+        for window in NSApp.windows where window.className == "NSStatusBarWindow"
+            && window.responds(to: NSSelectorFromString(key)) {
+            if let button = (window.value(forKey: key) as? NSStatusItem)?.button {
+                button.performClick(nil)
+                return
+            }
+        }
+        if let popover, popover.identifier?.rawValue != "com_apple_SwiftUI_Settings_window" {
+            popover.close()
         }
     }
 
@@ -499,7 +528,7 @@ struct AccountListView: View {
         VStack(alignment: .leading, spacing: 6) {
             Label(loc("Antigravity는 터미널로 추가해요"), systemImage: "terminal")
                 .font(.system(size: 12, weight: .semibold))
-            Text(loc("터미널에서 `agy` 를 실행해 로그인하면 자동으로 등록돼요. 다른 계정을 더하려면 agy 에서 로그아웃한 뒤 그 계정으로 로그인하세요."))
+            Text(locMarkdown("터미널에서 `agy` 를 실행해 로그인하면 자동으로 등록돼요. 다른 계정을 더하려면 agy 에서 로그아웃한 뒤 그 계정으로 로그인하세요."))
                 .font(.system(size: 11)).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -510,7 +539,7 @@ struct AccountListView: View {
         VStack(alignment: .leading, spacing: 6) {
             Label(loc("Codex는 터미널로 추가해요"), systemImage: "terminal")
                 .font(.system(size: 12, weight: .semibold))
-            Text(loc("터미널에서 `codex logout` 후 `codex login`으로 추가할 계정에 로그인하면, Mobius가 몇 초 안에 자동으로 등록합니다."))
+            Text(locMarkdown("터미널에서 `codex logout` 후 `codex login`으로 추가할 계정에 로그인하면, Mobius가 몇 초 안에 자동으로 등록합니다."))
                 .font(.system(size: 11)).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             Text(loc("지금 쓰던 계정은 이미 카드에 저장돼 있어 카드를 눌러 언제든 되돌아올 수 있어요."))
