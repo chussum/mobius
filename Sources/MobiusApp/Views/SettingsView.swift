@@ -31,6 +31,7 @@ struct SettingsView: View {
     @State private var showAdvisoryInfo = false
     @State private var claudeInfo: ClaudeCLI.Info?
     @State private var codexInfo: ToolInventory.CLIInfo?
+    @State private var agyInfo: ToolInventory.CLIInfo?
     @State private var claudeDesktop: ToolInventory.AppInfo?
     @State private var chatGPTApp: ToolInventory.AppInfo?
     @State private var toolsChecked = false
@@ -72,12 +73,13 @@ struct SettingsView: View {
         chatGPTApp = ToolInventory.appBundle(bundleID: "com.openai.codex")
         refreshMobius()
         Task {
-            let (claude, codex) = await Task.detached {
-                (ClaudeCLI.locate(), ToolInventory.locateCodexCLI())
+            let (claude, codex, agy) = await Task.detached {
+                (ClaudeCLI.locate(), ToolInventory.locateCodexCLI(), ToolInventory.locateAntigravityCLI())
             }.value
             await MainActor.run {
                 claudeInfo = claude
                 codexInfo = codex
+                agyInfo = agy
                 toolsChecked = true
             }
         }
@@ -183,8 +185,11 @@ struct SettingsView: View {
             Toggle(loc("자동 전환"), isOn: Binding(
                 get: { state.file.isAutoSwitchEnabled(provider) },
                 set: { state.setAutoSwitch($0, provider: provider) }))
-            Text(loc("한도가 차면 다음 계정으로 자동으로 이어집니다"))
+            Text(provider == .antigravity
+                 ? loc("쓰던 모델의 한도가 차면, 같은 모델에 여유가 확인된 다음 계정으로 옮깁니다. 켜면 agy 를 쓰는 동안 5분마다 사용량을 조회해요. 실행 중인 agy 세션은 다시 시작해야 새 계정이 적용돼요.")
+                 : loc("한도가 차면 다음 계정으로 자동으로 이어집니다"))
                 .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
         // '미리 전환'은 자동 전환의 하위 옵션(언제 전환하나: 100% vs 임계값) — Claude 전용,
         // 구 실험실에서 승격(2026-07-24, 키·기본값 불변 — 5분 폴링이 생기므로 여전히 옵트인).
@@ -239,11 +244,16 @@ struct SettingsView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.04)))
             if provider == .codex {
-                Text(loc("터미널에서 `codex logout` 후 `codex login`으로 추가할 계정에 로그인하면, Mobius가 몇 초 안에 자동으로 등록합니다."))
+                Text(locMarkdown("터미널에서 `codex logout` 후 `codex login`으로 추가할 계정에 로그인하면, Mobius가 몇 초 안에 자동으로 등록합니다."))
                     .font(.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 Text(loc("지금 쓰던 계정은 이미 카드에 저장돼 있어 카드를 눌러 언제든 되돌아올 수 있어요."))
                     .font(.caption).foregroundStyle(.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if provider == .antigravity {
+                Text(locMarkdown("터미널에서 `agy` 를 실행해 로그인하면 자동으로 등록돼요. 다른 계정을 더하려면 agy 에서 로그아웃한 뒤 그 계정으로 로그인하세요."))
+                    .font(.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
@@ -392,6 +402,13 @@ struct SettingsView: View {
                     // 동명의 "ChatGPT" 앱이 둘일 수 있어(구형 com.openai.chat) 번들 ID
                     // com.openai.codex(Codex 데스크톱)만 대상으로 감지한다.
                     toolRow("ChatGPT", path: chatGPTApp?.path, version: chatGPTApp?.version)
+                case .antigravity:
+                    VStack(alignment: .leading, spacing: 10) {
+                        toolRow("Antigravity CLI", path: agyInfo?.path, version: agyInfo?.version)
+                        Divider()
+                        poolControls(.antigravity)
+                    }
+                    .padding(.vertical, 2)
                 }
             }
             labsSection
@@ -619,6 +636,10 @@ struct SettingsView: View {
                 claudeLabs
             case .codex:
                 Text(loc("Codex용 실험 기능은 아직 없어요."))
+                    .font(.system(size: 11)).foregroundStyle(.secondary)
+                    .padding(.vertical, 4)
+            case .antigravity:
+                Text(loc("Antigravity용 실험 기능은 아직 없어요."))
                     .font(.system(size: 11)).foregroundStyle(.secondary)
                     .padding(.vertical, 4)
             }

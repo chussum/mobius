@@ -114,6 +114,15 @@ public struct ClaudeConfigIO: Sendable {
 
 extension ClaudeConfigIO: ProviderConfigIO {
     public var provider: Provider { .claude }
+    /// Claude 자격증명 blob 에는 계정 식별자가 없다 — 이메일은 `~/.claude.json` 으로 대조한다.
+    public func email(fromSecret data: Data) -> String? { nil }
+
+    /// 스냅샷에 함께 캡처한 oauthAccount 블록의 신원 — 토큰을 읽은 그 순간의 신원이다. 따로 읽은 열쇠
+    /// (`liveAccountKey`)와 다르면 두 읽기 사이에 로그인이 바뀐 것이다(병합 리뷰 Codex P1-2).
+    public func identity(fromSecret data: Data) -> ProviderIdentity? {
+        guard let snap = try? JSONDecoder().decode(CredentialsSnapshot.self, from: data) else { return nil }
+        return Self.identity(fromSnapshot: snap)
+    }
 
     public func readLiveSecretData() throws -> Data? {
         guard let snap = try readLiveSnapshot() else { return nil }

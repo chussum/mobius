@@ -7,6 +7,15 @@ public enum SwitcherError: Error, Equatable {
     /// 대상 프로필의 저장본이 다른 조직의 토큰과 그 프로필의 신원을 섞어 들고 있다(실패 기록 24).
     /// 설치하면 사용자가 고른 카드와 다른 조직으로 로그인되므로 전환하지 않는다 — 복구는 '다시 로그인'.
     case mixedSnapshot
+    /// 설치할 스냅샷 바이트의 이메일이 대상 프로필과 다르다 — 다른 계정의 값을 라이브에 쓰지
+    /// 않는다(설계 4.1).
+    case secretIdentityMismatch
+    /// 자동 전환의 기대 상태(활성 세대·라이브 지문·디스크 리비전·설정·출발 기록)가 라이브 쓰기
+    /// 직전에 달라졌다 — 전환을 취소했다(설계 4.7 「비동기 경합」).
+    case expectationChanged
+    /// 라이브 쓰기는 성공했지만 계정 목록 저장이 실패했다. 키체인은 그대로 두고 메모리 활성은
+    /// 이전 값이다 — 다음 reconcile 이 라이브를 따라 맞춘다(설계 4.5).
+    case liveWrittenButSaveFailed(String)
 }
 
 /// 소실됐던 provider를 secret 형태로 재도출해 되돌린 기록 (사용자 경고용).
@@ -70,16 +79,24 @@ public final class Switcher: @unchecked Sendable {
     @discardableResult
     public func healMisassignedProviders() throws -> [ProviderReassignment] {
         var fixed: [ProviderReassignment] = []
+        var firstError: Error?
+        // ★ 계정 하나의 실패가 나머지 계정의 복구를 멈추지 않게 한다(설계 4.6 오류 격리).
         for account in store.file.accounts {
             guard let claimedIO = ios[account.provider] else { continue }
             guard let data = try? store.secretData(for: account.id), !data.isEmpty else { continue }
             if claimedIO.recognizesSecret(data) { continue } // 형태 일치 — 정상 계정
             let matches = ios.filter { $0.key != account.provider && $0.value.recognizesSecret(data) }
             guard matches.count == 1, let actual = matches.first?.key else { continue }
-            try store.update(account.id) { $0.provider = actual }
+            do {
+                try store.update(account.id) { $0.provider = actual }
+            } catch {
+                if firstError == nil { firstError = error }
+                continue
+            }
             fixed.append(ProviderReassignment(id: account.id, nickname: account.nickname,
                                               from: account.provider, to: actual))
         }
+        if let firstError, fixed.isEmpty { throw firstError }
         // heal은 **provider만** 되돌린다 — 저장 secret이 provider의 authority이기 때문. 완전
         // 다운그레이드로 루트 activeByProvider까지 사라져 되돌린 풀의 active가 비어도 여기서는
         // 채우지 않는다: heal은 **라이브 identity를 모르므로**(저장 secret만 본다) 어떤 계정이
@@ -116,11 +133,7 @@ public final class Switcher: @unchecked Sendable {
                   let identity = ClaudeConfigIO.identity(fromSnapshot: snap),
                   !identity.organizationUuid.isEmpty
             else { continue }
-            try store.update(account.id) {
-                $0.organizationUuid = identity.organizationUuid
-                if !identity.organizationName.isEmpty { $0.organizationName = identity.organizationName }
-                if !identity.tierDescription.isEmpty { $0.tierDescription = identity.tierDescription }
-            }
+            try store.update(account.id) { $0.applyBackfilledIdentity(identity) }
             filled.append(account.id)
         }
         return filled
@@ -162,7 +175,7 @@ public final class Switcher: @unchecked Sendable {
     public func resaveLiveIntoMatchingProfile(provider: Provider) throws -> UUID? {
         guard let io = ios[provider],
               let live = try io.readLiveSecretData(),
-              let key = try io.liveAccountKey()
+              let key = try identityKey(of: live, io: io)
         else { return nil }
         if io.canStoreLiveSecret(live) {
             guard let profile = store.file.firstAccount(provider: provider, matching: key) else { return nil }
@@ -205,6 +218,27 @@ public final class Switcher: @unchecked Sendable {
             if io.liveToken(live, couldBelongTo: stored) { return nil }
         }
         return (activeID, repaired)
+    }
+
+    /// 저장·설치할 바이트의 계정 열쇠. 신원이 바이트 안에 있는 프로바이더(Codex·Antigravity)는
+    /// **바이트에서만** 이메일을 꺼낸다 — 값과 이메일을 따로 읽어 짝짓는 틈(실패 기록 1·2)이 생기지
+    /// 않게(설계 4.1). 이 프로바이더들에는 조직 개념이 없어 열쇠는 이메일뿐이다(`AccountKey` 기본값).
+    /// Claude 는 스냅샷에 함께 캡처한 oauthAccount 의 열쇠(이메일 + 조직)를 쓰고, 따로 읽은 열쇠
+    /// (`liveAccountKey`)와 같을 때만 돌려준다 — 바이트를 읽은 뒤 신원이 같은 이메일의 다른 조직으로 바뀌었으면
+    /// 이번에는 건너뛴다. 따로 읽은 열쇠만 쓰면 A 조직의 바이트를 B 프로필에 저장한다(병합 리뷰 Codex P1-2).
+    private func identityKey(of data: Data, io: any ProviderConfigIO) throws -> AccountKey? {
+        if let email = io.email(fromSecret: data) { return AccountKey(emailAddress: email) }
+        if io.identityIsInSecret { return nil }
+        guard let captured = io.identity(fromSecret: data)?.key,
+              try io.liveAccountKey() == captured else { return nil }
+        return captured
+    }
+
+    /// 저장할 바이트의 주인이 따로 읽은 열쇠와 같은가. 바이트에서 신원을 꺼낼 수 없으면, 신원이 바이트 안에
+    /// 있어야 하는 프로바이더(Codex·Antigravity)는 거부하고 Claude(oauthAccount 없는 옛 스냅샷)는 통과한다.
+    private func secret(_ data: Data, io: any ProviderConfigIO, belongsTo key: AccountKey) -> Bool {
+        guard let captured = io.identity(fromSecret: data)?.key else { return !io.identityIsInSecret }
+        return captured == key
     }
 
     /// 라이브 자격증명을 프로필 스냅샷으로 저장한다. refresh 토큰이 **다른 값으로 교체**됐으면
@@ -263,7 +297,8 @@ public final class Switcher: @unchecked Sendable {
         // 이메일은 같아도 조직이 달라, 이 프로필에 남의 조직 토큰을 저장하게 된다(파일 읽기 한 번).
         guard let (data, stableEmail) = await io.readStableLiveSecretData(),
               stableEmail == key.emailAddress,
-              (try? io.liveAccountKey()) == key else { return false }
+              (try? io.liveAccountKey()) == key,
+              secret(data, io: io, belongsTo: key) else { return false }
         // 토큰과 신원이 맞으면 그대로, 어긋났으면 토큰이 활성 프로필의 것으로 보일 때만 보정해 저장한다.
         // 둘 다 아니면(다른 조직 토큰, 로그인 없는 blob) 저장하지 않는다 — false는 "이번 사이클은 신선하지
         // 않다"는 뜻이라 호출자 계약과도 맞는다(실패 기록 24).
@@ -284,7 +319,17 @@ public final class Switcher: @unchecked Sendable {
         }
     }
 
-    public func switchTo(_ id: UUID) throws {
+    /// - Parameter expectation: 자동 전환이 넘기는 기대 상태 확인. 대상 스냅샷을 읽고 되저장한
+    ///   **뒤, 라이브 쓰기 바로 앞**에서 부르고 false 면 `expectationChanged` 로 취소한다(설계 4.7
+    ///   「비동기 경합」). 수동 전환은 지금처럼 nil 로 부른다.
+    /// - Parameter expectedLiveFingerprint: 자동 전환이 작업 시작 때 본 라이브 값의 지문. expectation 이
+    ///   있으면 어댑터가 쓰기 직전에 읽은 값도 이 지문과 같아야 쓴다(리뷰 1회차 Codex P1-3) — 확인과
+    ///   쓰기 사이에 끝난 새 agy 로그인을 덮지 않게.
+    public func switchTo(_ id: UUID, expectedLiveFingerprint: Data? = nil,
+                         expectation: ((AccountsFile) -> Bool)? = nil) throws {
+        // 계정 목록을 읽지 못해 저장이 막힌 동안은 라이브도 바꾸지 않는다 — 바꾼 뒤 활성을 저장하지
+        // 못하는 반쪽 전환이 된다(리뷰 2회차 Codex P1-1).
+        if store.loadFailure != nil { throw AccountStoreError.savesBlockedAfterLoadFailure }
         guard let profile = store.file.accounts.first(where: { $0.id == id }) else {
             throw SwitcherError.unknownAccount
         }
@@ -298,10 +343,60 @@ public final class Switcher: @unchecked Sendable {
         try store.withCredentialLock(id) {
             guard let target = try store.secretData(for: id) else { throw SwitcherError.noStoredSecret }
             guard !io.secretIsMixed(target) else { throw SwitcherError.mixedSnapshot }
+            // 설치할 바이트의 신원이 대상 프로필과 다르면 쓰지 않는다(설계 4.1·4.5). Claude 는 스냅샷에 캡처한
+            // oauthAccount 의 열쇠(이메일 + 조직)로 본다 — 다른 조직의 바이트가 저장돼 있으면 토큰과 신원이 서로 맞아
+            // `secretIsMixed` 를 통과하고, 설치하면 사용자가 고른 카드와 다른 조직으로 로그인된다(병합 리뷰 Codex P1-2).
+            if let byteKey = io.identity(fromSecret: target)?.key, !byteKey.matches(profile.key) {
+                throw SwitcherError.secretIdentityMismatch
+            }
+
+            guard io.rollsBackFailedSwitch else {
+                // Antigravity: 되저장 → 기대 상태 재확인 → 쓰기. **되돌리지 않는다**(설계 4.5).
+                try resaveLiveIntoMatchingProfile(provider: profile.provider)
+                if let expectation {
+                    // 기대 상태 + 대상이 디스크에 아직 같은 신원으로 등록돼 있는가. 되저장 뒤 한 번, 어댑터의
+                    // 마지막 읽기 **뒤** 실제 쓰기 바로 앞에서 한 번 더 본다(리뷰 2회차 Codex P1-3).
+                    // 디스크는 **한 번만** 읽어 그 사본 하나로 설정·리비전·출발 계정·대상 등록을 함께 본다 —
+                    // 두 번 읽으면 두 읽기 사이의 설정 변경을 뒤 읽기가 보고도 놓친다(리뷰 3회차 Codex P1-3).
+                    let stillValid = { [store] () -> Bool in
+                        guard let disk = store.peekDisk(), expectation(disk) else { return false }
+                        return disk.accounts.contains {
+                            $0.id == id && $0.provider == profile.provider
+                                && $0.emailAddress == profile.emailAddress
+                                && $0.organizationUuid == profile.organizationUuid
+                        }
+                    }
+                    guard stillValid() else { throw SwitcherError.expectationChanged }
+                    guard let guarded = io as? GuardedLiveWriting else {
+                        throw SwitcherError.expectationChanged
+                    }
+                    do {
+                        try guarded.writeLiveSecretData(target, ifLiveFingerprint: expectedLiveFingerprint,
+                                                        stillValid: stillValid)
+                    } catch AntigravityConfigError.liveChangedBeforeWrite {
+                        throw SwitcherError.expectationChanged
+                    }
+                } else {
+                    try io.writeLiveSecretData(target)
+                }
+                // 자기 쓰기로 바뀐 지문을 먼저 알려, 다음 대사가 이걸 "외부 변경"으로 다시 세지 않게.
+                if let fp = io as? LiveFingerprintReporting {
+                    store.noteLiveFingerprint(fp.liveFingerprint, provider: profile.provider)
+                }
+                do {
+                    try store.setActive(id)   // 실패하면 메모리 활성도 이전 값 그대로다
+                } catch {
+                    throw SwitcherError.liveWrittenButSaveFailed(String(describing: error))
+                }
+                return
+            }
 
             // 1. 라이브 최신 토큰 되저장 (CLI가 refresh했을 수 있으므로)
             let before = try io.readLiveSecretData()
             try resaveLiveIntoMatchingProfile(provider: profile.provider)
+            if let expectation, !(store.peekDisk().map(expectation) ?? false) {
+                throw SwitcherError.expectationChanged
+            }
 
             // 2. 대상 기록, 실패 시 롤백
             do {
@@ -319,14 +414,65 @@ public final class Switcher: @unchecked Sendable {
     /// 반환: 새로 흡수한 첫 프로필(있으면). 로그인 상태가 아니거나 이미 등록됐으면 nil.
     @discardableResult
     public func adoptLiveAccountIfUnregistered() async throws -> AccountProfile? {
-        var first: AccountProfile?
-        for (provider, io) in orderedIOs {
-            guard let adopted = try await adoptLiveAccount(provider: provider, io: io) else {
-                continue
-            }
-            if first == nil { first = adopted }
-        }
+        let (first, failed) = await adoptLiveAccountsIsolated()
+        if first == nil, let error = Self.firstError(failed) { throw error }
         return first
+    }
+
+    /// CLI 읽기 전용 명령(`list`·`status`)의 대사. **어느 풀도 저장하지 않고** 라이브 신원만 메모리의 활성
+    /// 값에 반영해 보여 준다.
+    /// - Antigravity: CLI 가 앱보다 먼저 라이브를 따라 저장하면, 앱 대사는 그 변경을 자기가 커밋한 것으로
+    ///   보지 못해 이전 세션의 되돌림(왕복)을 놓친다(리뷰 3회차 Claude P2-1).
+    /// - Claude·Codex: 대사의 저장은 CLI 가 시작할 때 읽은 목록 전체를 쓰므로, 그사이 다른 프로세스가 더한
+    ///   계정을 지운다(리뷰 4회차 Codex P1-1).
+    /// 라이브 추종 저장(토큰 흡수 포함)은 앱의 대사와 CLI 변경 명령이 한다.
+    public func reconcileForDisplay() async -> [Provider: any Error] {
+        reflectLiveActiveWithoutSaving()
+    }
+
+    /// 디스크에 쓰지 않고 라이브 신원을 메모리의 활성 값에 반영한다 — 구버전 저장 직후의 CLI
+    /// `list`·`status` 용(설계 4.4-4 「CLI 는 복원 결과를 보여 주기만 하고 저장하지 않는다」, 리뷰 1회차
+    /// Codex P2-3). 라이브 계정이 등록돼 있지 않거나 로그아웃 상태면 그 풀은 그대로 둔다.
+    public func reflectLiveActiveWithoutSaving(providers: Set<Provider>? = nil) -> [Provider: any Error] {
+        var failed: [Provider: any Error] = [:]
+        for (provider, io) in orderedIOs where providers?.contains(provider) ?? true {
+            do {
+                // 계정 열쇠(이메일 + 조직)로 고른다 — 같은 이메일의 다른 조직 프로필을 활성으로 보이지 않게
+                // (실패 기록 23). 모호하면(`firstAccount` 가 nil) 그 풀은 그대로 둔다.
+                guard let key = try io.liveAccountKey(),
+                      let profile = store.file.firstAccount(provider: provider, matching: key)
+                else { continue }
+                store.setActiveInMemoryOnly(profile.id, provider: provider)
+            } catch {
+                failed[provider] = error
+            }
+        }
+        return failed
+    }
+
+    /// 프로바이더별 오류 격리판(설계 4.6). 한 풀의 오류가 다음 풀의 adopt 를 멈추지 않는다.
+    /// 반환: 새로 흡수한 첫 프로필, 실패한 프로바이더와 그 오류.
+    /// - Parameter providers: 이 풀만 돈다(nil = 전부). 앱은 Antigravity 를 공통 틱과 분리된 작업에서
+    ///   따로 돌린다 — agy 키체인 시간 초과가 Claude·Codex 대사를 늦추지 않게(리뷰 1회차 Codex P2-1).
+    public func adoptLiveAccountsIsolated(providers: Set<Provider>? = nil)
+        async -> (AccountProfile?, [Provider: any Error]) {
+        var first: AccountProfile?
+        var failed: [Provider: any Error] = [:]
+        for (provider, io) in orderedIOs where providers?.contains(provider) ?? true {
+            do {
+                guard let adopted = try await adoptLiveAccount(provider: provider, io: io) else {
+                    continue
+                }
+                if first == nil { first = adopted }
+            } catch {
+                failed[provider] = error
+            }
+        }
+        return (first, failed)
+    }
+
+    private static func firstError(_ failed: [Provider: any Error]) -> (any Error)? {
+        failed.sorted { $0.key.rawValue < $1.key.rawValue }.first?.value
     }
 
     private func adoptLiveAccount(provider: Provider,
@@ -351,6 +497,8 @@ public final class Switcher: @unchecked Sendable {
             rememberRejectedLive(provider, io: io, live: live, fingerprint: fingerprint)
             return nil
         }
+        // **저장하는 바이트의 신원**과 다시 대조한다(설계 4.1, 병합 리뷰 Codex P1-2).
+        guard secret(live, io: io, belongsTo: key) else { return nil }
         guard let identity = try io.liveIdentity(), identity.key == key else { return nil }
         forgetDeferredLive(provider)
         let nickname = store.file.suggestedNickname(provider: provider, for: identity)
@@ -363,25 +511,71 @@ public final class Switcher: @unchecked Sendable {
     /// 외부(앱 밖) 재로그인 감지 시 상태 대사 (전 프로바이더): 라이브 계정 열쇠(이메일+조직)가
     /// 아는 프로필이면 그 프로필을 활성으로 표시하고 최신 토큰을 흡수한다.
     /// 모르는 계정(같은 이메일의 다른 조직 포함)이면 손대지 않는다 — adopt가 새 프로필로 흡수한다.
+    /// 한 풀이 실패해도 나머지 풀은 끝까지 돈 뒤, 첫 오류를 던진다(호환용 — 새 코드는
+    /// `reconcileIsolated` 로 실패한 풀을 받는다).
     public func reconcile() async throws {
-        for (provider, io) in orderedIOs {
-            try await reconcile(provider: provider, io: io)
-        }
+        if let error = Self.firstError(await reconcileIsolated()) { throw error }
     }
 
-    private func reconcile(provider: Provider, io: any ProviderConfigIO) async throws {
+    /// 프로바이더별 오류 격리판(설계 4.6). 반환: 실패한 프로바이더와 그 오류.
+    /// 앱은 그 틱에 실패한 풀의 엔진 onTick 과 자동 쓰기를 건너뛰고, CLI 는 오류 한 줄로 보인다.
+    @discardableResult
+    public func reconcileIsolated(providers: Set<Provider>? = nil) async -> [Provider: any Error] {
+        await reconcileIsolatedReportingFollowed(providers: providers).failed
+    }
+
+    /// `reconcileIsolated` 와 같고, **이 대사가 라이브를 따라 직접 커밋한** 활성 변경(풀 → 새 활성)을 함께
+    /// 돌려준다. 대사가 도는 사이 다른 경로(CLI 전환을 다시 읽은 앱, 자동 전환)가 바꾼 활성은 들어가지
+    /// 않는다 — 왕복 차단은 이 값으로만 판정한다(리뷰 2회차 Claude P3-1·Codex P2-2).
+    /// `filledEmpty` 는 그 가운데 **비어 있던** 활성을 채운 풀이다(구버전 저장 뒤 복원) — 외부 로그인
+    /// 알림에서 뺀다(리뷰 4회차 Codex P3·Claude P3-1).
+    public func reconcileIsolatedReportingFollowed(providers: Set<Provider>? = nil)
+        async -> (failed: [Provider: any Error], followed: [Provider: UUID], filledEmpty: Set<Provider>) {
+        var failed: [Provider: any Error] = [:]
+        var followed: [Provider: UUID] = [:]
+        var filledEmpty: Set<Provider> = []
+        for (provider, io) in orderedIOs where providers?.contains(provider) ?? true {
+            do {
+                if let (id, previous) = try await reconcile(provider: provider, io: io) {
+                    followed[provider] = id
+                    if previous == nil { filledEmpty.insert(provider) }
+                }
+            } catch {
+                failed[provider] = error
+            }
+            // 라이브 값의 지문이 바뀌면(같은 이메일 재로그인·로그아웃) 활성 세대를 늘린다(설계 4.7).
+            if let fp = io as? LiveFingerprintReporting {
+                store.noteLiveFingerprint(fp.liveFingerprint, provider: provider)
+            }
+        }
+        return (failed, followed, filledEmpty)
+    }
+
+    /// 반환: 라이브를 따라 이 대사가 활성 값을 실제로 바꿨으면 그 계정 ID 와 저장 직전의 활성 값.
+    @discardableResult
+    private func reconcile(provider: Provider,
+                           io: any ProviderConfigIO) async throws -> (id: UUID, previous: UUID?)? {
         // 열쇠(이메일+조직)는 승인창 없는 값싼 경로로 읽는다. 활성 계정이 그대로면 비밀 읽기
         // (Claude는 Keychain)를 아예 하지 않아 15초 주기 승인창 폭탄을 막는다.
         guard let key = try io.liveAccountKey(),
               let profile = store.file.firstAccount(provider: provider, matching: key)
-        else { return }
+        else { return nil }
+        // 변화 감지 중에 새로 읽은 값이 활성 프로필의 것이면 그 스냅샷으로 저장한다(네트워크 0) —
+        // 같은 이메일로 다시 로그인해 받은 새 refresh 토큰이 저장되지 않은 채 남지 않게(설계 4.2).
+        // 신원은 **그 바이트의 이메일**로 대조한다(이 경로는 신원이 바이트 안에 있는 Antigravity 만 쓴다).
+        if let reporter = io as? LiveValueChangeReporting, let changed = reporter.takeChangedLiveValue(),
+           store.file.activeByProvider[provider] == profile.id,
+           io.email(fromSecret: changed) == profile.emailAddress,
+           (try? store.secretData(for: profile.id)) != changed {
+            try saveLiveSecret(changed, for: profile.id)
+        }
         let activeUnchanged = store.file.activeByProvider[provider] == profile.id
         // 존재 확인은 stat으로 — 15초 주기 정상 경로에서 비밀 파일 전체를 읽지 않는다
         // (파일이 없을 때만 secretData가 레거시 Keychain 이관까지 시도).
         let alreadyHasSecret = FileManager.default
             .fileExists(atPath: env.secretFile(for: profile.id).path)
             || (try? store.secretData(for: profile.id)) != nil
-        if activeUnchanged && alreadyHasSecret { return } // 정상 상태 — 비밀 접근 없음
+        if activeUnchanged && alreadyHasSecret { return nil } // 정상 상태 — 비밀 접근 없음
 
         // ★ 직전에 저장을 거부한 라이브가 그대로면 비밀을 다시 읽지 않는다(리뷰 P2-1, 실패 기록 3·3b).
         //   거부되는 상태(예: 옛 토큰을 캐시한 세션의 bootstrap이 신원만 되돌림)는 새 claude 세션이 다시
@@ -392,28 +586,32 @@ public final class Switcher: @unchecked Sendable {
         //   "라이브 이메일이 활성과 같으면 조기 반환"으로 막지 않는다 — 같은 이메일의 다른 조직으로 앱 밖에서
         //   로그인한 경우를 reconcile이 따라가지 못하고, 5분 동기화도 종류가 다른 토큰은 보정하지 않는다.
         let fingerprint = try? io.liveIdentityFingerprint()
-        if let fingerprint, isDeferredLive(provider, fingerprint: fingerprint) { return }
+        if let fingerprint, isDeferredLive(provider, fingerprint: fingerprint) { return nil }
 
         // 실제 변화가 있을 때만(드묾) 비밀+이메일 두 번 읽어 일치 확인 후 저장. 열쇠를 한 번 더
         // 읽어 그 사이 같은 이메일의 다른 조직으로 바뀌지 않았는지도 확인한다(파일 읽기 한 번).
         guard let (live, stableEmail) = await io.readStableLiveSecretData(),
               stableEmail == key.emailAddress,
-              (try? io.liveAccountKey()) == key else { return }
+              (try? io.liveAccountKey()) == key else { return nil }
         // ★ 토큰과 신원이 어긋났으면 활성도 옮기지 않는다 — 열쇠가 가리키는 프로필이 실제 로그인이
         //   아니다. 이 경로가 "Max 토큰을 Team 프로필에 저장 + Team을 활성으로"를 만들던 자리다(실패 기록 24).
         //   불안정한 읽기(위 guard)는 로그인 도중의 일시적인 상태라 기억하지 않는다 — 거부만 기억한다.
         guard io.canStoreLiveSecret(live) else {
             rememberRejectedLive(provider, io: io, live: live, fingerprint: fingerprint)
-            return
+            return nil
         }
+        // **저장하는 바이트의 신원**과 다시 대조한다(설계 4.1, 병합 리뷰 Codex P1-2).
+        guard secret(live, io: io, belongsTo: key) else { return nil }
         forgetDeferredLive(provider)
         try saveLiveSecret(live, for: profile.id)
-        if !activeUnchanged {
-            try store.setActive(profile.id)
-            // 외부(사용자) 로그인으로 활성이 바뀐 것 — 자동 전환 상태가 아니므로
-            // 플래그를 내려 onTick의 primary 자동 복귀를 막는다 (앱·CLI 공통 경로).
-            try store.setAutoSwitchedFromPrimary(false, provider: provider)
-        }
+        guard !activeUnchanged else { return nil }
+        // 안정 읽기(0.7초) 사이에 다른 경로가 이미 활성을 바꿨을 수 있으므로, 이 저장이 실제로 바꿨는지는
+        // 저장 직전 값으로 판정한다.
+        let (changed, previous) = try store.setActiveReportingPrevious(profile.id)
+        // 외부(사용자) 로그인으로 활성이 바뀐 것 — 자동 전환 상태가 아니므로
+        // 플래그를 내려 onTick의 primary 자동 복귀를 막는다 (앱·CLI 공통 경로).
+        try store.setAutoSwitchedFromPrimary(false, provider: provider)
+        return changed ? (profile.id, previous) : nil
     }
 
     private func isDeferredLive(_ provider: Provider, fingerprint: Data) -> Bool {

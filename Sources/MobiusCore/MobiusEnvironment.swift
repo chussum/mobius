@@ -52,6 +52,12 @@ public struct MobiusEnvironment: Sendable {
     /// codex 세션 로그 루트 — rollout-*.jsonl에 rate_limits 이벤트가 in-band 포함된다.
     public var codexSessionsDir: URL { codexDir.appendingPathComponent("sessions") }
 
+    /// Antigravity CLI(agy) 상태 디렉터리. 자격증명은 여기가 아니라 로그인 키체인에 있다.
+    public var antigravityDir: URL { home.appendingPathComponent(".gemini/antigravity-cli") }
+    /// 사용자 입력 때만 쓰이는 기록 파일 — 수정 시각을 "최근에 agy 를 썼다"는 신호로 쓴다
+    /// (`cli.log` 는 유휴 상태에서도 주기적으로 쓰이므로 쓰지 않는다 — 설계 4.7 「폴링 조건」 2).
+    public var antigravityHistoryFile: URL { antigravityDir.appendingPathComponent("history.jsonl") }
+
     public static func live() -> MobiusEnvironment {
         let home: URL
         if let override = ProcessInfo.processInfo.environment["MOBIUS_HOME"] {

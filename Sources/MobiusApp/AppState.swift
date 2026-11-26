@@ -22,7 +22,7 @@ final class AppState: ObservableObject {
     @Published private(set) var usageBackoff = UsageRateLimitBackoff()
     // 수동 전환 낙관적 표시 — 클릭 즉시 이 계정을 활성으로 보여주고(스무스), 실제 refresh+스왑은
     // 백그라운드에서. 완료되면 nil로 정착(실제 activeAccountID가 인계).
-    @Published private(set) var pendingSwitchID: UUID?
+    @Published var pendingSwitchID: UUID?
     private var usageTask: Task<Void, Never>?
     // 비활성 codex 게이지 프로브 — 단일 플라이트 핸들 + 순수 조회기. 게이지 전용(마킹 없음).
     private var codexUsageTask: Task<Void, Never>?
@@ -47,7 +47,7 @@ final class AppState: ObservableObject {
     /// 마지막 성공 스냅샷 복원 — 비활성 계정은 저장 토큰이 만료되어(수 시간) 조회가 401로
     /// 실패할 수 있는데, 그때 빈 게이지 대신 마지막 값을 보여준다. 초기화 시각은 절대
     /// 시각이라 지나면 표기가 자연히 사라지고, 계정이 다시 활성화되면 값도 갱신된다.
-    private func loadUsageCacheIfNeeded() {
+    func loadUsageCacheIfNeeded() {
         guard !usageCacheLoaded else { return }
         usageCacheLoaded = true
         guard let data = UserDefaults.standard.data(forKey: Self.usageCacheKey),
@@ -56,7 +56,19 @@ final class AppState: ObservableObject {
         for (id, snap) in dict where usage[id] == nil { usage[id] = snap }
     }
 
-    private func saveUsageCache() {
+    /// 확장 파일(AppState+Antigravity)이 게시 상태를 바꾸는 좁은 통로 — `file`/`usage` 의
+    /// setter 는 이 파일 안으로 묶어 둔다.
+    func publishStoreFile() { file = store.file }
+    func setUsage(_ snapshot: UsageSnapshot, for id: UUID) { usage[id] = snapshot }
+    func clearUsage(for id: UUID) { usage[id] = nil; saveUsageCache() }
+
+    /// 메모리의 계정 목록이 디스크를 대표하는가 — 읽기 실패로 저장을 막은 동안(시작 실패면 빈 목록)은 아니다.
+    /// 메모리 목록을 기준으로 **무언가를 지우는** 정리(Desktop 스냅샷, 게이지 캐시)는 모두 이 판정 뒤에 둔다
+    /// (리뷰 3회차 Claude P1-1).
+    var memoryRepresentsDisk: Bool { store.loadFailure == nil }
+
+    func saveUsageCache() {
+        guard memoryRepresentsDisk else { return }
         let ids = Set(store.file.accounts.map(\.id))
         let pruned = usage.filter { ids.contains($0.key) }
         if let data = try? JSONEncoder().encode(pruned) {
@@ -64,7 +76,7 @@ final class AppState: ObservableObject {
         }
     }
     /// 게이지 캐시 유효 시간 — 팝오버를 자주 여닫아도 이 간격보다 잦게 조회하지 않는다
-    private let usageStaleness: TimeInterval = 240
+    let usageStaleness: TimeInterval = 240
 
     // MARK: 배지(인증 의심) — 무상태 세션활동×토큰만료 판정 (AuthSuspicion)
 
@@ -165,10 +177,46 @@ final class AppState: ObservableObject {
     let watcher: SessionLogWatcher<RateLimitHit>              // Claude 세션 로그
     let codexWatcher: SessionLogWatcher<CodexRateLimitStatus> // Codex 세션 로그
     let codexRouter = CodexStatusRouter() // 전환 전 세션 파일 격리 (계정 오귀속 방지)
-    let engines: [Provider: AutoSwitchEngine] = [
-        .claude: AutoSwitchEngine(provider: .claude),
-        .codex: AutoSwitchEngine(provider: .codex),
-    ]
+    /// ★ 모든 프로바이더가 있어야 한다 — 빠지면 `engines[provider]!` 가 틱마다 멈춘다(설계 4.8).
+    let engines: [Provider: AutoSwitchEngine] = Dictionary(uniqueKeysWithValues:
+        Provider.allCases.map { ($0, AutoSwitchEngine(provider: $0)) })
+
+    // MARK: Antigravity (설계 docs/design/antigravity-provider.md) — 전부 메모리 상태
+    let agyIO: AntigravityConfigIO
+    let agyMemory = AntigravityAutoSwitchMemory()
+    lazy var agyTokens = AntigravityTokenSource(
+        secretCandidates: { AntigravityInstallInfo.clientSecretCandidates() })
+    /// 자동 전환 작업(폴·후보 확인·전환) — 풀당 하나. 공통 틱은 기다리지 않는다.
+    var agyAutoTask: Task<Void, Never>?
+    /// 팝오버의 비활성 계정 게이지 조회.
+    var agyUsageTask: Task<Void, Never>?
+    /// Antigravity 풀의 15초 대사(adopt·reconcile) — 공통 틱이 기다리지 않는다(리뷰 1회차 Codex P2-1).
+    var agyReconcileTask: Task<Void, Never>?
+    /// 수동 전환 — 풀당 하나의 쓰기 체인. 연속 클릭은 앞 작업이 끝난 뒤 **마지막 요청만** 쓴다
+    /// (리뷰 1회차 Codex P1-4). 진행 중에는 자동 전환 작업을 시작하지 않는다.
+    var agyManualTask: Task<Void, Never>?
+    var agyManualSeq = 0
+    /// 작업 시작 확인(라이브 이메일 대조)이 실패한 뒤 자가복구를 다시 시도할 시각 — 실패할 때마다
+    /// 3초 틱마다 security 값 읽기를 되풀이하지 않게(리뷰 1회차 Claude P2-1).
+    var agyStartCheckRetryAt = Date.distantPast
+    /// accounts.json 읽기 실패 알림을 이미 보냈는가, 마지막 다시 읽기 시도 시각(리뷰 2회차 Codex P1-1).
+    var storeLoadFailureNotified = false
+    var lastStoreReloadAttempt = Date.distantPast
+    /// 마지막 대사에서 Antigravity 풀이 실패했는가 — 그동안 엔진 onTick 과 자동 쓰기를 건너뛴다(4.6).
+    var agyPoolFailed = false
+    /// 마지막 15초 대사(adopt·reconcile)가 실패한 풀 — 다음 대사가 성공할 때까지 그 풀의 엔진
+    /// onTick 을 건너뛴다(설계 4.6). 프로바이더별 오류 격리로 한 풀의 실패가 다른 풀을 멈추지 않는다.
+    var poolsFailedReconcile: Set<Provider> = []
+    var agyKnownGeneration = 0
+    /// 활성 Antigravity 계정이 활성이 된 시각. 재시작하면 지금으로 시작한다 — 재시작 전의
+    /// 기록으로는 떠나지 않는다(설계 4.7 「엔진 규칙」).
+    var agyActiveSince = Date()
+    var agyLastPollAt = Date.distantPast
+    var agyConsecutivePollFailures = 0
+    /// invalid_grant 계정의 긴 백오프(게이지 전용 — needsReauth·엔진은 건드리지 않는다).
+    var agyDeadUntil: [UUID: Date] = [:]
+    var agyLastFetchAttempt: [UUID: Date] = [:]
+    var agyLoggedUnknownFraction = false
     lazy var desktopSwitcher = DesktopSwitcher(env: env)
     lazy var desktopCoordinator = DesktopCoordinator(switcher: desktopSwitcher)
     private var timer: Timer?
@@ -242,14 +290,17 @@ final class AppState: ObservableObject {
         do {
             store = try AccountStore(env: env, keychain: kc)
         } catch {
-            store = AccountStore(env: env, keychain: kc, file: AccountsFile())
+            // 빈 스토어로 시작하되 **저장을 막는다** — 첫 틱의 자동 등록이 빈 목록으로 기존 파일을 덮지
+            // 않게(리뷰 2회차 Codex P1-1, 실패 기록 13). 다시 읽기에 성공하면 풀린다(tick 이 재시도).
+            store = AccountStore(env: env, keychain: kc, afterLoadFailure: error)
             initError = loc("계정 목록 로드 실패: %@", error.localizedDescription)
         }
         self.store = store
         self.io = ClaudeConfigIO(env: env, keychain: kc)
         self.codexIO = CodexConfigIO(env: env)
+        self.agyIO = AntigravityConfigIO()
         self.switcher = Switcher(env: env, keychain: kc, store: store, io: io,
-                                 extraIOs: [codexIO])
+                                 extraIOs: [codexIO, agyIO])
         self.watcher = SessionLogWatcher(env: env)
         self.codexWatcher = SessionLogWatcher.codex(env: env)
         // 구버전 바이너리가 accounts.json을 저장하며 per-account provider를 드롭했다면 Codex 계정이
@@ -793,11 +844,17 @@ final class AppState: ObservableObject {
     }
 
     func reload() {
-        // AccountStore는 자기 인스턴스 상태를 유지하므로 디스크에서 재로드
-        if let fresh = try? AccountStore(env: env, keychain: SystemKeychain()) {
-            try? store.replaceFile(with: fresh.file)
-        }
+        // AccountStore는 자기 인스턴스 상태를 유지하므로 디스크에서 재로드.
+        // ★ 구버전 저장 뒤 복원 함수를 지나는 같은 경로다(설계 4.4-4, 5회차 P2-2) — 앱이 떠 있는
+        //   동안에는 메모리의 Antigravity 프로필 순서를 쓴다.
+        let wasBlocked = store.loadFailure != nil
+        try? store.reloadFromDisk()
+        if wasBlocked && store.loadFailure == nil { repairAfterRecoveredLoad() }
         file = store.file
+        // ★ 메모리가 디스크를 대표하지 않으면(읽기 실패로 저장을 막은 상태 — 시작 실패면 빈 목록이다)
+        //   메모리를 기준으로 무엇도 지우지 않는다. 빈 목록 기준 정리는 계정마다의 Desktop 스냅샷을 모두
+        //   지운다(리뷰 3회차 Claude P1-1, 실패 기록 13 의 "빈 폴백을 진실로 삼는 정리").
+        guard memoryRepresentsDisk else { return }
         // 플래그(hasDesktopSnapshot)를 진실의 원천으로 삼아 스냅샷 디렉토리를 정리 —
         // 실패한 캡처의 잔재 dir이 유효 스냅샷으로 오인돼 잘못 복원되는 것을 막는다.
         let flagged = Set(store.file.accounts.filter { $0.hasDesktopSnapshot }.map { $0.id })
@@ -860,6 +917,9 @@ final class AppState: ObservableObject {
         // Desktop 가이드 캡처 중에도 동일 — 자동 전환이 Desktop을 재실행하면
         // 사용자가 로그인 중인 창을 죽이고 감시 신호를 오염시킨다.
         guard loginFlow == nil, desktopCapture == nil else { return }
+        // accounts.json 을 읽지 못한 동안은 대사·자동 등록·자동 전환을 하지 않는다 — 저장이 막혀 있어
+        // 라이브만 바꾸고 기록하지 못하는 반쪽 전환이 생긴다. 15초마다 다시 읽어 본다.
+        guard storeLoadIsHealthy(now: now) else { return }
         // 배지 값싼 절반 — 가드 바로 아래(IO 0). 라이브 재검증은 5분 블록에서만.
         recomputeBadgeCheap(now: now)
         // reconcile/adopt는 15초마다만 — 3초 틱에 매번 돌리면 Keychain 접근이 잦아진다.
@@ -868,18 +928,17 @@ final class AppState: ObservableObject {
         if now.timeIntervalSince(lastReconcileAt) >= Self.reconcileInterval {
             lastReconcileAt = now
             let activeBefore = store.file.activeByProvider
-            _ = try? await switcher.adoptLiveAccountIfUnregistered()
-            try? await switcher.reconcile()
-            // 외부 요인(재로그인, 또는 구 세션의 토큰 리프레시가 자격증명 파일을 되돌리는
-            // 클로버 — Codex 실측)으로 활성이 바뀌면 조용히 넘어가지 않고 알린다.
-            for provider in Provider.allCases {
-                let after = store.file.activeByProvider[provider]
-                guard activeBefore[provider] != after, activeBefore[provider] != nil,
-                      let name = store.file.accounts.first(where: { $0.id == after })?.nickname
-                else { continue }
-                notify(title: loc("%@ 활성 계정이 밖에서 바뀌었어요", provider.displayName),
-                       body: loc("외부 로그인 또는 실행 중 세션의 갱신으로 활성 계정이 %@(으)로 바뀌었습니다. 카드를 눌러 되돌릴 수 있어요.", name))
-            }
+            // ★ 프로바이더별 오류 격리(설계 4.6) — agy 키체인 오류 하나가 Claude·Codex 대사를
+            //   멈추지 않는다. 실패한 풀은 이번 틱의 엔진 onTick 과 자동 쓰기를 건너뛴다.
+            //   Antigravity 는 공통 틱이 기다리지 않는 별도 작업에서 대사한다 — security 5초 제한이
+            //   걸려도 Claude·Codex 의 처리 주기를 늦추지 않게(리뷰 1회차 Codex P2-1).
+            let shared: Set<Provider> = [.claude, .codex]
+            let (_, adoptFailed) = await switcher.adoptLiveAccountsIsolated(providers: shared)
+            let reconcileFailed = await switcher.reconcileIsolated(providers: shared)
+            poolsFailedReconcile = Set(adoptFailed.keys).union(reconcileFailed.keys)
+                .union(agyPoolFailed ? [.antigravity] : [])
+            notifyExternalActiveChanges(before: activeBefore, providers: shared)
+            startAgyReconcile(now: now)
         }
         // 활성 계정 스냅샷을 5분마다 라이브(갱신된 토큰)와 동기화 — 오래 쓰다 크래시해도
         // 스냅샷이 낡지 않게. reconcile은 활성 불변 시 되저장을 건너뛰므로 이 보강이 그 틈을 메운다.
@@ -988,9 +1047,17 @@ final class AppState: ObservableObject {
         await processCodexBatches(codexBatches, now: now)
 
         for provider in Provider.allCases {
-            await apply(engines[provider]!.onTick(file: store.file, now: now,
-                                                  modelBlocked: modelBlockedByUsage(provider, now: now)),
-                        provider: provider, now: now)
+            switch provider {
+            case .claude, .codex:
+                // 마지막 대사가 실패한 풀은 오래된 활성 표시로 판단하지 않는다(설계 4.6).
+                guard !poolsFailedReconcile.contains(provider) else { continue }
+                await apply(engines[provider]!.onTick(file: store.file, now: now,
+                                                      modelBlocked: modelBlockedByUsage(provider, now: now)),
+                            provider: provider, now: now)
+            case .antigravity:
+                // 조회·후보 확인·키체인 쓰기는 공통 틱이 기다리지 않는 별도 작업에서 한다(설계 4.7).
+                agyTick(now: now)
+            }
         }
         file = store.file
     }
@@ -1013,6 +1080,70 @@ final class AppState: ObservableObject {
         return Set(store.file.accounts(of: .claude).compactMap { p in
             usage[p.id]?.modelWindowBlocked(now: now) == true ? p.id : nil
         })
+    }
+
+    /// 시작 때 읽기에 실패하면 heal·backfill·등급 갱신이 빈 목록에서 끝난다. 다시 읽기에 성공한 직후, 라이브 저장
+    /// (대사·스냅샷 동기화·adopt)을 재개하기 전에 한 번 더 돌린다 — 조직을 모르는 프로필이 남으면 같은 이메일의 다른
+    /// 조직 로그인이 이메일 폴백으로 그 프로필을 덮는다(실패 기록 23, 병합 리뷰 Codex P1-1). 구버전이 저장한 파일의
+    /// 조직은 스토어의 복원 함수(`restoringAfterLegacySave`)가 다시 읽을 때마다 이미 채운다.
+    private func repairAfterRecoveredLoad() {
+        if let reassigned = try? switcher.healMisassignedProviders(), !reassigned.isEmpty {
+            let names = reassigned
+                .map { "\($0.nickname) (\($0.from.displayName)→\($0.to.displayName))" }
+                .joined(separator: ", ")
+            lastError = loc("구버전이 저장한 계정 목록에서 프로바이더 정보가 소실돼 복구했습니다: %@", names)
+        }
+        _ = try? switcher.backfillOrganizationUUIDs()
+        _ = try? switcher.refreshTierLabels()
+    }
+
+    /// accounts.json 읽기 실패(파일은 있다)로 저장이 막혀 있으면 15초마다 다시 읽어 보고, 처음 한 번
+    /// 사용자에게 알린다. 다시 읽기에 성공하면 true(리뷰 2회차 Codex P1-1).
+    func storeLoadIsHealthy(now: Date) -> Bool {
+        guard store.loadFailure != nil else { storeLoadFailureNotified = false; return true }
+        if now.timeIntervalSince(lastStoreReloadAttempt) >= Self.reconcileInterval {
+            lastStoreReloadAttempt = now
+            if (try? store.reloadFromDisk()) != nil {
+                storeLoadFailureNotified = false
+                if lastError?.hasPrefix(loc("계정 목록 로드 실패: %@", "")) == true { lastError = nil }
+                repairAfterRecoveredLoad()
+                publishStoreFile()
+                return true
+            }
+        }
+        if !storeLoadFailureNotified {
+            storeLoadFailureNotified = true
+            let detail = store.loadFailure.map { String(describing: $0) } ?? ""
+            lastError = loc("계정 목록 로드 실패: %@", detail)
+            // 종류에 따라 빠져나갈 길을 다르게 알린다(리뷰 3회차 Claude P3-2).
+            switch store.loadFailureKind {
+            case .corrupt(let backup?):
+                notify(title: loc("계정 목록 파일을 해석하지 못했어요"),
+                       body: loc("accounts.json 이 손상됐거나 더 새 버전의 형식이라 계정 목록 저장과 자동 전환을 멈췄어요. 원본은 %@ 에 백업했어요. 더 새 버전의 Mobius 로 업데이트하거나, accounts.json 을 지우면(계정 목록이 비고 다시 등록해야 해요) 이어서 동작해요.",
+                                 backup.path))
+            case .corrupt(nil):
+                // 백업을 쓰지 못했으면 원본이 유일한 사본이다 — 지우라고 안내하지 않는다(리뷰 4회차 Codex P2).
+                notify(title: loc("계정 목록 파일을 해석하지 못했어요"),
+                       body: loc("accounts.json 이 손상됐거나 더 새 버전의 형식이라 계정 목록 저장과 자동 전환을 멈췄어요. 원본을 백업하지 못했으니 accounts.json 을 지우지 말고, 디스크 공간과 권한을 확인한 뒤 더 새 버전의 Mobius 로 업데이트해 주세요."))
+            default:
+                notify(title: loc("계정 목록을 읽지 못했어요"),
+                       body: loc("accounts.json 을 읽지 못해 계정 목록 저장과 자동 전환을 멈췄어요. 파일 권한을 확인해 주세요. 다시 읽히면 자동으로 이어서 동작해요."))
+            }
+        }
+        return false
+    }
+
+    /// 외부 요인(재로그인, 또는 구 세션의 토큰 리프레시가 자격증명 파일을 되돌리는
+    /// 클로버 — Codex 실측)으로 활성이 바뀌면 조용히 넘어가지 않고 알린다.
+    func notifyExternalActiveChanges(before activeBefore: [Provider: UUID], providers: Set<Provider>) {
+        for provider in Provider.allCases where providers.contains(provider) {
+            let after = store.file.activeByProvider[provider]
+            guard activeBefore[provider] != after, activeBefore[provider] != nil,
+                  let name = store.file.accounts.first(where: { $0.id == after })?.nickname
+            else { continue }
+            notify(title: loc("%@ 활성 계정이 밖에서 바뀌었어요", provider.displayName),
+                   body: loc("외부 로그인 또는 실행 중 세션의 갱신으로 활성 계정이 %@(으)로 바뀌었습니다. 카드를 눌러 되돌릴 수 있어요.", name))
+        }
     }
 
     private func recordHit(_ hit: RateLimitHit, on accountID: UUID?, now: Date) {
@@ -1494,7 +1625,7 @@ final class AppState: ObservableObject {
         return nil
     }
 
-    private func apply(_ decision: Decision, provider: Provider, now: Date) async {
+    func apply(_ decision: Decision, provider: Provider, now: Date) async {
         switch decision {
         case .none: break
         case .allExhausted:
@@ -1519,6 +1650,13 @@ final class AppState: ObservableObject {
             notify(title: loc("모델 한도 — 자동 전환이 꺼져 있습니다"),
                    body: loc("%@ 계정에서 이 모델만 한도에 걸렸어요. 계정은 다른 모델로 계속 쓸 수 있어요.", name))
         case let .switchTo(id, reason):
+            // Antigravity 전환은 후보 확인·기대 상태 재확인을 거치는 전용 경로(agyHandleDecision)만
+            // 쓴다 — 여기로 오면 그 확인 없이 쓰게 되므로 막는다.
+            guard provider != .antigravity else { return }
+            // 마지막 대사가 실패한 풀은 오래된 활성 표시로 자동 쓰기를 하지 않는다(설계 4.6) —
+            // onTick 뿐 아니라 로그 hit·임계값 이벤트가 바로 들어오는 이 공통 진입점에서도 막는다
+            // (리뷰 1회차 Codex P2-2).
+            guard !poolsFailedReconcile.contains(provider) else { return }
             // 전환 직전 검증(Claude 전용): 자동 폴백(activeExhausted)이나 임계값 선제
             // 전환(thresholdAdvisory)으로 넘어가기 전에 대상 계정을 실제 OAuth refresh로
             // 확인한다. 죽었으면 취소(마킹됨) → 다음 틱에 엔진이 다음 폴백을 고른다.
@@ -1561,6 +1699,7 @@ final class AppState: ObservableObject {
                 switch provider {
                 case .claude: sessionNote = loc("실행 중인 세션도 다음 입력부터 새 계정으로 이어져요.")
                 case .codex: sessionNote = loc("실행 중인 codex 세션은 종료해야 새 계정이 적용돼요.")
+                case .antigravity: sessionNote = loc("실행 중인 agy 세션은 다시 시작해야 새 계정이 적용돼요.")
                 }
                 switch reason {
                 case .primaryRecovered:
@@ -1595,6 +1734,7 @@ final class AppState: ObservableObject {
 
     func manualSwitch(to id: UUID) {
         guard let provider = store.file.accounts.first(where: { $0.id == id })?.provider else { return }
+        if provider == .antigravity { manualSwitchAntigravity(to: id); return }
         let alreadyFlagged = store.file.accounts.first { $0.id == id }?.needsReauth ?? false
         // Codex는 OAuth refresh 검증 경로가 없고, 이미 재로그인 필요로 마킹된 계정은 사용자가
         // 의도적으로 고른 것이므로 — 두 경우 모두 preflight 없이 바로 전환한다.
@@ -1760,7 +1900,15 @@ final class AppState: ObservableObject {
     }
 
     func removeAccount(_ id: UUID) {
-        try? store.remove(id)
+        // 삭제가 저장된 뒤에만 Desktop 스냅샷을 지운다 — 저장이 막혀(읽기 실패) 계정이 남았는데 스냅샷만
+        // 지우면, 카드는 남고 그 계정의 Desktop 로그인은 되살릴 수 없다(리뷰 4회차 Codex P2).
+        do {
+            try store.remove(id)
+        } catch {
+            lastError = loc("삭제 실패: %@", String(describing: error))
+            reload()
+            return
+        }
         desktopSwitcher.deleteSnapshot(for: id) // 고아 Desktop 스냅샷 정리
         MobiusNotification.postAccountsChanged()
         reload()
@@ -1943,7 +2091,7 @@ final class AppState: ObservableObject {
         }
     }
 
-    private func notify(title: String, body: String) {
+    func notify(title: String, body: String) {
         let content = UNMutableNotificationContent()
         content.title = title
         content.body = body

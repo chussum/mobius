@@ -79,7 +79,11 @@ final class ProviderPoolTests: XCTestCase {
         // 계정이 섞인 순서로 들어와도 Provider.allCases 순서를 따른다 —
         // 탭 순서가 계정 추가 순서에 따라 흔들리면 안 된다
         XCTAssertEqual(AccountsFile(accounts: [profile("x1", .codex), profile("c1", .claude)])
-            .providersWithAccounts, Provider.allCases)
+            .providersWithAccounts, [.claude, .codex])
+        // Antigravity 는 선언 순서상 마지막 탭이다(계정 추가 순서와 무관).
+        XCTAssertEqual(AccountsFile(accounts: [profile("a1", .antigravity), profile("x1", .codex),
+                                               profile("c1", .claude)])
+            .providersWithAccounts, [.claude, .codex, .antigravity])
     }
 
     // MARK: AccountStore — (provider, email) 매칭과 풀별 상태

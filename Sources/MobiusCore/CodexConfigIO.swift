@@ -25,6 +25,8 @@ public struct CodexConfigIO: ProviderConfigIO {
     public init(env: MobiusEnvironment) { self.env = env }
 
     public var provider: Provider { .codex }
+    public var identityIsInSecret: Bool { true }
+    public func email(fromSecret data: Data) -> String? { Self.email(fromAuthJSON: data) }
 
     /// 파일에 내용이 있으면 신원 유무와 무관하게 바이트를 돌려준다 — 전환 실패 시
     /// 롤백은 신원 없는 상태(API 키 전용 등)도 원복해야 하기 때문. 계정 식별이 필요한
@@ -40,8 +42,15 @@ public struct CodexConfigIO: ProviderConfigIO {
     }
 
     public func liveIdentity() throws -> ProviderIdentity? {
-        guard let data = try? Data(contentsOf: env.codexAuthFile),
-              let payload = Self.idTokenPayload(fromAuthJSON: data),
+        guard let data = try? Data(contentsOf: env.codexAuthFile) else { return nil }
+        return Self.identity(fromAuthJSON: data)
+    }
+
+    /// 저장할 바이트의 신원 — 읽은 바이트와 신원을 따로 읽어 짝짓지 않는다(병합 리뷰 Codex P1-3).
+    public func identity(fromSecret data: Data) -> ProviderIdentity? { Self.identity(fromAuthJSON: data) }
+
+    static func identity(fromAuthJSON data: Data) -> ProviderIdentity? {
+        guard let payload = idTokenPayload(fromAuthJSON: data),
               let email = payload["email"] as? String else { return nil }
         let auth = payload["https://api.openai.com/auth"] as? [String: Any]
         let plan = (auth?["chatgpt_plan_type"] as? String) ?? ""

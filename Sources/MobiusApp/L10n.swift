@@ -49,6 +49,16 @@ func loc(_ key: String) -> String {
     return b.localizedString(forKey: key, value: key, table: nil)
 }
 
+/// 인라인 마크다운(`코드` 등)을 해석한 번역 문자열 — 명령어 안내처럼 백틱을 쓰는 문구용.
+/// `Text(String)` 은 마크다운을 해석하지 않아 백틱이 글자 그대로 보인다(E2E 2026-11-20).
+/// 해석에 실패하면 원문을 그대로 쓴다.
+func locMarkdown(_ key: String) -> AttributedString {
+    let text = loc(key)
+    let options = AttributedString.MarkdownParsingOptions(
+        interpretedSyntax: .inlineOnlyPreservingWhitespace)
+    return (try? AttributedString(markdown: text, options: options)) ?? AttributedString(text)
+}
+
 /// 포맷 인자 버전 — 키는 %@/%d 포함 한국어 포맷 문자열.
 func loc(_ key: String, _ args: CVarArg...) -> String {
     String(format: loc(key), arguments: args)

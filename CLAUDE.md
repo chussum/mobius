@@ -1,9 +1,10 @@
 # Mobius (뫼비우스) — Claude·Codex 계정 매니저
 
-Claude Code CLI + Claude Desktop + OpenAI Codex CLI 계정을 전환/자동 전환 하는
+Claude Code CLI + Claude Desktop + OpenAI Codex CLI + Antigravity CLI(`agy`) 계정을 전환/자동 전환 하는
 macOS 메뉴바 앱 + `mobius` CLI. Swift Package (SwiftUI, macOS 14+).
-프로바이더(claude/codex)별 독립 풀 — 각 풀에서 primary 소진 → fallback 자동 전환 →
-primary 회복 시 자동 복귀. 사용자 노출 용어는 '자동 전환'(구 '자동 fallback').
+프로바이더(claude/codex/antigravity)별 독립 풀 — 각 풀에서 primary 소진 → fallback 자동 전환 →
+primary 회복 시 자동 복귀(Antigravity 는 규칙이 다르다 — 아래 'Antigravity'). 사용자 노출 용어는
+'자동 전환'(구 '자동 fallback').
 
 > **이 파일은 항상 최신 상태로 유지한다.** 구조·핵심 사실·실패 기록이 바뀌면 같은 커밋에서 갱신할 것.
 
@@ -45,8 +46,14 @@ Sources/MobiusCore/       앱·CLI 공유 코어 (전부 의존성 주입 → �
   PendingHitTrigger.swift  판정 못 한 창 소진 트리거와 그 갱신 규칙 (hit 신뢰 판정은 도착 순간 한 번)
   SyncEngine.swift         멀티 Mac 동기화 (클라우드 폴더 미러, ★ 아래 '동기화 원칙')
   UpdateChecker.swift      GitHub 릴리스 업데이트 확인 (하루 1회)
+  JSONValue.swift          accounts.json 의 모르는 provider 항목·맵 키를 원본 그대로 보존(다운그레이드 호환)
+  CLIKeychain.swift        security CLI 전용 키체인 클라이언트(5초 제한, 네이티브 폴백 없음) — agy 전용
+  AntigravityCredential.swift  agy 키체인 값 형태 검증·이메일·지문, RFC3339 해석
+  AntigravityConfigIO.swift    agy 어댑터 — mdat 변화 감지, "모름" 상태, 되돌리지 않는 쓰기
+  AntigravityUsage.swift       fetchAvailableModels 조회·버킷 게이지, 설치 바이너리 읽기, 메모리 전용 토큰 갱신
+  AntigravityExhaustion.swift  자동 전환 판정(같은 세대 전이·집합 M)·후보 확인·기대 상태·메모리
 Sources/mobius/           CLI (list/switch/status/capture/auto)
-Sources/MobiusApp/        SwiftUI 메뉴바 앱 + AppState + Views/ + LoginFlow + DesktopCoordinator
+Sources/MobiusApp/        SwiftUI 메뉴바 앱 + AppState(+Antigravity) + Views/ + LoginFlow + DesktopCoordinator
 ```
 
 ## 핵심 사실 (실측으로 확인 — 추측 금지)
@@ -240,10 +247,153 @@ Sources/MobiusApp/        SwiftUI 메뉴바 앱 + AppState + Views/ + LoginFlow 
   HTTP 창은 락이 아니라 **AppState 게이트**(비활성 게이지 refresh 시 활성 계정 fresh-read
   제외 + 전환 진입 시 codexUsageTask 정지·완료대기)로 닫는다.
 
+### Antigravity CLI(`agy`) — 실측 agy 1.5.12 (2026-11-19), 설계 `docs/design/antigravity-provider.md`
+- **자격증명은 로그인 키체인 generic password 하나**(서비스 `gemini`, 계정 `antigravity`, zalando/go-keyring 이
+  `/usr/bin/security` 로 읽고 쓴다). 값 = `go-keyring-base64:` + base64(JSON `{token{access_token,token_type,
+  refresh_token,expiry(RFC3339, 소수부 6자리 실측),expires_in},auth_method:"consumer",id_token_email}`).
+  **신원은 값 안에만 있다** — 이메일 평문 파일 없음. secret data = 키체인 값 바이트 그대로.
+- **형태 검증은 실측 형태만**(`AntigravitySecret.parse`) — 저장·조회·설치가 같은 함수. 신원은 **바이트에서만**
+  꺼낸다(`ProviderConfigIO.email(fromSecret:)`, Codex 도 같다). 따로 읽은 이메일과 짝짓지 않는다(실패 기록 1·2).
+  계정 열쇠(`AccountKey`, 실패 기록 23)와의 관계: 되저장의 열쇠는 `Switcher.identityKey` 가 정한다 — 신원이 바이트 안에
+  있는 Codex·Antigravity 는 **바이트 이메일**이 열쇠다(조직 개념이 없어 `organizationUuid` 는 ""), Claude 는
+  스냅샷에 함께 캡처한 oauthAccount 의 열쇠(`identity(fromSecret:)`, 이메일 + 조직)이고 따로 읽은 `liveAccountKey` 와
+  같을 때만 쓴다. adopt·reconcile·5분 동기화도 열쇠로 프로필을 고른 뒤, **저장할 바이트의 신원**이 그 열쇠와 같은지 한 번
+  더 본다. 따로 읽은 열쇠만 쓰면 바이트를 읽은 뒤 같은 이메일의 다른 조직으로 바뀐 순간 A 조직의 바이트를 B 프로필에
+  저장한다. 전환도 설치할 바이트의 열쇠가 대상 프로필과 맞지 않으면 `secretIdentityMismatch` 로 거부하고, CLI
+  `capture --provider codex` 는 저장할 바이트에서 신원을 꺼낸다(병합 리뷰 Codex P1-2·P1-3, upstream 에서 이어진 결함).
+  CLI 읽기 전용 대사(`reflectLiveActiveWithoutSaving`)도 열쇠로 고른다(이메일만 보면 같은 이메일의 다른 조직 카드를 활성으로 보인다).
+  이 표시는 **신원(oauthAccount) 기준**이다 — Keychain 을 읽지 않으므로 토큰과 신원이 어긋난 라이브(실패 기록 24 의
+  "신원만 옛 조직으로 되돌려진" 상태)에서는 토큰의 조직이 아니라 신원 쪽 카드를 활성으로 보인다. 저장하지 않으므로
+  데이터는 바뀌지 않는다(병합 리뷰 Codex P2-1·Claude P3-2, 고치지 않고 기록).
+- **agy 항목의 값 읽기·쓰기는 `CLIKeychain` 만**: security CLI, 5초 제한, 네이티브 폴백 없음(`SystemKeychain` 은
+  CLI 실패 시 SecItemUpdate 로 떨어져 파티션을 재도장한다 — 실패 기록 12). 쓰기는 `-i` 표준 입력만, 4,096B
+  한 줄 가드. **쓰기가 실패하거나 시간을 넘기면 "모름"** — 값을 읽어 확인할 때까지(1분→5분→15분) 쓰기·자동 전환을
+  멈추고 카드에 "계정 상태 확인 중". 삭제는 하지 않는다. 이 확인 일정은 **`readLiveSecretData` 하나에서** 지킨다 —
+  변화 감지뿐 아니라 수동 전환의 되저장, 팝오버·자동 전환의 작업 시작 확인도 예정 시각 전에는 읽지 않는다.
+  쓰기 실패 **전에** 시작한 읽기는 끝나도 "모름"을 풀지 않는다(쓰기 실패 횟수로 가려낸다 — 분리된 대사와 자동 전환이
+  동시에 돌 수 있다). 그런 늦은 읽기는 재시도 일정(`unknownAttempts`·`unknownNextCheck`)도 바꾸지 않는다 — 새 쓰기
+  실패의 일정(1분 뒤 첫 확인)이 기준이다.
+- **틱마다 값을 읽지 않는다**: `liveEmail()` 은 속성(mdat, 1초 해상도)만 보고 바뀌었을 때만 값을 읽는다(실패 기록 3).
+  키체인 잠김은 "변화 없음". 같은 mdat 의 읽기 실패는 5분 백오프.
+- **전환은 되돌리지 않는다**(Claude·Codex 롤백은 그대로): CLI 로는 비교와 되돌리기를 원자적으로 묶을 수 없어
+  되돌리는 사이 끝난 새 agy 로그인을 덮는다. 자동 전환의 쓰기는 `GuardedLiveWriting` — 어댑터가 쓰기 직전에 읽은
+  값의 지문이 작업 시작 때 본 지문과 같고, 그 읽기 **뒤에** 기대 상태(설정·활성 리비전 등)와 대상 등록을 디스크에서 다시
+  확인해 통과할 때만 쓴다(형식만 보면 확인 뒤에 끝난 로그인을 덮고, 마지막 읽기가 걸리는 동안 끈 자동 전환·지운 대상도
+  설치한다). 마지막 확인은 디스크를 **한 번만** 읽어 그 사본으로 설정·리비전·출발 계정·대상 등록을 함께 본다
+  (`switchTo` 의 기대 상태 클로저는 그 사본을 받는다 — 두 번 읽으면 두 읽기 사이의 변경을 뒤 읽기가 보고도 놓친다).
+  그 확인과 `security` 쓰기 사이의 창은 CLI 로는 없앨 수 없다. 수동 전환은 풀당
+  쓰기 체인 하나(`agyManualTask`) — 연속 클릭은 앞 작업이 끝난 뒤 마지막 요청만 쓴다. 키체인 쓰기 성공 + 저장 실패면 `liveWrittenButSaveFailed`, 다음
+  reconcile 이 라이브를 따라간다. `credential-user-scope` 키체인 항목은 agy 가 시작할 때 다시 쓰므로 건드리지 않는다.
+- **실행 중인 agy 세션은 토큰을 메모리에 든다** — 전환을 따라가지 않는다(codex 와 같고 claude 와 다르다). 안내는
+  "다시 시작해야 새 계정이 적용돼요". 로그아웃(`/logout`)은 토큰을 폐기하지 않고, 재로그인해도 예전 스냅샷은 유효.
+- **사용량**: `POST https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels` 본문 `{}`, ephemeral
+  세션 + **UA 필수**(`antigravity-cli/<ver>`, 없으면 403). 응답 `models{<id>:{displayName,quotaInfo{remainingFraction,
+  resetTime}}}`. `tab_*` 는 resetTime 이 없어 제외. Gemini 계열 10개가 한 5시간 버킷을 공유. 게이지는 같은
+  (fraction, resetTime) 버킷을 Gemini/Claude 줄로(사용한 비율), 사용 전(1)은 "아직 사용 안 함", fraction 이 빠진
+  모델은 "확인 안 됨"(소진이 이 모양일 수 있으나 **미관찰** — 판정 근거로 안 쓴다, 처음 보면 NSLog 한 줄).
+- **토큰 갱신은 메모리에서만**: `POST https://oauth2.googleapis.com/token`(form), client `1071006060591-tmhssin2…`,
+  **refresh 토큰 회전 없음**(실측) → 저장본·라이브를 안 바꾼다. **client secret 은 저장소에 없다** — 설치된 agy
+  바이너리(`command -v agy` → 래퍼의 `exec` 대상을 따라감 → Caskroom 바이너리)에서 `GOCSPX-`+28자 후보를 실행 중에
+  찾아 차례로 시도(`invalid_client` 는 계정 영향 없음). 못 찾으면 갱신 없이 게이지 stale. `invalid_grant` 는 게이지만
+  비우고 24시간 백오프(needsReauth·엔진 미접촉). ★ **Mobius 는 agy 를 실행하지 않는다**(`--version` 도) — 버전은
+  Caskroom 경로에서 읽는다(사용자 환경의 agy 실행 경로 제한 결정과 충돌하지 않게).
+- **자동 전환(옵트인, 기본 꺼짐 — `Provider.autoSwitchDefault`)**: "쓰던 모델(들)이 **명시적인 0** 이 되면, 그 모델
+  모두에 **명시적인 여유가 확인된** 다음 계정으로". 계정 전체 소진 판정·primary 자동 복귀 없음(`AutoSwitchPolicy.
+  antigravity`), 핀 무시(사용자 결정). 전이는 **같은 활성 세대 안의 두 관측 사이**에서만(`AntigravityExhaustion.
+  evaluate`) — 세대는 활성 값·디스크 활성 리비전(`activeRevisionByProvider`)·라이브 지문이 바뀔 때마다 늘어난다
+  (`AccountStore.activeGeneration`). 떠나기는 그 계정이 **활성이 된 뒤** 쓰인 기록만. 폴은 자동 전환 켬 + 최근 30분
+  agy 사용(`~/.gemini/antigravity-cli/history.jsonl` mtime) + 전용 서킷 브레이커일 때 5분마다 활성 하나. 후보는
+  10분에 한 번만 조회, 0 이면 계정×모델 제외(해제 ≥ 10분, 알림 시각은 실제 리셋으로 따로 계산), 확인 불가면 10분
+  쿨다운. ★ 기대 상태는 **조회 await 전에** `AntigravityExpectation.begin` 하나로 잡는다(라이브 읽기 한 번으로 이메일
+  대조 + 지문) — 조회 뒤에 다시 읽어 잡으면 조회 중에 끝난 agy 로그인이 기대값이 되어 그 로그인을 덮는다. `begin` 은
+  읽은 지문을 스토어에 먼저 알리고(`noteLiveFingerprint`) 그 뒤의 세대를 잡는다 — 같은 이메일 재로그인을 대사보다 먼저
+  봐도 이전 로그인의 관측과 비교하지 않는다. 결정을 먼저 내리는 자가복구는 결정한 세대를 `begin(decidedAt:)` 으로
+  넘기고, 이 읽기가 세대를 바꾸면 그 결정(이전 로그인의 소진 기록에서 나온 것)을 버린다. ★ 결정 세대는 엔진에 넘긴
+  `agyActiveSince` 와 짝인 `agyKnownGeneration` 이다 — 스토어 세대를 다시 읽으면 그 사이 메인 밖의 대사가 올린 새
+  세대가 옛 활성 시각과 묶여 `begin` 을 통과한다(리뷰 4회차 Codex P1-2). ★ 그 `agyActiveSince` 는 세대 변경을
+  **관측한 시각**(`agySyncGeneration()` 안의 `Date()`)이다 — 공통 틱이 시작 때 잡은 `now` 를 쓰면 await 사이에 쓰인
+  이전 로그인의 소진 기록이 새 세대의 활성 시각보다 새것이 된다(리뷰 5회차 Codex P1-3). 시작 확인이
+  실패한 자가복구는 10분 뒤에 다시 한다. 그 뒤 `holds`(세대·지문·디스크 리비전·설정·출발 기록)를 기록 직전과
+  `switchTo` 의 라이브 쓰기 바로 앞에서 다시 본다. 조회·쓰기는 공통 틱이 기다리지 않는 풀당 작업 하나(`agyAutoTask`).
+  왕복 차단은 **라이브를 따라간 대사가** 활성을 떠난 계정으로 되돌렸을 때만 건다(CLI 전환·앱 수동 전환은 세지 않는다).
+  판정 입력은 `reconcileIsolatedReportingFollowed` 가 돌려주는 **대사가 직접 커밋한** 활성 변경뿐이다(`setActive` 가
+  저장 직전 값 기준으로 바뀌었는지 돌려준다) — 대사 작업 전후 비교는 await 사이에 앱이 다시 읽은 CLI 전환까지 센다.
+  "활성 계정이 밖에서 바뀌었어요" 알림도 같은 값으로만 내고, 그 가운데 **비어 있던 활성을 채운 것**(`filledEmpty` —
+  구버전 저장 뒤 복원)은 외부 로그인이 아니므로 알리지 않는다. 앱 수동 전환은 **성공한 뒤에**(키체인만 쓰고 저장에
+  실패한 `liveWrittenButSaveFailed` 포함) 감시를 내린다. ★ **CLI `list`·`status` 는 어느 풀도 저장하지 않는다**
+  (`Switcher.reconcileForDisplay` = `reflectLiveActiveWithoutSaving` — 라이브 신원은 메모리 활성에만 반영해 보인다).
+  Antigravity 는 CLI 가 앱보다 먼저 라이브를 따라 저장하면 앱 대사가 그 변경을 자기 커밋으로 보지 못해 왕복을 놓치고,
+  Claude·Codex 는 대사 저장이 CLI 시작 때 읽은 목록 전체를 써서 그사이 다른 프로세스가 더한 계정을 지운다(리뷰 4회차
+  Codex P1-1). 라이브 추종 저장(토큰 흡수 포함)은 앱 대사와 CLI 변경 명령(`switch` 의 되저장 등)이 한다.
+- **프로바이더 오류 격리**: `reconcileIsolated`/`adoptLiveAccountsIsolated` 는 풀별로 오류를 모으고 다음 풀을
+  계속 돈다(rawValue 순이라 antigravity 가 먼저 돈다, `providers:` 로 풀을 고를 수 있다). 앱은 **Antigravity 대사를
+  공통 틱이 기다리지 않는 작업(`agyReconcileTask`)** 에서 돌려 security 5초 제한이 Claude·Codex 주기를 늦추지 않게
+  하고, 실패한 풀은 엔진 onTick 과 `apply` 의 자동 전환을 건너뛴다(로그 hit·임계값 이벤트 포함). CLI 는 오류 한 줄 +
+  나머지 출력.
+- **`AccountStore.file` 은 읽기도 잠금 안에서 사본을 꺼낸다** — Antigravity 전환이 메인 밖(detached)에서 `setActive`
+  로 구조체를 바꾸는 동안 메인의 틱·UI 가 읽는다. ★ 그 잠금은 저장 직렬화 잠금(`lock`)과 **다른 `stateLock`** 이다 —
+  저장은 디스크 I/O 를 하는 동안 `lock` 을 쥐므로 같은 잠금으로 읽으면 메인이 그 I/O 를 기다린다(실패 기록 20 과 같은
+  구조). `_file` 을 바꾸는 쪽은 둘 다 쥐고(순서 `lock` → `stateLock`), 세대·지문·플래그도 `stateLock` 이 지킨다.
+  구버전 키체인 항목 정리(`keychain.delete`)와 이관 읽기(`secretData` 의 2순위)는 저장 잠금(`lock`·`secretLock`)을
+  쥐지 않고 한다. 구버전 항목은 **등록된 Claude 계정**의 스냅샷뿐이라, 다른 프로바이더 계정과 등록되지 않은 ID(그사이
+  지운 agy 후보)는 키체인을 읽지도 지우지도 않는다 — 시간 제한 없는 `SystemKeychain` 읽기에 메인 액터가 묶이지 않게
+  (리뷰 4회차 Codex P1-4·Claude P3-4). 같은 계정의 겹친 이관만 계정별 잠금으로 합친다(승인창 한 번).
+- **accounts.json 을 읽지 못하면(파일은 있다) 그 스토어의 저장을 모두 거부한다**(`loadFailure`,
+  `savesBlockedAfterLoadFailure`) — 앱 시작 실패면 `AccountStore(afterLoadFailure:)` 로 빈 상태로 뜨되 저장하지 않고,
+  떠 있는 동안 `reloadFromDisk` 가 실패하거나 `mutateFresh`·`peekDisk`(자동 전환의 마지막 확인) 의 디스크 읽기가
+  실패해도 같다(확인만 멈추면 뒤이은 Claude 설정 저장이 메모리 사본으로 다른 프로세스의 변경을 덮는다 — 리뷰 4회차
+  Codex P1-3). `peekDisk` 는 실패를 저장 직렬화 잠금(`lock`) 안에서 기록해, 차단 검사를 이미 통과한 저장의 검사와
+  쓰기 사이에 끼지 않는다(5회차 Codex P1-2). ★ "파일 없음"은 `fileExists` 가 아니라 **읽기 오류의 종류**
+  (`CocoaError.fileReadNoSuchFile`)로 판정한다 — `fileExists` 는 상위 디렉터리를 탐색할 수 없을 때도 false 라서 권한
+  오류를 없음으로 삼킨다(5회차 Codex P1-1). 앱은 그동안 대사·자동
+  등록·자동 전환을 멈추고 15초마다 다시 읽으며 사용자에게 한 번 알린다 — 알림은 `loadFailureKind` 로 나눈다(권한·I/O 는
+  "파일 권한 확인", 디코드 실패는 `accounts.corrupt.json` 백업 위치와 "업데이트하거나 지우면 이어서 동작". 백업이 지금
+  파일과 같은 내용으로 있지 않으면 `backup` 이 nil 이고 "지우지 말라"고 안내한다). 계정 삭제는 저장된 뒤에만 Desktop
+  스냅샷과 secret 을 지우고, 실패하면 **이 호출이 새로 만든** `.removed` 표시만 거둔다(다른 인스턴스가 먼저 지우며
+  남긴 표시는 그대로). 디스크를 다시 읽은 사본에 대상이 없으면(다른 인스턴스가 지웠거나, 구버전 저장 뒤 복원이 방금
+  쓴 표시를 보고 뺐다) 실패가 아니라 이미 지워진 것으로 보고 삭제를 마친다(5회차 Codex P2-1·Claude P2-1). `switchTo` 도
+  거부한다(라이브만 바꾸고 저장 못 하는 반쪽 전환 방지). 다시 읽기에 성공하거나 파일이 없으면 풀린다. 실패 기록 13 의
+  "빈 폴백 후 저장" 경로를 읽기 실패에도 막은 것이다(디코드 실패도 포함 — 미래 형식의 파일을 덮지 않는다). ★ 그동안
+  **메모리 목록을 기준으로 지우는 정리도 하지 않는다**(`AppState.memoryRepresentsDisk` — Desktop 스냅샷 정리, 게이지
+  캐시 정리). 시작 실패면 메모리는 빈 목록이라 계정마다의 Desktop 스냅샷이 모두 지워진다.
+- 설치 탐색(`AntigravityInstallInfo.shared`, 로그인 셸)은 메인 액터에서 초기화하지 않는다. `ToolInventory.runLoginShell`
+  은 10초 제한(`ProcessSecurityRunner` 재사용 — stdout·stderr 를 별도 큐에서 끝까지 읽는다).
+- **다운그레이드 호환(실패 기록 13 의 연장)**: 테스트는 구버전 모델의 고정 사본 두 개로 한다 — `Legacy053Models`(v0.5.3)와
+  `Legacy054Models`(v0.5.4, v0.5.5 의 Models.swift 와 같다 — organizationUuid 가 들어간 첫 판). v0.5.4 보다 오래된 판이
+  목록을 저장하면 Claude 프로필의 `organizationUuid` 가 빠진다. 새 버전은 그 파일을 **읽을 때마다**(앱 시작·
+  `reloadFromDisk`·fresh commit·`peekDisk`·CLI) 구버전 저장 뒤 복원 함수(`restoringAfterLegacySave`)에서 저장 스냅샷
+  파일로 다시 채우고, 스냅샷 파일이 없으면 메모리의 같은 id 값을 옮긴다(규칙은 `backfillOrganizationUUIDs` 와 같은
+  `applyBackfilledIdentity`). 시작 때 한 번 도는 backfill 만으로는 떠 있는 동안의 다시 읽기와 시작 실패 뒤 복구가 조직을
+  잃고, 같은 이메일의 다른 조직 로그인이 이메일 폴백으로 그 프로필을 덮었다(병합 리뷰 Codex P1-1·Claude P2-1). 앱은 시작
+  실패 뒤 다시 읽기에 성공하면 시작 때 건너뛴 heal·backfill·등급 갱신을 한 번 더 돌린다(`repairAfterRecoveredLoad`). 구버전(v0.3.0~, v0.5.5 포함)의 `AccountProfile` 은 모르는 provider 에서 throw →
+  파일 전체 디코드 실패 → 목록 덮어쓰기. 그래서 **`accounts` 에는 claude·codex 만**, 그 밖은 `extraProviderAccounts`
+  (비어 있어도 **항상** 씀). `accounts` 에서 읽은 **모르는** provider 항목도 `extraProviderAccounts` 로 옮겨 쓴다
+  (`accounts` 에 다시 쓰면 구버전 디코더가 배열 전체를 거부한다). 이 키가 없는 파일 = 구버전이 저장한 파일 → `AccountStore.restoringAfterLegacySave` 하나가
+  (앱 시작·`reloadFromDisk`·`mutateFresh`·CLI·`peekDisk`) secrets 의 Antigravity 형태 고아 파일에서 복원(`.bak`·
+  `.removed` 표시 제외 — 메모리에서 가져오는 프로필에도 적용, 앱이 떠 있으면 메모리 순서), Antigravity 자동 전환은
+  꺼짐. 그 직후 CLI `list`·`status` 는 저장하지 않고 라이브 신원만 메모리 활성에 반영한다
+  (`reflectLiveActiveWithoutSaving`). accounts.json 이 **있는데 읽지 못하면** throw — 없는 것으로 보고 메모리 사본으로
+  덮어쓰지 않는다(위 저장 거부). 모르는 provider 항목·맵 키는
+  원본 JSON 으로 보존(`JSONValue`). Antigravity 프로필·풀 상태 저장은 **디스크를 다시 읽고 얹는다**(`mutateFresh`).
+  모든 저장은 **성공한 뒤에만 메모리를 바꾼다**(저장 실패 시 활성 되돌림).
+- 미확인(실기 E2E 에서 확인할 것 — 설계 2.1·7절): agy 가 갱신한 토큰을 키체인에 다시 쓰는가(쓴다면 이전 계정 세션의
+  되돌림 → `AntigravityAutoSwitchMemory.detectRoundTrip` 6시간 왕복 차단), 새 세션이 키체인 계정을 쓰는가, **소진 응답
+  형식**(0 이 오는지 필드가 빠지는지), UA 값 조건.
+
 ### macOS 26 (Tahoe) 환경
 - 메뉴바 아이콘은 Control Center가 호스팅 — CGWindowList의 layer/owner로 존재 확인이 어려움.
 - **Bartender 같은 메뉴바 관리 앱이 새 앱 아이콘을 자동 숨김** → 안 보이면 Bartender 설정에서 표시.
 - 서명 안 된/ad-hoc 앱도 실행되지만 Keychain ACL이 서명 정체성에 묶임.
+- ★ **바이너리에 기록된 SDK 버전이 MenuBarExtra 동작을 바꾼다**(실측 2026-09-24·2026-11-20). Swift 6.4 SwiftPM 의
+  기본 빌드 시스템은 `LC_BUILD_VERSION` 의 sdk 를 14.0 으로 기록하는데, 그 앱은 팝오버 창이 내용이 줄어도
+  줄지 않아(탭을 바꾸면 카드가 메뉴바에서 떨어져 창 가운데 뜬다) 다시 열 때 `onAppear` 도 부르지 않는다.
+  빌드 스크립트 쪽 대응은 이슈 #31 에서 다룬다. UI E2E 전에 확인: `otool -l …/MobiusApp | grep -A4 LC_BUILD_VERSION`.
+- ★ **팝오버는 상태 아이템 버튼으로 닫는다**(`AccountListView.dismissPopover`). 창을 `close()` 하면 SwiftUI 는
+  열려 있다고 보고 다음 아이콘 클릭 한 번을 닫기로 써서 두 번 눌러야 열린다. 설정 창을 열 때 닫지 않으면
+  활성화 정책이 `.regular` 로 바뀌며 팝오버가 메인 디스플레이로 옮겨 붙은 채 남는다(외부 디스플레이에서 연 경우).
+- UI E2E 는 접근성 API(클릭·트리 덤프)와 `screencapture -l <창 ID>` 로 한다. TCC 권한은 터미널 앱이 아니라
+  **명령을 띄운 책임 프로세스**(Claude Code 면 `~/.local/share/claude/versions/<ver>`)에 줘야 한다 — tccd 로그의
+  `AUTHREQ_ATTRIBUTION` 의 `responsible` 로 확인한다.
 
 ### 서명 (Keychain 승인창 영구 방지)
 - ad-hoc 서명(`-s -`)은 **리빌드마다 정체성이 바뀌어** "항상 허용"이 매번 리셋됨.

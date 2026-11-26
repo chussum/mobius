@@ -4,11 +4,35 @@ import Foundation
 public enum Provider: String, Codable, CaseIterable, Sendable {
     case claude
     case codex
+    /// Antigravity CLI(`agy`). 자격증명은 로그인 키체인 항목(서비스 `gemini`, 계정 `antigravity`).
+    /// 설계: docs/design/antigravity-provider.md
+    case antigravity
 
     public var displayName: String {
         switch self {
         case .claude: return "Claude"
         case .codex: return "Codex"
+        case .antigravity: return "Antigravity"
+        }
+    }
+
+    /// 구버전(0.3.0~0.5.x)이 읽는 `accounts` 배열에 넣어도 되는 프로바이더인가.
+    /// ★ 구버전의 `AccountProfile.init(from:)` 은 모르는 provider 값에서 throw 하고, 그 throw 가
+    ///   파일 전체 디코드 실패 → 빈 스토어 → Claude·Codex 목록 덮어쓰기로 번진다(실패 기록 13,
+    ///   설계 4.4). 그래서 그 밖의 프로바이더는 구버전이 무시하는 `extraProviderAccounts` 에 쓴다.
+    public var isLegacyArrayCompatible: Bool {
+        switch self {
+        case .claude, .codex: return true
+        case .antigravity: return false
+        }
+    }
+
+    /// 자동 전환 설정 기록이 없을 때의 기본값. Antigravity 는 켜면 5분 폴링이 생기므로
+    /// 옵트인(꺼짐)이다(설계 4.7 「폴링 조건」 1).
+    public var autoSwitchDefault: Bool {
+        switch self {
+        case .claude, .codex: return true
+        case .antigravity: return false
         }
     }
 }
@@ -19,18 +43,29 @@ public struct RateLimitInfo: Codable, Equatable, Sendable {
     /// 모델 전용 한도(예: Fable 주간)인가 — 계정 자체(5시간/주간)는 여유가 있을 수 있다.
     /// 이 경우 자동 전환은 "사용자가 그 계정을 직접 고르지 않았을 때"만 일어난다(pin 존중).
     public var modelScoped: Bool
-    public init(resetsAt: Date, recordedAt: Date, modelScoped: Bool = false) {
+    /// 한도가 걸린 모델 ID 집합(Antigravity 전용). 후보 제외를 **모델 ID 로** 비교하는 데 쓴다
+    /// (설계 4.7 「기록」). Claude·Codex 기록에는 없다.
+    public var scopeModelIDs: [String]?
+    /// 표시용 모델 계열 이름(예: "Gemini", "Gemini·Claude"). Antigravity 전용.
+    public var scopeLabel: String?
+
+    public init(resetsAt: Date, recordedAt: Date, modelScoped: Bool = false,
+                scopeModelIDs: [String]? = nil, scopeLabel: String? = nil) {
         self.resetsAt = resetsAt
         self.recordedAt = recordedAt
         self.modelScoped = modelScoped
+        self.scopeModelIDs = scopeModelIDs
+        self.scopeLabel = scopeLabel
     }
 
-    // 하위 호환: modelScoped 키가 없는 구버전 파일도 디코드되게 (없으면 false).
+    // 하위 호환: modelScoped·scope 키가 없는 구버전 파일도 디코드되게 (실패 기록 13).
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         resetsAt = try c.decode(Date.self, forKey: .resetsAt)
         recordedAt = try c.decode(Date.self, forKey: .recordedAt)
         modelScoped = try c.decodeIfPresent(Bool.self, forKey: .modelScoped) ?? false
+        scopeModelIDs = try c.decodeIfPresent([String].self, forKey: .scopeModelIDs)
+        scopeLabel = try c.decodeIfPresent(String.self, forKey: .scopeLabel)
     }
 }
 
@@ -93,6 +128,16 @@ public struct AccountKey: Equatable, Sendable {
         guard emailAddress == other.emailAddress else { return false }
         if organizationUuid.isEmpty || other.organizationUuid.isEmpty { return true }
         return organizationUuid == other.organizationUuid
+    }
+}
+
+extension AccountProfile {
+    /// 저장 스냅샷의 신원으로 조직을 채운다 — 이름·등급도 같은 신원에서 맞추되 빈 값으로는 덮어쓰지 않는다.
+    /// `Switcher.backfillOrganizationUUIDs` 와 구버전 저장 뒤 복원(`AccountStore.restoringAfterLegacySave`)이 같이 쓴다.
+    mutating func applyBackfilledIdentity(_ identity: ProviderIdentity) {
+        organizationUuid = identity.organizationUuid
+        if !identity.organizationName.isEmpty { organizationName = identity.organizationName }
+        if !identity.tierDescription.isEmpty { tierDescription = identity.tierDescription }
     }
 }
 
@@ -220,6 +265,8 @@ public struct AccountProfile: Codable, Equatable, Identifiable, Sendable {
 /// 프로바이더별 풀로 독립 관리된다. 프로바이더 내 순서가 우선순위 — 그 프로바이더의
 /// 첫 계정이 primary(고정), 이후가 fallback 순서.
 public struct AccountsFile: Codable, Equatable, Sendable {
+    /// 이 버전이 아는 프로바이더의 계정 전부(메모리). 디스크에서는 구버전 호환 프로바이더
+    /// (claude·codex)가 `accounts` 배열에, 나머지는 `extraProviderAccounts` 에 나뉘어 저장된다.
     public var accounts: [AccountProfile]
     /// 프로바이더별 활성 계정 id
     public var activeByProvider: [Provider: UUID]
@@ -227,10 +274,21 @@ public struct AccountsFile: Codable, Equatable, Sendable {
     /// 로그인은 false — onTick의 primary 자동 복귀는 이 플래그가 true일 때만 일어난다
     /// (수동 전환 자동 회귀 방지).
     public var autoSwitchedByProvider: [Provider: Bool]
-    /// 프로바이더별 자동 전환 on/off (없는 키는 켬 — isAutoSwitchEnabled 참조)
+    /// 프로바이더별 자동 전환 on/off (없는 키는 프로바이더 기본값 — isAutoSwitchEnabled 참조)
     public var autoSwitchByProvider: [Provider: Bool]
     public var desktopSyncEnabled: Bool       // 수동 전환 시 Desktop 동시 전환 (Claude 전용)
     public var desktopAutoSwitchEnabled: Bool // 자동 전환 시에도 Desktop 동시 전환 (기본 끔)
+    /// 프로바이더별 **활성 리비전**. 활성 값을 바꾸는 모든 저장(앱·CLI)이 1 늘린다.
+    /// 자동 전환이 await 를 건너는 동안 다른 프로세스가 활성을 바꿨는지 디스크로 확인하는 데
+    /// 쓴다(설계 4.7 「비동기 경합」). 구버전은 이 필드를 버리므로 달라진 값 = "바뀜"(안전한 쪽).
+    public var activeRevisionByProvider: [Provider: Int]
+
+    /// 모르는 provider 의 계정 항목 — 원본 JSON 그대로 보존해 같은 배열에 다시 쓴다(설계 4.4-3).
+    public var unknownAccountEntries: [JSONValue] = []
+    public var unknownExtraAccountEntries: [JSONValue] = []
+    /// 프로바이더 맵(CodingKey 이름 → 모르는 키 → 원본 값). 미래 버전의 풀 상태를 지운 채
+    /// 저장하지 않게 한다.
+    public var unknownProviderMapEntries: [String: [String: JSONValue]] = [:]
 
     public init(accounts: [AccountProfile] = [], activeAccountID: UUID? = nil,
                 autoSwitchEnabled: Bool = true, desktopSyncEnabled: Bool = true,
@@ -242,13 +300,38 @@ public struct AccountsFile: Codable, Equatable, Sendable {
             : Dictionary(uniqueKeysWithValues: Provider.allCases.map { ($0, false) })
         self.desktopSyncEnabled = desktopSyncEnabled
         self.desktopAutoSwitchEnabled = desktopAutoSwitchEnabled
+        self.activeRevisionByProvider = [:]
+    }
+
+    /// accounts.json 원본에 `extraProviderAccounts` 키가 **없는가** = 이 키를 모르는 구버전이
+    /// 마지막으로 저장한 파일이다(새 버전은 비어 있어도 항상 쓴다 — 설계 4.4-4).
+    /// 디코드 결과(AccountsFile)에 플래그로 넣지 않는 이유: Equatable 비교와 저장 대상에
+    /// 섞이지 않게 하려는 것이다. 파일이 JSON 객체가 아니면 false(디코드 쪽이 실패를 낸다).
+    public static func lacksExtraProviderKey(_ data: Data) -> Bool {
+        guard let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+        else { return false }
+        return obj[CodingKeys.extraProviderAccounts.rawValue] == nil
     }
 
     /// 하위호환 디코딩 — 풀 분리 이전(activeAccountID/autoSwitchedFromPrimary가 최상위
     /// 단일 값이던) accounts.json은 Claude 풀로 흡수하고, 없는 필드는 기본값으로 채운다.
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        accounts = try c.decodeIfPresent([AccountProfile].self, forKey: .accounts) ?? []
+        // ★ 계정 배열은 항목 단위로 디코드한다(설계 4.4-3): 모르는 provider 항목은 원본을
+        //   보존하고, 아는 provider 항목의 값 손상은 지금처럼 throw 해 corrupt 백업 경로를 살린다.
+        let (main, unknownMain) = try Self.decodeAccountArray(c, .accounts)
+        let (extra, unknownExtra) = try Self.decodeAccountArray(c, .extraProviderAccounts)
+        accounts = main + extra
+        unknownAccountEntries = unknownMain
+        unknownExtraAccountEntries = unknownExtra
+        activeRevisionByProvider = try Self.decodeProviderMap(c, .activeRevisionByProvider) ?? [:]
+        var unknownMaps: [String: [String: JSONValue]] = [:]
+        for key in [CodingKeys.activeByProvider, .autoSwitchedByProvider, .autoSwitchByProvider,
+                    .activeRevisionByProvider] {
+            let raw = Self.unknownMapKeys(c, key)
+            if !raw.isEmpty { unknownMaps[key.rawValue] = raw }
+        }
+        unknownProviderMapEntries = unknownMaps
         if let pools: [Provider: UUID] = try Self.decodeProviderMap(c, .activeByProvider) {
             activeByProvider = pools
         } else {
@@ -299,6 +382,48 @@ public struct AccountsFile: Codable, Equatable, Sendable {
         return try c.decode([Provider: V].self, forKey: key)
     }
 
+    /// 프로바이더 맵의 모르는 키와 그 원본 값 (객체 형태일 때만).
+    private static func unknownMapKeys(_ c: KeyedDecodingContainer<CodingKeys>,
+                                       _ key: CodingKeys) -> [String: JSONValue] {
+        guard let nested = try? c.nestedContainer(keyedBy: RawKey.self, forKey: key) else { return [:] }
+        var out: [String: JSONValue] = [:]
+        for k in nested.allKeys where Provider(rawValue: k.stringValue) == nil {
+            if let v = try? nested.decode(JSONValue.self, forKey: k) { out[k.stringValue] = v }
+        }
+        return out
+    }
+
+    /// 계정 배열을 항목 단위로 디코드한다. provider 가 **모르는 문자열**인 항목은 원본 JSON 으로
+    /// 보존하고(throw 하지 않는다), 그 밖의 항목은 `AccountProfile` 로 디코드한다(손상이면 throw).
+    private static func decodeAccountArray(_ c: KeyedDecodingContainer<CodingKeys>,
+                                           _ key: CodingKeys) throws -> ([AccountProfile], [JSONValue]) {
+        guard c.contains(key), !(try c.decodeNil(forKey: key)) else { return ([], []) }
+        let raws = try c.decode([JSONValue].self, forKey: key)
+        var known: [AccountProfile] = []
+        var unknown: [JSONValue] = []
+        for raw in raws {
+            if let p = raw.stringField("provider"), Provider(rawValue: p) == nil {
+                unknown.append(raw)
+                continue
+            }
+            known.append(try JSONDecoder().decode(AccountProfile.self,
+                                                  from: try JSONEncoder().encode(raw)))
+        }
+        return (known, unknown)
+    }
+
+    /// 프로바이더 맵을 `{"키": 값}` 객체로 쓴다. 아는 키는 값, 모르는 키는 보존한 원본.
+    private func encodeProviderMap<V: Encodable>(_ c: inout KeyedEncodingContainer<CodingKeys>,
+                                                 _ map: [Provider: V], _ key: CodingKeys) throws {
+        var nested = c.nestedContainer(keyedBy: RawKey.self, forKey: key)
+        for (k, v) in unknownProviderMapEntries[key.rawValue] ?? [:] {
+            try nested.encode(v, forKey: RawKey(stringValue: k)!)
+        }
+        for (p, v) in map {
+            try nested.encode(v, forKey: RawKey(stringValue: p.rawValue)!)
+        }
+    }
+
     /// 임의 문자열 키 (프로바이더 맵의 항목 단위 디코딩용)
     private struct RawKey: CodingKey {
         var stringValue: String
@@ -307,12 +432,10 @@ public struct AccountsFile: Codable, Equatable, Sendable {
         init?(intValue: Int) { return nil }
     }
 
-    private static func stringKeyed<V>(_ map: [Provider: V]) -> [String: V] {
-        Dictionary(uniqueKeysWithValues: map.map { ($0.key.rawValue, $0.value) })
-    }
-
     enum CodingKeys: String, CodingKey {
-        case accounts, activeByProvider, autoSwitchedByProvider, autoSwitchByProvider
+        case accounts, extraProviderAccounts
+        case activeByProvider, autoSwitchedByProvider, autoSwitchByProvider
+        case activeRevisionByProvider
         case desktopSyncEnabled, desktopAutoSwitchEnabled
         case legacyActiveAccountID = "activeAccountID"
         case legacyAutoSwitchedFromPrimary = "autoSwitchedFromPrimary"
@@ -321,14 +444,25 @@ public struct AccountsFile: Codable, Equatable, Sendable {
 
     public func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
-        try c.encode(accounts, forKey: .accounts)
+        // ★ 구버전이 읽는 `accounts` 에는 claude·codex 만 쓴다(설계 4.4-1). 그 밖의 프로바이더는
+        //   구버전이 무시하는 `extraProviderAccounts` 로 — 이 키는 비어 있어도 **항상** 쓴다
+        //   (키가 없는 파일 = 구버전이 저장한 파일이라는 판정의 근거, 4.4-4).
+        //   `accounts` 에서 읽은 **모르는** provider 항목도 `accounts` 에 다시 쓰지 않는다 — 구버전
+        //   디코더는 모르는 provider 하나로 배열 전체를 거부한다(리뷰 1회차 Codex P1-1). 원본 JSON 은
+        //   `extraProviderAccounts` 로 옮겨 보존한다.
+        try c.encode(accounts.filter { $0.provider.isLegacyArrayCompatible }.map(AnyEncodable.profile),
+                     forKey: .accounts)
+        try c.encode(accounts.filter { !$0.provider.isLegacyArrayCompatible }.map(AnyEncodable.profile)
+                        + (unknownAccountEntries + unknownExtraAccountEntries).map(AnyEncodable.raw),
+                     forKey: .extraProviderAccounts)
         // 프로바이더 키 딕셔너리는 [String:]으로 명시 인코딩 — Provider를 그대로 쓰면 Swift
         // Dictionary Codable이 JSON 배열(["claude", …])로 저장한다(CodingKeyRepresentable
         // 미채택). 객체 형태여야 사람이 읽을 수 있고 unknown 키 스킵(위 decodeProviderMap)이
-        // 가능하다.
-        try c.encode(Self.stringKeyed(activeByProvider), forKey: .activeByProvider)
-        try c.encode(Self.stringKeyed(autoSwitchedByProvider), forKey: .autoSwitchedByProvider)
-        try c.encode(Self.stringKeyed(autoSwitchByProvider), forKey: .autoSwitchByProvider)
+        // 가능하다. 모르는 키는 보존한 원본을 함께 쓴다(설계 4.4-3).
+        try encodeProviderMap(&c, activeByProvider, .activeByProvider)
+        try encodeProviderMap(&c, autoSwitchedByProvider, .autoSwitchedByProvider)
+        try encodeProviderMap(&c, autoSwitchByProvider, .autoSwitchByProvider)
+        try encodeProviderMap(&c, activeRevisionByProvider, .activeRevisionByProvider)
         try c.encode(desktopSyncEnabled, forKey: .desktopSyncEnabled)
         try c.encode(desktopAutoSwitchEnabled, forKey: .desktopAutoSwitchEnabled)
         // 다운그레이드 완충: 풀 분리 이전 바이너리도 Claude 활성 상태는 올바르게 읽도록
@@ -426,9 +560,14 @@ public struct AccountsFile: Codable, Equatable, Sendable {
         return out
     }
 
-    /// 풀별 자동 전환 on/off — 기록이 없는 풀은 켬(기본값)
+    /// 풀별 자동 전환 on/off — 기록이 없는 풀은 프로바이더 기본값(Claude·Codex 켬,
+    /// Antigravity 꺼짐 — `Provider.autoSwitchDefault`)
     public func isAutoSwitchEnabled(_ provider: Provider) -> Bool {
-        autoSwitchByProvider[provider] ?? true
+        autoSwitchByProvider[provider] ?? provider.autoSwitchDefault
+    }
+
+    public func activeRevision(_ provider: Provider) -> Int {
+        activeRevisionByProvider[provider] ?? 0
     }
 
     // MARK: Claude 풀의 경계된 뷰 (Desktop 연동 등 Claude 전용 경로용)
@@ -443,6 +582,18 @@ public struct AccountsFile: Codable, Equatable, Sendable {
     }
     public var primary: AccountProfile? { primary(of: .claude) }
     public var active: AccountProfile? { active(of: .claude) }
+}
+
+/// 계정 배열에 아는 프로필과 보존한 원본 항목을 함께 쓰기 위한 감싸개.
+private enum AnyEncodable: Encodable {
+    case profile(AccountProfile)
+    case raw(JSONValue)
+    func encode(to encoder: Encoder) throws {
+        switch self {
+        case .profile(let p): try p.encode(to: encoder)
+        case .raw(let v): try v.encode(to: encoder)
+        }
+    }
 }
 
 /// Claude Code 자격증명 3곳의 원자적 스냅샷. 비밀값 — 앱 Keychain에만 저장된다.

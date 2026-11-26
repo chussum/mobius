@@ -28,6 +28,8 @@ struct AccountCardView: View {
     /// 임계값 선제 경고(advisory) — **소진이 아니라 "곧 참"** 신호다. Claude 카드에서만,
     /// hasActiveAdvisory가 참일 때 리스트가 넘긴다. 소진(빨강)·재인증(주황)보다 낮은 심각도.
     var advisory: Bool = false
+    /// Antigravity: 키체인 쓰기가 시간을 넘겨 라이브 상태를 모르는 동안(설계 4.1) — 활성 카드에만.
+    var statusChecking: Bool = false
 
     private let accent = Color(red: 0.35, green: 0.65, blue: 1.0)
     /// advisory pill 색 — 소진(빨강)·재인증(주황)보다 **한 단계 낮은 심각도**를 표현한다.
@@ -87,6 +89,14 @@ struct AccountCardView: View {
                             .padding(.horizontal, 5).padding(.vertical, 2)
                             .background(advisoryColor.opacity(0.18), in: Capsule())
                             .foregroundStyle(advisoryColor)
+                    }
+                    if statusChecking {
+                        Text(loc("계정 상태 확인 중"))
+                            .font(.system(size: 9, weight: .medium))
+                            .padding(.horizontal, 5).padding(.vertical, 2)
+                            .background(Color.secondary.opacity(0.15), in: Capsule())
+                            .foregroundStyle(.secondary)
+                            .help(loc("agy 키체인 쓰기의 결과를 확인하는 중이에요. 확인될 때까지 자동 전환을 멈춰요."))
                     }
                 }
                 Text(profile.emailAddress)
@@ -167,7 +177,7 @@ struct AccountCardView: View {
         //   `remainText`는 하루를 넘으면 일 단위로 말하므로 주간 한도가 "168시간 0분"이 되지 않는다.
         if autoSwitchOn, let rl = profile.rateLimit, rl.resetsAt > now, rl.modelScoped {
             HStack(spacing: 4) {
-                Label(loc("모델 한도 · %@ 초기화", remainText(until: rl.resetsAt)), systemImage: "sparkles")
+                Label(modelLimitText(rl), systemImage: "sparkles")
                     .font(.system(size: 10)).foregroundStyle(.secondary)
                     .fixedSize()
                 subtitleTrailer
@@ -179,9 +189,11 @@ struct AccountCardView: View {
                     .fixedSize()
                 subtitleTrailer
             }
-        } else {
+        } else if !profile.subtitle.isEmpty {
             // 회사 조직(Team/Enterprise)이면 이름을 앞에 적는다 — 같은 이메일의 계정이 여럿일 때 구분 근거.
             // `lineLimit(1)`: 긴 조직 이름이 줄바꿈으로 카드 높이를 바꾸지 않게(이슈 #5 계열).
+            // 비어 있으면(Antigravity — 등급 정보가 없다) 줄을 그리지 않는다. 빈 Text 도 한 줄
+            // 높이를 차지해 이메일과 게이지 사이에 빈 줄이 생긴다(E2E 2026-11-20).
             Text(profile.subtitle)
                 .font(.system(size: 10)).foregroundStyle(.tertiary)
                 .lineLimit(1).truncationMode(.tail)
@@ -199,6 +211,14 @@ struct AccountCardView: View {
                 .font(.system(size: 10)).foregroundStyle(.tertiary)
                 .lineLimit(1).truncationMode(.middle)
         }
+    }
+
+    /// 모델 한도 카운트다운 문구. Antigravity 기록은 어느 모델 묶음인지 안다(scopeLabel) —
+    /// 그 이름으로 말한다. 형식은 다른 상태 줄과 같다: "<상태> · <남은 시간> 초기화"(`remainText`).
+    private func modelLimitText(_ rl: RateLimitInfo) -> String {
+        let remain = remainText(until: rl.resetsAt)
+        if let scope = rl.scopeLabel { return loc("%@ 한도 · %@ 초기화", scope, remain) }
+        return loc("모델 한도 · %@ 초기화", remain)
     }
 
     // MARK: 사용량 게이지 (5시간/주간 + 초기화 남은 시간)
@@ -240,7 +260,14 @@ struct AccountCardView: View {
             }
             // 모델 스코프 주간 한도 (예: Fable) — API가 줄 때만. 제공 종료 시 자동 소멸.
             ForEach(u.scopedLimits ?? [], id: \.label) { s in
-                gaugeRow(label: s.label, percent: s.percent, resetsAt: s.resetsAt)
+                if profile.provider == .antigravity, s.resetsAt == nil {
+                    // Antigravity "아직 사용 안 함" 줄(설계 4.3) — 이때 resetTime 은 요청 시각 +
+                    // 창 길이라 의미가 없어 보이지 않는다.
+                    noteRow(label: s.label, text: loc("아직 사용 안 함"))
+                } else {
+                    gaugeRow(label: s.label, percent: s.percent, resetsAt: s.resetsAt,
+                             unverified: s.unverified == true)
+                }
             }
             // 실패인지 단순 미갱신인지는 여기서 단정하지 않는다 — Codex는 "그동안 codex를 안
             // 썼다"는 뜻이기도 하다. 기준 시각만 정직하게 밝히고 판단은 사용자에게 맡긴다.
@@ -255,7 +282,21 @@ struct AccountCardView: View {
         .opacity(stale == nil ? 1 : 0.5)
     }
 
-    private func gaugeRow(label: String, percent: Double, resetsAt: Date?) -> some View {
+    private func noteRow(label: String, text: String) -> some View {
+        HStack(spacing: 6) {
+            Text(label)
+                .font(.system(size: 10.5, weight: .medium)).foregroundStyle(.secondary)
+                .lineLimit(1).fixedSize()
+                .frame(width: 38, alignment: .leading)
+            Text(text)
+                .font(.system(size: 10)).foregroundStyle(.tertiary)
+                .lineLimit(1).fixedSize()
+            Spacer(minLength: 0)
+        }
+    }
+
+    private func gaugeRow(label: String, percent: Double, resetsAt: Date?,
+                          unverified: Bool = false) -> some View {
         HStack(spacing: 6) {
             // fixedSize로 라벨을 항상 같은 크기로 렌더한다 — minimumScaleFactor를 쓰면
             // 활성 카드(체크마크로 폭이 좁음)에서만 글자가 줄어 카드마다 크기가 달라졌다(실측).
@@ -273,11 +314,13 @@ struct AccountCardView: View {
             // 바가 남는 가로 공간을 모두 채운다 (오른쪽 텍스트는 fixedSize라 자리를 먼저 확보)
             .frame(minWidth: 40, maxWidth: .infinity)
             .frame(height: 5)
-            Text("\(Int(percent))%")
+            // 값 모름(Antigravity remainingFraction 없음)은 숫자 대신 "확인 안 됨" — 소진처럼
+            // 보이되 확인된 값이 아니라는 것을 밝힌다(설계 4.3).
+            Text(unverified ? loc("확인 안 됨") : "\(Int(percent))%")
                 .font(.system(size: 10.5, weight: .semibold))
-                .foregroundStyle(gaugeColor(percent))
+                .foregroundStyle(unverified ? Color.secondary : gaugeColor(percent))
                 .lineLimit(1).fixedSize()
-                .frame(width: 36, alignment: .trailing)
+                .frame(minWidth: 36, alignment: .trailing)
             if let resetsAt, resetsAt > now {
                 Text(loc("%@ 초기화", remainText(until: resetsAt)))
                     .font(.system(size: 10)).foregroundStyle(.tertiary)

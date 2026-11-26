@@ -6,8 +6,12 @@ public struct ScopedUsageLimit: Codable, Equatable, Sendable {
     public var label: String      // 모델 표시명 (예: "Fable")
     public var percent: Double
     public var resetsAt: Date?
-    public init(label: String, percent: Double, resetsAt: Date?) {
+    /// 값을 확인하지 못한 줄(Antigravity: resetTime 은 있는데 remainingFraction 이 없음 — 설계 4.3).
+    /// 게이지는 다 쓴 것처럼 보이되 "확인 안 됨"을 붙인다. 옵셔널이라 구버전 캐시도 그대로 읽힌다.
+    public var unverified: Bool?
+    public init(label: String, percent: Double, resetsAt: Date?, unverified: Bool? = nil) {
         self.label = label; self.percent = percent; self.resetsAt = resetsAt
+        self.unverified = unverified
     }
 }
 

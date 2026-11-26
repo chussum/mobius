@@ -6,8 +6,29 @@ import MobiusCore
 struct MobiusCLI: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "mobius",
-        abstract: "Claude·Codex CLI 계정 매니저 (뫼비우스)",
+        abstract: "Claude·Codex·Antigravity CLI 계정 매니저 (뫼비우스)",
         subcommands: [List.self, Switch.self, Status.self, Capture.self, Auto.self])
+}
+
+/// 읽기 전용 명령(list·status)의 대사. **어느 경우에도 파일에 저장하지 않고** 라이브 신원만 메모리 활성에
+/// 반영해 보여 준다(Switcher.reconcileForDisplay) — 시작 때 읽은 목록으로 저장하면 그사이 다른 프로세스가 더한
+/// 계정을 지우고, Antigravity 는 앱이 왕복을 놓치며, 구버전 저장 직후면 앱 메모리의 Antigravity 순서 대신 이 CLI 의
+/// 복원 순서가 굳는다(설계 4.4-4). 구버전 저장 직후에는 그 사실을 한 줄 알린다.
+func reconcileForReadOnlyCommand(_ ctx: (env: MobiusEnvironment, store: AccountStore, io: ClaudeConfigIO,
+                                         codexIO: CodexConfigIO, switcher: Switcher)) async {
+    if ctx.store.restoredAfterLegacySave {
+        FileHandle.standardError.write(Data(
+            "ℹ️ 이전 버전이 저장한 계정 목록이라 Antigravity 계정을 저장된 자격증명에서 복원해 보여 줍니다(저장하지 않음).\n".utf8))
+    }
+    printPoolFailures(await ctx.switcher.reconcileForDisplay())
+}
+
+/// 대사에 실패한 풀은 오류 한 줄로 보이고 나머지 풀은 그대로 출력한다(설계 4.6).
+func printPoolFailures(_ failed: [Provider: any Error]) {
+    for (provider, error) in failed.sorted(by: { $0.key.rawValue < $1.key.rawValue }) {
+        FileHandle.standardError.write(Data(
+            "⚠️ \(provider.displayName) 계정 상태를 읽지 못했습니다: \(error)\n".utf8))
+    }
 }
 
 /// - Parameter healProviders: 구버전 바이너리가 저장하며 소실시킨 per-account provider를
@@ -26,7 +47,10 @@ func makeContext(healProviders: Bool = false) throws -> (
     let store = try AccountStore(env: env, keychain: kc)
     let io = ClaudeConfigIO(env: env, keychain: kc)
     let codexIO = CodexConfigIO(env: env)
-    let switcher = Switcher(env: env, keychain: kc, store: store, io: io, extraIOs: [codexIO])
+    // ★ agy 어댑터를 등록하지 않으면 CLI 는 Antigravity 계정을 전환·대사하지 못한다(설계 4.8).
+    let agyIO = AntigravityConfigIO()
+    let switcher = Switcher(env: env, keychain: kc, store: store, io: io,
+                            extraIOs: [codexIO, agyIO])
     if healProviders {
         if let reassigned = try? switcher.healMisassignedProviders(), !reassigned.isEmpty {
             for r in reassigned {
@@ -64,7 +88,7 @@ struct List: AsyncParsableCommand {
     static let configuration = CommandConfiguration(abstract: "계정 목록")
     func run() async throws {
         let ctx = try makeContext()
-        try await ctx.switcher.reconcile()
+        await reconcileForReadOnlyCommand(ctx)
         if ctx.store.file.accounts.isEmpty {
             print("등록된 계정이 없습니다. 앱에서 '계정 추가' 또는 `mobius capture <이름>`으로 등록하세요.")
             return
@@ -87,7 +111,7 @@ struct List: AsyncParsableCommand {
 struct Switch: ParsableCommand {
     static let configuration = CommandConfiguration(abstract: "계정 전환")
     @Argument(help: "전환할 계정 닉네임") var name: String
-    @Option(help: "claude 또는 codex — 두 프로바이더에 같은 닉네임이 있을 때 지정")
+    @Option(help: "claude, codex, antigravity 중 하나 — 여러 프로바이더에 같은 닉네임이 있을 때 지정")
     var provider: String?
 
     func run() throws {
@@ -104,7 +128,7 @@ struct Switch: ParsableCommand {
         guard matches.count == 1 else {
             if Set(matches.map(\.provider)).count > 1 {
                 throw ValidationError(
-                    "'\(name)' 닉네임이 여러 프로바이더에 있습니다. --provider claude|codex 로 지정하세요.")
+                    "'\(name)' 닉네임이 여러 프로바이더에 있습니다. --provider claude|codex|antigravity 로 지정하세요.")
             }
             // 같은 풀 안의 중복 — 같은 이메일의 다른 조직을 같은 이름으로 capture한 경우.
             let orgs = matches.map { $0.organizationLabel.isEmpty ? $0.tierDescription : $0.organizationLabel }
@@ -141,6 +165,9 @@ struct Switch: ParsableCommand {
             print("Desktop 동시 전환은 앱에서 전환할 때만 적용됩니다.")
         case .codex:
             print("실행 중인 codex 세션은 종료해야 새 계정이 적용됩니다 (구 세션이 로그인을 되돌릴 수 있음).")
+        case .antigravity:
+            // 실행 중 agy 세션은 토큰을 메모리에 들고 있어 키체인 교체를 따라가지 않는다(실측, 설계 2.1).
+            print("실행 중인 agy 세션은 다시 시작해야 새 계정이 적용됩니다.")
         }
     }
 }
@@ -149,7 +176,7 @@ struct Status: AsyncParsableCommand {
     static let configuration = CommandConfiguration(abstract: "현재 상태")
     func run() async throws {
         let ctx = try makeContext()
-        try await ctx.switcher.reconcile()
+        await reconcileForReadOnlyCommand(ctx)
         var printedAny = false
         for provider in Provider.allCases {
             guard let active = ctx.store.file.active(of: provider) else { continue }
@@ -174,7 +201,8 @@ struct Capture: ParsableCommand {
     static let configuration = CommandConfiguration(
         abstract: "현재 로그인 계정을 프로필로 캡처")
     @Argument(help: "저장할 닉네임") var name: String
-    @Option(help: "claude(기본) 또는 codex") var provider: String = "claude"
+    @Option(help: "claude(기본) 또는 codex — antigravity 는 지원하지 않음(앱이 자동 등록)")
+    var provider: String = "claude"
 
     func run() throws {
         let ctx = try makeContext(healProviders: true)
@@ -200,14 +228,19 @@ struct Capture: ParsableCommand {
                                                         identity: identity, store: ctx.store)
             p = try ctx.store.upsertProfile(nickname: name, snapshot: snap)
         case .codex:
+            // 신원은 저장할 바이트에서 꺼낸다 — auth.json 을 두 번 읽으면 그 사이 다른 로그인으로 바뀐 순간
+            // A 의 바이트를 B 프로필에 쓴다(병합 리뷰 Codex P1-3).
             guard let data = try ctx.codexIO.readLiveSecretData(),
-                  let identity = try ctx.codexIO.liveIdentity() else {
+                  let identity = ctx.codexIO.identity(fromSecret: data) else {
                 throw ValidationError("codex 로그인 상태가 아닙니다. 먼저 `codex login` 하세요.")
             }
             try Self.rejectNicknameTakenByAnotherAccount(name, provider: .codex,
                                                         identity: identity, store: ctx.store)
             p = try ctx.store.upsertProfile(nickname: name, provider: .codex,
                                             identity: identity, secretData: data)
+        case .antigravity:
+            // 등록은 adopt 방식만(설계 3절) — agy 에서 로그인하면 앱이 자동 등록한다.
+            throw ValidationError("antigravity 는 capture 를 지원하지 않습니다. 터미널에서 `agy` 로 로그인하면 Mobius 앱이 자동으로 등록합니다.")
         }
         try ctx.store.setActive(p.id)
         MobiusNotification.postAccountsChanged()
@@ -231,7 +264,8 @@ struct Capture: ParsableCommand {
 struct Auto: ParsableCommand {
     static let configuration = CommandConfiguration(abstract: "자동 전환 켜기/끄기")
     @Argument(help: "on 또는 off") var mode: String
-    @Option(help: "claude 또는 codex — 미지정 시 Claude(기존 동작 보존)") var provider: String?
+    @Option(help: "claude, codex, antigravity 중 하나 — 미지정 시 Claude(기존 동작 보존)")
+    var provider: String?
 
     func run() throws {
         let ctx = try makeContext(healProviders: true)
@@ -251,8 +285,13 @@ struct Auto: ParsableCommand {
         let names = targets.map(\.displayName).joined(separator: "·")
         print("\(names) 자동 전환: \(enabled ? "켜짐" : "꺼짐")")
         // 미지정인데 Codex 계정이 있으면 Codex는 안 바뀐다는 걸 알려 발견성을 높인다.
-        if provider == nil, !ctx.store.file.accounts(of: .codex).isEmpty {
-            print("(Codex는 바뀌지 않았습니다 — `mobius auto \(mode) --provider codex`로 지정)")
+        if provider == nil {
+            for other in [Provider.codex, .antigravity] where !ctx.store.file.accounts(of: other).isEmpty {
+                print("(\(other.displayName)는 바뀌지 않았습니다 — `mobius auto \(mode) --provider \(other.rawValue)`로 지정)")
+            }
+        }
+        if targets.contains(.antigravity), enabled {
+            print("Antigravity 자동 전환은 Mobius 앱이 켜져 있을 때 agy 를 쓰는 동안 5분마다 사용량을 조회합니다.")
         }
     }
 }

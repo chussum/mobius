@@ -351,6 +351,76 @@ final class SwitcherTests: XCTestCase {
         return (team, max)
     }
 
+    /// v0.5.4 미만 판(v0.5.3 모델)이 지금 파일을 다시 저장한다 — Claude 프로필의 organizationUuid 가 빠진다.
+    private func saveAsV053() throws {
+        let legacy = try JSONDecoder().decode(V053AccountsFile.self, from: Data(contentsOf: env.accountsFile))
+        try JSONEncoder().encode(legacy).write(to: env.accountsFile)
+    }
+
+    /// 떠 있는 앱이 구버전이 저장한 파일을 다시 읽어도(팝오버, Antigravity 의 fresh commit) 조직을 잃지 않는다 —
+    /// 잃으면 같은 이메일의 다른 조직 로그인이 이메일 폴백으로 그 프로필을 덮는다(실패 기록 23, 병합 리뷰 Claude P2-1).
+    func testLegacySaveThenReloadKeepsOrganizationFromSnapshot() async throws {
+        let team = try store.upsertProfile(nickname: "team", snapshot: orgSnap(token: "team", refresh: "T0", account: Self.teamAccount))
+        try saveAsV053()
+        try store.reloadFromDisk()
+        XCTAssertEqual(store.file.accounts.first { $0.id == team.id }?.organizationUuid, "org-team")
+
+        // 등록하지 않은 같은 이메일의 개인 Max 로 로그인한다(활성은 personal).
+        try io.writeLiveSnapshot(orgSnap(token: "max", refresh: "M0", account: Self.maxAccount))
+        try await switcher.reconcile()
+
+        XCTAssertEqual(try storedRefresh(team.id), "T0", "Team 저장본에 Max 토큰이 들어가면 안 된다")
+        XCTAssertNotEqual(store.file.activeAccountID, team.id)
+    }
+
+    /// 앱 시작 때 읽기에 실패해 빈 스토어로 떴다가(backfill 이 빈 목록에서 끝남) 다시 읽기에 성공해도, 라이브 저장을
+    /// 재개하기 전에 조직이 채워져 있다(병합 리뷰 Codex P1-1).
+    func testReloadAfterStartupLoadFailureFillsOrganizationBeforeActiveSync() async throws {
+        let team = try store.upsertProfile(nickname: "team", snapshot: orgSnap(token: "team", refresh: "T0", account: Self.teamAccount))
+        try store.setActive(team.id)
+        try saveAsV053()
+
+        let recovering = AccountStore(env: env, keychain: kc, afterLoadFailure: CocoaError(.fileReadNoPermission))
+        let sw = Switcher(env: env, keychain: kc, store: recovering, io: io)
+        _ = try? sw.backfillOrganizationUUIDs()                       // 시작 때 빈 목록에서 끝난 backfill
+        try recovering.reloadFromDisk()
+        XCTAssertEqual(recovering.file.accounts.first { $0.id == team.id }?.organizationUuid, "org-team")
+
+        // 라이브는 같은 이메일의 개인 Max(등록 안 함). 5분 동기화가 Team 을 이메일로 고르면 Max 토큰을 Team 에 저장한다.
+        try io.writeLiveSnapshot(orgSnap(token: "max", refresh: "M0", account: Self.maxAccount))
+        _ = await sw.refreshActiveSnapshotIfStable()
+
+        XCTAssertEqual(CredentialBlob.refreshToken(from: try XCTUnwrap(recovering.secret(for: team.id)).keychainBlob), "T0")
+    }
+
+    /// 스냅샷 파일이 없으면(구버전 Keychain 전용 스냅샷) 메모리의 같은 id 값을 옮긴다.
+    func testLegacyRestoreCarriesOrganizationFromMemoryWhenSnapshotFileMissing() throws {
+        let team = try store.upsertProfile(nickname: "team", snapshot: orgSnap(token: "team", refresh: "T0", account: Self.teamAccount))
+        let memory = store.file
+        try saveAsV053()
+        try FileManager.default.removeItem(at: env.secretFile(for: team.id))
+        let disk = try JSONDecoder().decode(AccountsFile.self, from: Data(contentsOf: env.accountsFile))
+        XCTAssertEqual(disk.accounts.first { $0.id == team.id }?.organizationUuid, "")
+
+        let (restored, _) = AccountStore.restoringAfterLegacySave(disk, memory: memory, env: env)
+        XCTAssertEqual(restored.accounts.first { $0.id == team.id }?.organizationUuid, "org-team")
+        let (noMemory, _) = AccountStore.restoringAfterLegacySave(disk, memory: nil, env: env)
+        XCTAssertEqual(noMemory.accounts.first { $0.id == team.id }?.organizationUuid, "", "근거가 없으면 비워 둔다")
+    }
+
+    /// CLI `list`·`status`(읽기 전용 대사)는 라이브를 **계정 열쇠(이메일 + 조직)** 로 골라 메모리에만 반영한다 —
+    /// 이메일만 보면 같은 이메일의 다른 조직 카드를 활성으로 보인다(Antigravity 브랜치 rebase 때 합친 경로).
+    func testReadOnlyDisplayPicksProfileByOrganization() async throws {
+        // 라이브는 개인 Max(배열에서 Team 뒤), 디스크 활성은 Team — 이메일만 보면 첫 번째인 Team 을 고른다.
+        let (team, max) = try setUpTwoOrganizations()
+        try store.setActive(team.id)
+        let before = try Data(contentsOf: env.accountsFile)
+        let failed = await switcher.reconcileForDisplay()
+        XCTAssertTrue(failed.isEmpty)
+        XCTAssertEqual(store.file.activeByProvider[.claude], max.id, "라이브 조직(Max)의 카드를 보인다")
+        XCTAssertEqual(try Data(contentsOf: env.accountsFile), before, "디스크에는 저장하지 않는다")
+    }
+
     /// 사고 재현 ①: Max가 활성인데 Keychain에 Team 토큰이 있다(oauthAccount는 Max 그대로). 2.1.281에서는
     /// Keychain 토큰이 invalid_grant로 빈 문자열이 된 뒤 Team 토큰을 쥔 세션의 refresh가 CAS를 통과해 채울 때
     /// 생긴다. 5분 동기화가 이걸 Max 프로필에 저장하면 두 카드가 Team 사용량을 보이고 한 계보를 나눠 갖는다.
@@ -642,4 +712,93 @@ final class SwitcherTests: XCTestCase {
         XCTAssertEqual(store.file.accounts.first { $0.id == max.id }?.tierDescription, "Max 20x")
         XCTAssertEqual(try switcher.refreshTierLabels(), [], "이미 맞으면 건드리지 않는다")
     }
+
+    // MARK: 저장·설치할 바이트의 신원 대조 (병합 리뷰 Codex P1-2)
+    // 라이브 바이트(Keychain 토큰 + 그때의 oauthAccount)를 읽은 뒤, 열쇠를 따로 읽기 전에 라이브 신원이 같은 이메일의
+    // 다른 조직으로 바뀐 순간. `RacingClaudeIO` 가 바이트는 Team 스냅샷, 따로 읽는 열쇠는 Max 로 돌려준다.
+
+    private func racingSwitcher(liveBytes: CredentialsSnapshot) throws -> Switcher {
+        let racing = RacingClaudeIO(base: io, liveBytes: try JSONEncoder().encode(liveBytes))
+        return Switcher(env: env, keychain: kc, store: store, io: io, extraIOs: [racing])
+    }
+
+    func testResaveDoesNotPairBytesWithSeparatelyReadKey() throws {
+        let (team, max) = try setUpTwoOrganizations()   // 라이브 신원은 Max
+        let sw = try racingSwitcher(liveBytes: orgSnap(token: "team", refresh: "T1", account: Self.teamAccount))
+        XCTAssertNil(try sw.resaveLiveIntoMatchingProfile(provider: .claude))
+        XCTAssertEqual(try storedRefresh(max.id), "M0", "Team 바이트를 Max 프로필에 저장하면 안 된다")
+        XCTAssertEqual(try storedRefresh(team.id), "T0")
+    }
+
+    func testReconcileDoesNotPairBytesWithSeparatelyReadKey() async throws {
+        let (team, max) = try setUpTwoOrganizations()
+        try store.setActive(team.id)                    // 라이브 열쇠(Max)가 활성과 달라 대사가 바이트를 읽는다
+        let sw = try racingSwitcher(liveBytes: orgSnap(token: "team", refresh: "T1", account: Self.teamAccount))
+        try await sw.reconcile()
+        XCTAssertEqual(try storedRefresh(max.id), "M0")
+        XCTAssertEqual(store.file.activeAccountID, team.id, "바이트의 주인이 열쇠와 다르면 활성도 옮기지 않는다")
+    }
+
+    func testActiveSyncDoesNotPairBytesWithSeparatelyReadKey() async throws {
+        let (_, max) = try setUpTwoOrganizations()
+        let sw = try racingSwitcher(liveBytes: orgSnap(token: "team", refresh: "T1", account: Self.teamAccount))
+        let wrote = await sw.refreshActiveSnapshotIfStable()
+        XCTAssertFalse(wrote)
+        XCTAssertEqual(try storedRefresh(max.id), "M0")
+    }
+
+    /// 이미 다른 조직의 바이트가 저장된 프로필로 전환하면 설치하지 않는다 — 설치하면 사용자가 고른 카드와 다른
+    /// 조직으로 로그인된다(바이트 안의 토큰과 신원은 서로 맞아 `secretIsMixed` 는 통과한다).
+    func testSwitchRefusesStoredBytesOfOtherOrganization() throws {
+        let (team, max) = try setUpTwoOrganizations()
+        try store.setSecret(orgSnap(token: "team", refresh: "T9", account: Self.teamAccount), for: max.id)
+        try io.writeLiveSnapshot(orgSnap(token: "team", refresh: "T0", account: Self.teamAccount))
+        try store.setActive(team.id)
+        XCTAssertThrowsError(try switcher.switchTo(max.id)) {
+            guard case SwitcherError.secretIdentityMismatch = $0 else { return XCTFail("\($0)") }
+        }
+        XCTAssertEqual(store.file.activeAccountID, team.id)
+        XCTAssertEqual(CredentialBlob.refreshToken(from: try XCTUnwrap(io.readLiveSnapshot()).keychainBlob), "T0")
+    }
+
+    func testClaudeIdentityFromSecretIsCapturedOAuthAccount() throws {
+        let data = try JSONEncoder().encode(orgSnap(token: "team", refresh: "T0", account: Self.teamAccount))
+        XCTAssertEqual(io.identity(fromSecret: data)?.key,
+                       AccountKey(emailAddress: "t@x.com", organizationUuid: "org-team"))
+    }
+
+    /// `mobius capture --provider codex` 는 저장할 바이트에서 신원을 꺼낸다(병합 리뷰 Codex P1-3) — 두 번 읽으면
+    /// 그 사이 auth.json 이 바뀐 순간 A 의 바이트를 B 프로필에 쓴다.
+    func testCodexIdentityFromSecretCarriesPlan() {
+        let identity = CodexConfigIO(env: env).identity(fromSecret: CodexFixtures.authJSON(email: "a@c.com", plan: "plus"))
+        XCTAssertEqual(identity?.emailAddress, "a@c.com")
+        XCTAssertEqual(identity?.tierDescription, "Plus")
+    }
+}
+
+/// 라이브 바이트는 고정값을, 나머지는 실제 Claude 어댑터를 돌려준다 — 바이트를 읽은 뒤 따로 읽는 신원이 바뀐 순간.
+private struct RacingClaudeIO: ProviderConfigIO {
+    let base: ClaudeConfigIO
+    let liveBytes: Data
+    var provider: Provider { .claude }
+    func readLiveSecretData() throws -> Data? { liveBytes }
+    func readStableLiveSecretData(gap: Duration) async -> (data: Data, email: String)? {
+        guard let email = try? base.liveEmail() else { return nil }
+        return (liveBytes, email)
+    }
+    func liveEmail() throws -> String? { try base.liveEmail() }
+    func liveAccountKey() throws -> AccountKey? { try base.liveAccountKey() }
+    func liveIdentity() throws -> ProviderIdentity? { try base.liveIdentity() }
+    func liveIdentityFingerprint() throws -> Data? { try base.liveIdentityFingerprint() }
+    func writeLiveSecretData(_ data: Data) throws { try base.writeLiveSecretData(data) }
+    func recognizesSecret(_ data: Data) -> Bool { base.recognizesSecret(data) }
+    func canStoreLiveSecret(_ data: Data) -> Bool { base.canStoreLiveSecret(data) }
+    func liveSecretLacksLogin(_ data: Data) -> Bool { base.liveSecretLacksLogin(data) }
+    func liveSecret(_ live: Data, reattributedTo stored: Data) -> Data? { base.liveSecret(live, reattributedTo: stored) }
+    func liveToken(_ live: Data, couldBelongTo stored: Data?) -> Bool { base.liveToken(live, couldBelongTo: stored) }
+    func secretIsMixed(_ data: Data) -> Bool { base.secretIsMixed(data) }
+    func email(fromSecret data: Data) -> String? { base.email(fromSecret: data) }
+    func identity(fromSecret data: Data) -> ProviderIdentity? { base.identity(fromSecret: data) }
+    var identityIsInSecret: Bool { base.identityIsInSecret }
+    var rollsBackFailedSwitch: Bool { base.rollsBackFailedSwitch }
 }

@@ -9,22 +9,24 @@ extension Provider {
         switch self {
         case .claude: return "Claude Code CLI"
         case .codex: return "Codex CLI"
+        case .antigravity: return "Antigravity CLI"
         }
     }
 }
 
-/// 팝오버 상단 필터 탭 — 전체 / Claude / Codex. rawValue가 AppStorage로 저장돼
+/// 팝오버 상단 필터 탭 — 전체 / Claude / Codex / Antigravity. rawValue가 AppStorage로 저장돼
 /// 마지막 선택이 재시작 후에도 유지된다. 실제로 노출되는 탭은 계정이 있는 풀로
 /// 한정되고(`AccountListView.visibleTabs`), 저장값이 그중에 없으면 읽을 때
 /// `.all`로 정규화된다(`AccountListView.tab`) — 저장값 자체는 보존한다.
 enum ProviderTab: String, CaseIterable {
-    case all, claude, codex
+    case all, claude, codex, antigravity
 
     /// 풀 → 탭. exhaustive switch라 새 Provider가 생기면 컴파일이 깨져 케이스 누락을 막는다.
     init(provider: Provider) {
         switch provider {
         case .claude: self = .claude
         case .codex: self = .codex
+        case .antigravity: self = .antigravity
         }
     }
 
@@ -33,6 +35,7 @@ enum ProviderTab: String, CaseIterable {
         case .all: return nil
         case .claude: return .claude
         case .codex: return .codex
+        case .antigravity: return .antigravity
         }
     }
 
@@ -41,6 +44,7 @@ enum ProviderTab: String, CaseIterable {
         case .all: return loc("전체")
         case .claude: return Provider.claude.displayName
         case .codex: return Provider.codex.displayName
+        case .antigravity: return Provider.antigravity.displayName
         }
     }
 }
@@ -53,6 +57,7 @@ struct AccountListView: View {
     @State private var now = Date()
     @State private var showAddChooser = false
     @State private var showCodexAddGuide = false
+    @State private var showAgyAddGuide = false
     /// 카드 행의 실측 콘텐츠 높이 (행 인셋 제외). poolCards의 List frame 계산에 사용 —
     /// 계정 삭제 후 남는 키는 무해(참조 안 됨).
     @State private var rowHeights: [UUID: CGFloat] = [:]
@@ -104,7 +109,7 @@ struct AccountListView: View {
                    value: state.desktopCapture)
         .frame(width: 430)
         .onReceive(clock) { now = $0 }
-        .onAppear { state.reload(); state.refreshUsageIfStale(); state.refreshCodexUsageIfStale(); state.validateFallbacksLocally(); now = Date() }
+        .onAppear { state.reload(); state.refreshUsageIfStale(); state.refreshCodexUsageIfStale(); state.refreshAntigravityUsageIfStale(); state.validateFallbacksLocally(); now = Date() }
     }
 
     private var header: some View {
@@ -133,7 +138,9 @@ struct AccountListView: View {
             set: { state.setAutoSwitch($0, provider: provider) }))
             .toggleStyle(.switch).controlSize(.mini)
             .font(.system(size: 10))
-            .help(loc("한도가 차면 다음 계정으로 자동으로 이어집니다"))
+            .help(provider == .antigravity
+                  ? loc("쓰던 모델의 한도가 차면, 같은 모델에 여유가 확인된 다음 계정으로 옮깁니다. 켜면 agy 를 쓰는 동안 5분마다 사용량을 조회해요. 실행 중인 agy 세션은 다시 시작해야 새 계정이 적용돼요.")
+                  : loc("한도가 차면 다음 계정으로 자동으로 이어집니다"))
     }
 
     private var providersWithAccounts: [Provider] { state.file.providersWithAccounts }
@@ -209,7 +216,10 @@ struct AccountListView: View {
                 .fill(Color.primary.opacity(0.08))
                 .frame(height: 1)
             // 라벨·크기는 풀 탭 헤더 토글과 동일 (미세하게 다르면 어색 — 사용자 피드백)
+            // fixedSize: 줄어드는 쪽은 헤어라인이어야 한다. 없으면 긴 라벨("Antigravity CLI
+            // 자동 전환")이 "자동…"으로 잘린다(E2E 2026-11-20).
             autoSwitchToggle(provider)
+                .fixedSize()
         }
         .padding(.leading, 2)
     }
@@ -289,6 +299,8 @@ struct AccountListView: View {
                 // 계정 추가 팝오버와 같은 안내 블록 재사용 — 문구가 세 군데로 흩어지면
                 // 드리프트한다 (리뷰 반영)
                 codexAddGuide.padding(.horizontal, 24)
+            case .antigravity:
+                agyAddGuide.padding(.horizontal, 24)
             }
         }
         .frame(maxWidth: .infinity).padding(.vertical, 18)
@@ -313,10 +325,14 @@ struct AccountListView: View {
         let claudeCard = p.provider == .claude
         // 연속 401 임계값 도달(표시 전용) — Claude 전용 신호다(usage 조회가 Claude만 돈다).
         let suspect = claudeCard && state.authSuspect.contains(p.id)
-        // 낙관적 표시: 수동 전환(Claude) 클릭 직후 pendingSwitchID로 그 카드를 즉시 활성으로
-        // 보여줘 UI가 스무스하게 전환된 것처럼 보이게 한다. Codex·평시엔 풀별 isActive.
-        let showActive = claudeCard && state.pendingSwitchID != nil
+        // 낙관적 표시: 수동 전환(Claude·Antigravity) 클릭 직후 pendingSwitchID로 그 카드를 즉시
+        // 활성으로 보여줘 UI가 스무스하게 전환된 것처럼 보이게 한다. Codex·평시엔 풀별 isActive.
+        let pendingInPool = state.pendingSwitchID.map { id in
+            state.file.accounts.first { $0.id == id }?.provider == p.provider } ?? false
+        let showActive = (claudeCard || p.provider == .antigravity) && pendingInPool
             ? (p.id == state.pendingSwitchID) : isActive(p)
+        // Antigravity: 키체인 쓰기가 시간을 넘겨 라이브 상태를 모르는 동안 활성 카드에 표시한다.
+        let agyChecking = p.provider == .antigravity && isActive(p) && state.agyIO.isLiveStateUnknown
         // 임계값 선제 경고 pill — Claude 전용, 경고 창이 아직 유효할 때만. 소진 카운트다운과
         // 같은 `now` 틱을 공유해 별도 타이머 없이 같은 주기로 나타나고 사라진다.
         let advisory = claudeCard && p.hasActiveAdvisory(now: now)
@@ -335,7 +351,7 @@ struct AccountListView: View {
                             }
                         },
                         onReauth: (p.needsReauth || suspect) && claudeCard ? { state.addAccount() } : nil,
-                        authSuspect: suspect, advisory: advisory)
+                        authSuspect: suspect, advisory: advisory, statusChecking: agyChecking)
             .onTapGesture {
                 guard !isActive(p) else { return }
                 withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
@@ -358,7 +374,8 @@ struct AccountListView: View {
                         state.beginDesktopCapture(for: p.id)
                     }
                 }
-                Button(loc("삭제"), role: .destructive) { state.removeAccount(p.id) }
+                // ⋯ 메뉴와 같은 이름 — 같은 동작이 두 메뉴에서 다른 이름으로 보이지 않게
+                Button(loc("계정 삭제"), role: .destructive) { state.removeAccount(p.id) }
             }
     }
 
@@ -375,10 +392,7 @@ struct AccountListView: View {
             .buttonStyle(.borderedProminent)
             .controlSize(.small)
             // Codex(터미널 adopt)·CLI 설치 등은 설정에서
-            Button(loc("설정에서 추가 (Codex 포함)")) {
-                NSApp.activate(ignoringOtherApps: true)
-                openSettings()
-            }
+            Button(loc("설정에서 추가 (Codex 포함)")) { openSettingsFromPopover() }
             .buttonStyle(.plain)
             .font(.system(size: 10)).foregroundStyle(.tertiary)
         }
@@ -424,13 +438,41 @@ struct AccountListView: View {
                 TruncatingErrorText(text: err)
             }
             Spacer()
-            // SettingsLink는 accessory(메뉴바 전용) 앱에서 창을 활성화하지 못해 무반응 —
-            // 앱을 먼저 활성화한 뒤 openSettings 환경 액션으로 연다
-            footerButton("gearshape", help: loc("설정")) {
-                NSApp.activate(ignoringOtherApps: true)
-                openSettings()
-            }
+            footerButton("gearshape", help: loc("설정")) { openSettingsFromPopover() }
             footerButton("power", help: loc("종료")) { NSApp.terminate(nil) }
+        }
+    }
+
+    /// 팝오버에서 설정 창을 연다. ★ 팝오버(MenuBarExtra 창)를 **먼저 닫는다** — 설정 창이 뜨며
+    /// 활성화 정책이 `.regular`로 바뀌면(SettingsView.onAppear), 열려 있던 팝오버가 메인
+    /// 디스플레이의 메뉴바 아래로 옮겨 붙은 채 닫히지 않고 남는다(E2E 실측 2026-11-20, 외부
+    /// 디스플레이의 메뉴바에서 연 경우). 버튼을 누른 순간의 key 창이 팝오버다.
+    /// 닫기는 `openSettings()` **뒤에** 한다 — 먼저 닫으면 이 뷰의 환경 액션이 무반응이 되어
+    /// 설정 창이 아예 뜨지 않는다(실측).
+    private func openSettingsFromPopover() {
+        let popover = NSApp.keyWindow
+        // SettingsLink는 accessory(메뉴바 전용) 앱에서 창을 활성화하지 못해 무반응 —
+        // 앱을 먼저 활성화한 뒤 openSettings 환경 액션으로 연다
+        NSApp.activate(ignoringOtherApps: true)
+        openSettings()
+        Self.dismissPopover(fallback: popover)
+    }
+
+    /// 팝오버를 **상태 아이템 버튼을 눌러** 닫는다 — 사용자가 아이콘을 다시 누른 것과 같은 경로라
+    /// SwiftUI 의 표시 상태가 맞게 유지된다. 창을 직접 `close()` 하면 SwiftUI 는 아직 열려 있다고
+    /// 보고, 다음 아이콘 클릭 한 번을 "닫기"로 써 버려 두 번 눌러야 열린다(실측 2026-11-20).
+    /// 상태 아이템을 찾지 못하면(비공개 속성이 바뀐 macOS) 창을 닫는 것으로 물러선다.
+    @MainActor static func dismissPopover(fallback popover: NSWindow?) {
+        let key = "statusItem"
+        for window in NSApp.windows where window.className == "NSStatusBarWindow"
+            && window.responds(to: NSSelectorFromString(key)) {
+            if let button = (window.value(forKey: key) as? NSStatusItem)?.button {
+                button.performClick(nil)
+                return
+            }
+        }
+        if let popover, popover.identifier?.rawValue != "com_apple_SwiftUI_Settings_window" {
+            popover.close()
         }
     }
 
@@ -449,6 +491,12 @@ struct AccountListView: View {
                 .popover(isPresented: $showCodexAddGuide, arrowEdge: .bottom) {
                     codexAddGuide.padding(14).frame(width: 280)
                 }
+        case .antigravity:
+            Button { showAgyAddGuide.toggle() } label: { label }
+                .buttonStyle(.plain).foregroundStyle(.secondary)
+                .popover(isPresented: $showAgyAddGuide, arrowEdge: .bottom) {
+                    agyAddGuide.padding(14).frame(width: 280)
+                }
         case .all:
             Button { showAddChooser.toggle() } label: { label }
                 .buttonStyle(.plain).foregroundStyle(.secondary)
@@ -466,10 +514,23 @@ struct AccountListView: View {
                         .controlSize(.small)
                         Divider()
                         codexAddGuide
+                        Divider()
+                        agyAddGuide
                     }
                     .padding(14)
                     .frame(width: 280)
                 }
+        }
+    }
+
+    /// Antigravity 계정 추가 안내 — agy 에 비대화형 로그인 명령이 없어 adopt 방식만(설계 4.8).
+    private var agyAddGuide: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Label(loc("Antigravity는 터미널로 추가해요"), systemImage: "terminal")
+                .font(.system(size: 12, weight: .semibold))
+            Text(locMarkdown("터미널에서 `agy` 를 실행해 로그인하면 자동으로 등록돼요. 다른 계정을 더하려면 agy 에서 로그아웃한 뒤 그 계정으로 로그인하세요."))
+                .font(.system(size: 11)).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -478,7 +539,7 @@ struct AccountListView: View {
         VStack(alignment: .leading, spacing: 6) {
             Label(loc("Codex는 터미널로 추가해요"), systemImage: "terminal")
                 .font(.system(size: 12, weight: .semibold))
-            Text(loc("터미널에서 `codex logout` 후 `codex login`으로 추가할 계정에 로그인하면, Mobius가 몇 초 안에 자동으로 등록합니다."))
+            Text(locMarkdown("터미널에서 `codex logout` 후 `codex login`으로 추가할 계정에 로그인하면, Mobius가 몇 초 안에 자동으로 등록합니다."))
                 .font(.system(size: 11)).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             Text(loc("지금 쓰던 계정은 이미 카드에 저장돼 있어 카드를 눌러 언제든 되돌아올 수 있어요."))

@@ -2,6 +2,11 @@
 
 /* AppState — 알림/오류 */
 "계정 목록 로드 실패: %@" = "Failed to load accounts: %@";
+"계정 목록을 읽지 못했어요" = "Couldn't read the account list";
+"계정 목록 파일을 해석하지 못했어요" = "Couldn't understand the account list file";
+"accounts.json 이 손상됐거나 더 새 버전의 형식이라 계정 목록 저장과 자동 전환을 멈췄어요. 원본은 %@ 에 백업했어요. 더 새 버전의 Mobius 로 업데이트하거나, accounts.json 을 지우면(계정 목록이 비고 다시 등록해야 해요) 이어서 동작해요." = "accounts.json is damaged or uses a newer version's format, so Mobius paused saving the account list and automatic switching. The original was backed up to %@. Update to a newer Mobius, or delete accounts.json (the account list will be empty and you'll need to add accounts again) to continue.";
+"accounts.json 이 손상됐거나 더 새 버전의 형식이라 계정 목록 저장과 자동 전환을 멈췄어요. 원본을 백업하지 못했으니 accounts.json 을 지우지 말고, 디스크 공간과 권한을 확인한 뒤 더 새 버전의 Mobius 로 업데이트해 주세요." = "accounts.json is damaged or uses a newer version's format, so Mobius paused saving the account list and automatic switching. The original could not be backed up, so don't delete accounts.json. Check disk space and permissions, then update to a newer Mobius.";
+"accounts.json 을 읽지 못해 계정 목록 저장과 자동 전환을 멈췄어요. 파일 권한을 확인해 주세요. 다시 읽히면 자동으로 이어서 동작해요." = "Mobius couldn't read accounts.json, so it paused saving the account list and automatic switching. Check the file's permissions. It resumes on its own once the file can be read.";
 "전환 가능한 계정이 없습니다. 리셋을 기다려주세요." = "No account is available to switch to. Please wait for a reset.";
 "모델 한도 — 자동 전환이 꺼져 있습니다" = "Model limit — auto-switch is off";
 "%@ 계정에서 이 모델만 한도에 걸렸어요. 계정은 다른 모델로 계속 쓸 수 있어요." = "Only this model hit its limit on %@. The account still works with other models.";
@@ -225,3 +230,26 @@
 "%@ 계정이 한도에 가까워져 여유 있는 %@(으)로 미리 전환했어요. %@" = "%@ was nearing its limit, so we switched ahead to %@, which has headroom. %@";
 "활성 계정 동기화가 계속 실패하고 있어요 — 자동 전환·배지가 잠시 지연될 수 있어요." = "Active-account sync keeps failing — auto-switch and badges may be briefly delayed.";
 "%@ 계정의 세션이 도는데 로그인이 만료된 채예요. 카드의 '다시 로그인'을 눌러주세요." = "%@ has an active session but its login has expired. Tap \"Sign in again\" on the card.";
+
+/* Antigravity CLI (agy) */
+"실행 중인 agy 세션은 다시 시작해야 새 계정이 적용돼요." = "Restart running agy sessions to use the new account.";
+"Antigravity 자동 전환을 멈췄어요" = "Antigravity auto-switch paused";
+"이전 계정의 agy 세션이 계정을 되돌렸어요. 그 세션을 종료해 주세요. 자동 전환은 %@ 에 다시 동작해요." = "An agy session of the previous account switched the login back. Please quit that session. Auto-switch resumes at %@.";
+"Antigravity 설정을 되돌렸어요" = "Antigravity settings were reset";
+"이전 버전이 계정 목록을 저장해 Antigravity 설정을 되돌렸어요. 계정은 복원했고 자동 전환은 꺼져 있어요." = "An older version saved the account list and reset Antigravity settings. Accounts were restored; auto-switch is off.";
+"Antigravity 한도" = "Antigravity limit";
+"모든 Antigravity 계정에서 %@ 한도가 찼어요. %@ 이후 다시 쓸 수 있어요." = "%@ is out of quota on every Antigravity account. Available again after %@.";
+"Antigravity 계정을 전환했어요(%@ 한도). 실행 중인 agy 세션은 다시 시작해야 새 계정이 적용돼요." = "Switched the Antigravity account (%@ limit). Restart running agy sessions to use the new account.";
+"agy 는 %@(으)로 바뀌었지만 계정 목록 저장에 실패했어요." = "agy switched to %@, but saving the account list failed.";
+"agy 키체인이 응답하지 않아 전환 결과를 확인하는 중이에요." = "The agy keychain didn't respond; checking whether the switch happened.";
+"agy 키체인이 응답하지 않아 전환하지 못했어요." = "The agy keychain didn't respond, so the switch didn't happen.";
+"agy 키체인 값의 형식이 달라 전환을 멈췄어요. agy 를 업데이트했다면 Mobius 업데이트가 필요할 수 있어요." = "The agy keychain value has a different format, so the switch was stopped. If you updated agy, Mobius may need an update.";
+"쓰던 모델의 한도가 차면, 같은 모델에 여유가 확인된 다음 계정으로 옮깁니다. 켜면 agy 를 쓰는 동안 5분마다 사용량을 조회해요. 실행 중인 agy 세션은 다시 시작해야 새 계정이 적용돼요." = "When the model you use runs out, moves to the next account confirmed to have quota for that model. While on, usage is checked every 5 minutes while you use agy. Restart running agy sessions to use the new account.";
+"Antigravity는 터미널로 추가해요" = "Add Antigravity from the terminal";
+"터미널에서 `agy` 를 실행해 로그인하면 자동으로 등록돼요. 다른 계정을 더하려면 agy 에서 로그아웃한 뒤 그 계정으로 로그인하세요." = "Run `agy` in a terminal and sign in — Mobius registers it automatically. To add another account, log out in agy and sign in with that account.";
+"계정 상태 확인 중" = "Checking account";
+"agy 키체인 쓰기의 결과를 확인하는 중이에요. 확인될 때까지 자동 전환을 멈춰요." = "Checking the result of an agy keychain write. Auto-switch is paused until confirmed.";
+"%@ 한도 · %@ 초기화" = "%@ limit · resets %@";
+"아직 사용 안 함" = "Not used yet";
+"확인 안 됨" = "Unverified";
+"Antigravity용 실험 기능은 아직 없어요." = "No experimental features for Antigravity yet.";
