@@ -30,10 +30,41 @@ public enum CandidateProbeAction: Equatable, Sendable {
     case escalate         // 만료 + 쿨다운 경과(또는 첫 시도) → 네트워크 refresh로 승격
 }
 
+/// 프로바이더별 엔진 규칙. Antigravity 는 규칙을 줄였다(설계 4.7, 2026-11-20 사용자 결정):
+/// "쓰던 모델이 0 이 되면, 같은 모델에 여유가 확인된 다음 계정으로". 계정 전체 소진 판정과
+/// 리셋 시각 기반 primary 자동 복귀는 두지 않는다.
+public struct AutoSwitchPolicy: Equatable, Sendable {
+    /// 모델 한도로 떠날 때 사용자 핀을 보지 않는다(Antigravity — 0절 사용자 결정).
+    public var ignoresPinForModelLimit: Bool
+    /// onTick (B) primary 자동 복귀를 하는가.
+    public var returnsToPrimary: Bool
+    /// 엔진 내장 `avoidModelLimited` 후보 필터를 쓰는가. Antigravity 는 호출자가 **모델 ID 로**
+    /// 비교한 제외 집합을 넘기므로 쓰지 않는다.
+    public var usesBuiltInModelLimitFilter: Bool
+    /// 떠나기 조건: 활성 계정의 모델 한도 기록이 **그 계정이 활성이 된 시각 이후**에 쓰였고 아직
+    /// 유효할 때만 떠난다(재시작 전·이전 활성 기간의 기록으로는 떠나지 않는다).
+    public var leavesOnlyForRecordSinceActivation: Bool
+
+    public static let standard = AutoSwitchPolicy(
+        ignoresPinForModelLimit: false, returnsToPrimary: true,
+        usesBuiltInModelLimitFilter: true, leavesOnlyForRecordSinceActivation: false)
+    public static let antigravity = AutoSwitchPolicy(
+        ignoresPinForModelLimit: true, returnsToPrimary: false,
+        usesBuiltInModelLimitFilter: false, leavesOnlyForRecordSinceActivation: true)
+
+    public static func `for`(_ provider: Provider) -> AutoSwitchPolicy {
+        switch provider {
+        case .claude, .codex: return .standard
+        case .antigravity: return .antigravity
+        }
+    }
+}
+
 /// 순수 상태머신. 부작용 없음 — 호출자가 Decision을 실행하고 noteSwitched()로 알려준다.
 /// 프로바이더 풀당 1인스턴스 — 쿨다운/복귀 판단이 풀별로 독립이다.
 public final class AutoSwitchEngine: @unchecked Sendable {
     public let provider: Provider
+    public let policy: AutoSwitchPolicy
     /// 전환 직후 재전환 금지 간격.
     ///
     /// ★ **실측 근거로 정한 값**(이슈 #19, @Phantomn 2026-08-22): 사고 로그에서 각 한도
@@ -50,7 +81,19 @@ public final class AutoSwitchEngine: @unchecked Sendable {
     private var lastSwitchAt: Date = .distantPast
     private let lock = NSLock()
 
-    public init(provider: Provider = .claude) { self.provider = provider }
+    public init(provider: Provider = .claude) {
+        self.provider = provider
+        self.policy = .for(provider)
+    }
+
+    /// 활성 계정이 이 정책에서 떠나야 하는가.
+    /// - Parameter activeSince: 그 계정이 활성이 된 시각(호출자 메모리 — 세대가 바뀔 때 갱신).
+    func mayLeave(_ active: AccountProfile, activeSince: Date?, now: Date) -> Bool {
+        guard policy.leavesOnlyForRecordSinceActivation else { return active.autoSwitchMayLeave(now: now) }
+        guard let rl = active.rateLimit, rl.modelScoped, now < rl.resetsAt,
+              let activeSince, rl.recordedAt >= activeSince else { return false }
+        return true   // 핀은 보지 않는다(0절 사용자 결정)
+    }
 
     /// - Parameters:
     ///   - forModelLimit: 이 전환이 **모델 전용 한도 때문**이었는가.
@@ -89,12 +132,17 @@ public final class AutoSwitchEngine: @unchecked Sendable {
     ///   없다 — 그 폴백으로 옮기면 사용자는 같은 에러를 다시 보고, 그제서야 기록이 생겨 다음
     ///   폴백으로 또 옮긴다(실패 기록 22: 폴백마다 한 번씩 헛돈다). 모델 한도 때문에 떠날 때만
     ///   본다 — 계정 소진으로 떠날 때는 모델이 막힌 계정도 정상 후보(위와 같은 이유).
+    /// - Parameter excludedIDs: 호출자가 모은 **제외할 계정 ID 집합**(Antigravity: 같은 모델 ID 의
+    ///   유효 기록·메모리 후보 제외·확인 불가 쿨다운 — 설계 4.7 「후보 고르기」).
     private func firstAvailable(in file: AccountsFile, excluding: UUID?, now: Date,
                                 avoidModelLimited: Bool = false,
-                                modelBlocked: Set<UUID> = []) -> UUID? {
-        file.accounts(of: provider).first {
-            $0.id != excluding && !$0.isLimited(now: now) && !$0.needsReauth
-                && !(avoidModelLimited && ($0.isModelLimited(now: now) || modelBlocked.contains($0.id)))
+                                modelBlocked: Set<UUID> = [],
+                                excludedIDs: Set<UUID> = []) -> UUID? {
+        let filterModel = avoidModelLimited && policy.usesBuiltInModelLimitFilter
+        return file.accounts(of: provider).first {
+            $0.id != excluding && !excludedIDs.contains($0.id)
+                && !$0.isLimited(now: now) && !$0.needsReauth
+                && !(filterModel && ($0.isModelLimited(now: now) || modelBlocked.contains($0.id)))
         }?.id
     }
 
@@ -103,13 +151,15 @@ public final class AutoSwitchEngine: @unchecked Sendable {
     /// 새 활성 계정의 소진으로 오인해 연쇄 전환(B→C→D)되는 것을 막는다.
     /// - Parameter modelBlocked: 사용량 캐시상 모델 창이 소진된 계정들 — `firstAvailable` 참조.
     public func onRateLimitHit(file: AccountsFile, hit: RateLimitHit, now: Date,
-                               modelBlocked: Set<UUID> = []) -> Decision {
+                               modelBlocked: Set<UUID> = [],
+                               excludedIDs: Set<UUID> = []) -> Decision {
         guard let active = file.active(of: provider), !inCooldown(now) else { return .none }
         // 모델 전용 한도(Fable 등) + 사용자가 이 계정을 직접 고름(pin) → 전환하지 않고 머문다.
         // 계정은 다른 모델로 쓸 수 있고, 사용자가 "여기 있겠다"고 이미 선택했으므로.
         // ★ 이 검사는 자동 전환 on/off보다 **먼저**다: 꺼져 있을 때도 핀은 존중해야 하고,
         //   무엇보다 아래 알림 분기가 pin 케이스까지 삼키면 안 된다.
-        if hit.modelScoped && active.userPinned { return .none }
+        // ★ Antigravity 는 핀을 보지 않는다 — 쓰던 버킷이 소진되면 핀이 있어도 옮긴다(0절).
+        if hit.modelScoped && active.userPinned && !policy.ignoresPinForModelLimit { return .none }
         // 이 풀의 자동 전환 꺼짐 — 스펙상 "끄면 소진 알림만": 전환 없이 알림 결정만 반환.
         // ★ 모델 전용 한도는 문구가 다르다 — "계정 한도 소진"이라고 하면 거짓말이다.
         guard file.isAutoSwitchEnabled(provider) else {
@@ -119,7 +169,8 @@ public final class AutoSwitchEngine: @unchecked Sendable {
         guard let next = firstAvailable(in: markedFile(file, activeID: active.id, hit: hit, now: now),
                                         excluding: active.id, now: now,
                                         avoidModelLimited: hit.modelScoped,
-                                        modelBlocked: modelBlocked) else {
+                                        modelBlocked: modelBlocked,
+                                        excludedIDs: excludedIDs) else {
             // ★ 모델 전용 한도인데 갈 곳이 없다 = 어디로 옮겨도 그 모델은 막혀 있다.
             //   이때 "모든 계정 한도 소진"은 **거짓말이다** — 계정들은 멀쩡하고 다른 모델은
             //   쓸 수 있다. 조용히 머문다(사용자는 CLI 에러로 이미 상황을 안다).
@@ -143,10 +194,23 @@ public final class AutoSwitchEngine: @unchecked Sendable {
 
     /// 주기 틱: (A) 활성 계정이 소진 상태면 여유 있는 계정으로 자가 전환,
     ///          (B) fallback 활성이 자동 전환의 결과라면 primary 리셋 시 복귀.
-    /// - Parameter modelBlocked: 사용량 캐시상 모델 창이 소진된 계정들 — `firstAvailable` 참조.
-    public func onTick(file: AccountsFile, now: Date, modelBlocked: Set<UUID> = []) -> Decision {
+    /// - Parameters:
+    ///   - activeSince: 활성 계정이 활성이 된 시각. `leavesOnlyForRecordSinceActivation` 정책
+    ///     (Antigravity)만 본다 — 그보다 앞선 기록으로는 떠나지 않는다.
+    ///   - modelBlocked: 사용량 캐시상 모델 창이 소진된 계정들 — `firstAvailable` 참조.
+    ///   - excludedIDs: 호출자가 모은 후보 제외 집합(Antigravity).
+    public func onTick(file: AccountsFile, now: Date, activeSince: Date? = nil,
+                       modelBlocked: Set<UUID> = [], excludedIDs: Set<UUID> = []) -> Decision {
         guard file.isAutoSwitchEnabled(provider), !inCooldown(now),
               let active = file.active(of: provider) else { return .none }
+
+        if policy.leavesOnlyForRecordSinceActivation {
+            // Antigravity: 자가복구(A)만. primary 복귀(B)와 계정 소진 판정은 두지 않는다(설계 4.7).
+            guard mayLeave(active, activeSince: activeSince, now: now),
+                  let next = firstAvailable(in: file, excluding: active.id, now: now,
+                                            excludedIDs: excludedIDs) else { return .none }
+            return .switchTo(next, reason: .modelExhausted)
+        }
 
         // (A) 자가복구: 활성 계정이 소진/로그인만료인데 여전히 활성이면 여유 계정으로 전환한다
         //     (로그 hit 순간의 전환을 쿨다운·throw 등으로 놓쳐도 다음 틱에 복구).

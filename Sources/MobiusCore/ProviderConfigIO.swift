@@ -85,6 +85,20 @@ public protocol ProviderConfigIO: Sendable {
     /// 저장 secret 자체가 서로 다른 계정의 토큰과 신원을 섞어 들고 있는가. 전환은 이런 secret을 라이브에
     /// 설치하지 않는다 — 설치하면 사용자가 고른 카드와 다른 조직으로 로그인된다.
     func secretIsMixed(_ data: Data) -> Bool
+    /// secret 바이트 **자체에서** 꺼낸 계정 이메일. 신원이 바이트 안에 있는 프로바이더(Codex·
+    /// Antigravity)는 값을 주고, 바이트에 신원이 없는 Claude 는 nil 을 준다(`~/.claude.json` 으로
+    /// 대조). Switcher 는 이 값이 있으면 **저장하거나 설치하는 바이트의 이메일**로 프로필을
+    /// 고르고 대조한다 — 값과 이메일을 따로 읽는 틈(실패 기록 1·2)을 없앤다(설계 4.1).
+    func email(fromSecret data: Data) -> String?
+
+    /// 신원이 secret 바이트 안에 있는가. true 면 바이트에서 이메일을 못 꺼낸 값은 "신원 없음"이고,
+    /// 따로 읽은 이메일(`liveEmail`)로 대신하지 않는다.
+    var identityIsInSecret: Bool { get }
+
+    /// 라이브 쓰기가 실패했을 때 이전 값으로 되돌리는가. Antigravity 는 되돌리지 않는다 —
+    /// `security` CLI 로는 비교와 되돌리기를 원자적으로 묶을 수 없어, 되돌리는 사이에 끝난
+    /// 새 agy 로그인을 덮을 수 있다(설계 4.5).
+    var rollsBackFailedSwitch: Bool { get }
 }
 
 extension ProviderConfigIO {
@@ -114,6 +128,29 @@ extension ProviderConfigIO {
     public func liveIdentityFingerprint() throws -> Data? {
         try liveAccountKey().map { Data("\($0.emailAddress)\u{0}\($0.organizationUuid)".utf8) }
     }
+    public var identityIsInSecret: Bool { false }
+    public var rollsBackFailedSwitch: Bool { true }
+}
+
+/// 라이브 값의 지문(해시)을 알려 주는 어댑터. 같은 이메일로 다시 로그인하거나 로그아웃해
+/// 라이브 바이트가 바뀌면 활성 세대를 늘리는 데 쓴다(설계 4.7 「기준값과 활성 세대」).
+/// nil = 로그아웃 상태 또는 아직 값을 읽지 않음.
+public protocol LiveFingerprintReporting {
+    var liveFingerprint: Data? { get }
+}
+
+/// 쓰기 직전에 읽은 라이브 값이 기대한 지문일 때만 쓰는 어댑터(설계 4.7 「비동기 경합」).
+/// 기대 지문이 다르거나, 그 읽기 **뒤에** 부르는 `stillValid` 가 false 면 쓰지 않고 throw 한다 —
+/// 마지막 읽기가 걸리는 동안 바뀐 설정·대상 등록을 쓰기 바로 앞에서 다시 본다(리뷰 2회차 Codex P1-3).
+public protocol GuardedLiveWriting {
+    func writeLiveSecretData(_ data: Data, ifLiveFingerprint expected: Data?,
+                             stillValid: () -> Bool) throws
+}
+
+/// 변화 감지 중에 새로 읽은 라이브 값을 넘겨주는 어댑터(설계 4.2 「활성 계정 스냅샷 갱신」).
+/// 한 번 넘기면 비운다.
+public protocol LiveValueChangeReporting {
+    func takeChangedLiveValue() -> Data?
 }
 
 /// 원자적 파일 쓰기 + 퍼미션 — 자격증명류 파일의 공통 쓰기 경로.

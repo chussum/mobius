@@ -25,6 +25,8 @@ public struct CodexConfigIO: ProviderConfigIO {
     public init(env: MobiusEnvironment) { self.env = env }
 
     public var provider: Provider { .codex }
+    public var identityIsInSecret: Bool { true }
+    public func email(fromSecret data: Data) -> String? { Self.email(fromAuthJSON: data) }
 
     /// 파일에 내용이 있으면 신원 유무와 무관하게 바이트를 돌려준다 — 전환 실패 시
     /// 롤백은 신원 없는 상태(API 키 전용 등)도 원복해야 하기 때문. 계정 식별이 필요한

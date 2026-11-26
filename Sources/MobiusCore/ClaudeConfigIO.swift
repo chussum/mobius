@@ -114,6 +114,8 @@ public struct ClaudeConfigIO: Sendable {
 
 extension ClaudeConfigIO: ProviderConfigIO {
     public var provider: Provider { .claude }
+    /// Claude 자격증명 blob 에는 계정 식별자가 없다 — 이메일은 `~/.claude.json` 으로 대조한다.
+    public func email(fromSecret data: Data) -> String? { nil }
 
     public func readLiveSecretData() throws -> Data? {
         guard let snap = try readLiveSnapshot() else { return nil }

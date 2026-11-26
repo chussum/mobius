@@ -144,12 +144,15 @@ available (app **Settings → Installed Tools → Mobius CLI → Install**):
 
 ```
 mobius list                        # account list per provider (active ●, priority, limit status)
-mobius switch <name>               # switch by nickname (--provider claude|codex if ambiguous)
+mobius switch <name>               # switch by nickname (--provider claude|codex|antigravity if ambiguous)
 mobius status                      # active account per provider, time until reset
 mobius capture <name>              # register the currently logged-in claude account
-mobius capture <name> --provider codex   # register the currently logged-in codex account
-mobius auto on|off                 # toggle auto-switch (--provider claude|codex, Claude only if omitted)
+mobius capture <name> --provider codex   # register the currently logged-in codex account (not for antigravity — the app registers it)
+mobius auto on|off                 # toggle auto-switch (--provider claude|codex|antigravity, Claude only if omitted)
 ```
+
+If one provider's state can't be read (e.g. the agy keychain doesn't respond), `list` and
+`status` print one error line for that provider and still show the others.
 
 CLI switches reflect instantly in the running app.
 Note: Desktop co-switching only applies to switches made in the app — `mobius switch`
@@ -208,6 +211,26 @@ Usage gauges are fetched only when the popover opens (4-minute cache) — never 
   previous account can write its refreshed tokens back, flipping the login (Mobius
   notifies you when this happens). To make a switch stick, close the previous
   account's running codex sessions.
+- **Adding an Antigravity CLI (`agy`) account**: run `agy` in a terminal and sign in — Mobius
+  registers it automatically. To add another account, log out in agy and sign in with it
+  (saved accounts keep working after logout and re-login).
+- **Running `agy` sessions**: they keep their tokens in memory and don't follow a switch —
+  **restart them to use the new account** (measured on agy 1.5.12). Auto-switch likewise
+  affects sessions started afterwards.
+- **Antigravity auto-switch (opt-in, off by default)**: when the model you use reaches zero, it
+  moves to the next account confirmed to have quota for that same model. While on, it checks the
+  active account's usage every 5 minutes, only while agy was used in the last 30 minutes. It does
+  not return to primary after a reset, and it won't leave for a model that was already at zero
+  before the app restarted (you can always switch manually). Antigravity gauges show two lines
+  (Gemini / Claude model groups); the value needed to refresh them is read from the installed agy
+  (agy itself is never launched).
+- **Downgrading and coming back**: versions since v0.3.0 can read an account list that contains
+  Antigravity accounts, and Claude/Codex accounts stay intact. If an older version saves the list,
+  Antigravity accounts drop out of it, but the new version restores them from the saved
+  credentials and leaves Antigravity auto-switch off. If a version older than v0.5.4 saves the list,
+  the information that tells several organizations of one email apart is dropped, and the new version
+  fills it back in from the saved credentials when it starts. Mixing with versions older than v0.3.0 is
+  not supported.
 - **Running `claude` sessions**: switching does **not** interrupt running sessions
   (measured through many switch round-trips). You don't need to restart them
   either — an already-open session picks up the new account with your **next

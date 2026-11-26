@@ -137,12 +137,15 @@ Claude Desktop 토글 2개는 **설치 현황 → Claude 탭**의 Claude Desktop
 
 ```
 mobius list                        # 계정 목록 — 프로바이더별 섹션 (활성 ●, 우선순위, 한도 상태)
-mobius switch <name>               # 닉네임으로 전환 (중복 닉네임은 --provider claude|codex)
+mobius switch <name>               # 닉네임으로 전환 (중복 닉네임은 --provider claude|codex|antigravity)
 mobius status                      # 프로바이더별 현재 활성 계정, 리셋까지 남은 시간
 mobius capture <name>              # 현재 claude 로그인 계정을 프로필로 등록
-mobius capture <name> --provider codex   # 현재 codex 로그인 계정을 등록
-mobius auto on|off                 # 자동 전환 켜기/끄기 (--provider claude|codex, 미지정 시 Claude)
+mobius capture <name> --provider codex   # 현재 codex 로그인 계정을 등록 (antigravity 는 지원 안 함 — 앱이 자동 등록)
+mobius auto on|off                 # 자동 전환 켜기/끄기 (--provider claude|codex|antigravity, 미지정 시 Claude)
 ```
+
+한 프로바이더의 상태를 읽지 못하면(예: agy 키체인 응답 없음) `list`·`status` 는 그 프로바이더만
+오류 한 줄로 보이고 나머지는 그대로 출력합니다.
 
 CLI로 전환해도 실행 중인 앱 화면에 즉시 반영됩니다.
 단, Desktop 동시 전환은 앱에서 전환할 때만 적용됩니다 — `mobius switch`는 CLI 자격증명만 바꿉니다.
@@ -188,6 +191,22 @@ CLI로 전환해도 실행 중인 앱 화면에 즉시 반영됩니다.
 - **Codex 전환이 되돌아간다면**: 이전 계정으로 실행 중인 codex 세션이 토큰을 갱신하면서
   로그인을 자기 계정으로 되돌릴 수 있습니다 (Mobius가 알림으로 알려줍니다).
   전환을 유지하려면 이전 계정의 실행 중 codex 세션을 종료하세요.
+- **Antigravity CLI(`agy`) 계정 추가**: 터미널에서 `agy` 를 실행해 로그인하면 자동으로
+  등록됩니다. 다른 계정을 더하려면 agy 에서 로그아웃한 뒤 그 계정으로 로그인하세요(저장된
+  계정은 로그아웃·재로그인 뒤에도 그대로 쓸 수 있습니다).
+- **실행 중인 `agy` 세션**: 토큰을 메모리에 들고 있어 전환을 따라가지 않습니다 — **다시 시작해야
+  새 계정이 적용됩니다**(agy 1.5.12 실측). 자동 전환도 다음에 시작하는 세션부터 효과가 있습니다.
+- **Antigravity 자동 전환(옵트인, 기본 꺼짐)**: 쓰던 모델의 한도가 0 이 되면, 같은 모델에 여유가
+  확인된 다음 계정으로 옮깁니다. 켜면 agy 를 최근 30분 안에 쓴 동안만 5분마다 활성 계정의 사용량을
+  조회합니다. 리셋 뒤 primary 로 자동 복귀하지 않고, 앱을 다시 시작하기 전부터 이미 0 이던 모델로는
+  떠나지 않습니다(수동 전환은 언제든 됩니다). Antigravity 사용량 게이지는 Gemini / Claude 모델 묶음
+  두 줄이고, 갱신에 필요한 값은 설치된 agy 에서 읽습니다(agy 를 실행하지는 않습니다).
+- **구버전으로 내려갔다가 다시 올라오면**: v0.3.0 이후 버전은 Antigravity 계정이 든 계정 목록을
+  읽을 수 있고 Claude·Codex 계정은 그대로입니다. 구버전이 목록을 저장하면 Antigravity 계정은
+  목록에서 빠지지만, 새 버전이 다시 열 때 저장된 자격증명에서 되살리고 Antigravity 자동 전환은
+  꺼짐으로 둡니다. v0.5.4 보다 오래된 버전이 목록을 저장하면 같은 이메일의 여러 조직을 가르는 정보가
+  빠지지만, 새 버전이 시작할 때 저장된 자격증명에서 다시 채웁니다. v0.3.0 보다 오래된 버전과 섞어 쓰는
+  것은 지원하지 않습니다.
 - **실행 중인 `claude` 세션**: 전환해도 기존 세션은 **끊기지 않고 계속 동작합니다**
   (수동/자동 전환 왕복을 여러 차례 겪어도 무중단 — 2026-07-11 실측).
   **세션을 새로 시작할 필요도 없습니다** — 이미 열려 있는 세션에 다음 입력을 넣는 순간부터

@@ -351,6 +351,19 @@ final class SwitcherTests: XCTestCase {
         return (team, max)
     }
 
+    /// CLI `list`·`status`(읽기 전용 대사)는 라이브를 **계정 열쇠(이메일 + 조직)** 로 골라 메모리에만 반영한다 —
+    /// 이메일만 보면 같은 이메일의 다른 조직 카드를 활성으로 보인다(Antigravity 브랜치 rebase 때 합친 경로).
+    func testReadOnlyDisplayPicksProfileByOrganization() async throws {
+        // 라이브는 개인 Max(배열에서 Team 뒤), 디스크 활성은 Team — 이메일만 보면 첫 번째인 Team 을 고른다.
+        let (team, max) = try setUpTwoOrganizations()
+        try store.setActive(team.id)
+        let before = try Data(contentsOf: env.accountsFile)
+        let failed = await switcher.reconcileForDisplay()
+        XCTAssertTrue(failed.isEmpty)
+        XCTAssertEqual(store.file.activeByProvider[.claude], max.id, "라이브 조직(Max)의 카드를 보인다")
+        XCTAssertEqual(try Data(contentsOf: env.accountsFile), before, "디스크에는 저장하지 않는다")
+    }
+
     /// 사고 재현 ①: Max가 활성인데 Keychain에 Team 토큰이 있다(oauthAccount는 Max 그대로). 2.1.281에서는
     /// Keychain 토큰이 invalid_grant로 빈 문자열이 된 뒤 Team 토큰을 쥔 세션의 refresh가 CAS를 통과해 채울 때
     /// 생긴다. 5분 동기화가 이걸 Max 프로필에 저장하면 두 카드가 Team 사용량을 보이고 한 계보를 나눠 갖는다.

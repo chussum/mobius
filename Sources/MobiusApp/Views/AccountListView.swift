@@ -9,22 +9,24 @@ extension Provider {
         switch self {
         case .claude: return "Claude Code CLI"
         case .codex: return "Codex CLI"
+        case .antigravity: return "Antigravity CLI"
         }
     }
 }
 
-/// 팝오버 상단 필터 탭 — 전체 / Claude / Codex. rawValue가 AppStorage로 저장돼
+/// 팝오버 상단 필터 탭 — 전체 / Claude / Codex / Antigravity. rawValue가 AppStorage로 저장돼
 /// 마지막 선택이 재시작 후에도 유지된다. 실제로 노출되는 탭은 계정이 있는 풀로
 /// 한정되고(`AccountListView.visibleTabs`), 저장값이 그중에 없으면 읽을 때
 /// `.all`로 정규화된다(`AccountListView.tab`) — 저장값 자체는 보존한다.
 enum ProviderTab: String, CaseIterable {
-    case all, claude, codex
+    case all, claude, codex, antigravity
 
     /// 풀 → 탭. exhaustive switch라 새 Provider가 생기면 컴파일이 깨져 케이스 누락을 막는다.
     init(provider: Provider) {
         switch provider {
         case .claude: self = .claude
         case .codex: self = .codex
+        case .antigravity: self = .antigravity
         }
     }
 
@@ -33,6 +35,7 @@ enum ProviderTab: String, CaseIterable {
         case .all: return nil
         case .claude: return .claude
         case .codex: return .codex
+        case .antigravity: return .antigravity
         }
     }
 
@@ -41,6 +44,7 @@ enum ProviderTab: String, CaseIterable {
         case .all: return loc("전체")
         case .claude: return Provider.claude.displayName
         case .codex: return Provider.codex.displayName
+        case .antigravity: return Provider.antigravity.displayName
         }
     }
 }
@@ -53,6 +57,7 @@ struct AccountListView: View {
     @State private var now = Date()
     @State private var showAddChooser = false
     @State private var showCodexAddGuide = false
+    @State private var showAgyAddGuide = false
     /// 카드 행의 실측 콘텐츠 높이 (행 인셋 제외). poolCards의 List frame 계산에 사용 —
     /// 계정 삭제 후 남는 키는 무해(참조 안 됨).
     @State private var rowHeights: [UUID: CGFloat] = [:]
@@ -104,7 +109,7 @@ struct AccountListView: View {
                    value: state.desktopCapture)
         .frame(width: 430)
         .onReceive(clock) { now = $0 }
-        .onAppear { state.reload(); state.refreshUsageIfStale(); state.refreshCodexUsageIfStale(); state.validateFallbacksLocally(); now = Date() }
+        .onAppear { state.reload(); state.refreshUsageIfStale(); state.refreshCodexUsageIfStale(); state.refreshAntigravityUsageIfStale(); state.validateFallbacksLocally(); now = Date() }
     }
 
     private var header: some View {
@@ -133,7 +138,9 @@ struct AccountListView: View {
             set: { state.setAutoSwitch($0, provider: provider) }))
             .toggleStyle(.switch).controlSize(.mini)
             .font(.system(size: 10))
-            .help(loc("한도가 차면 다음 계정으로 자동으로 이어집니다"))
+            .help(provider == .antigravity
+                  ? loc("쓰던 모델의 한도가 차면, 같은 모델에 여유가 확인된 다음 계정으로 옮깁니다. 켜면 agy 를 쓰는 동안 5분마다 사용량을 조회해요. 실행 중인 agy 세션은 다시 시작해야 새 계정이 적용돼요.")
+                  : loc("한도가 차면 다음 계정으로 자동으로 이어집니다"))
     }
 
     private var providersWithAccounts: [Provider] { state.file.providersWithAccounts }
@@ -289,6 +296,8 @@ struct AccountListView: View {
                 // 계정 추가 팝오버와 같은 안내 블록 재사용 — 문구가 세 군데로 흩어지면
                 // 드리프트한다 (리뷰 반영)
                 codexAddGuide.padding(.horizontal, 24)
+            case .antigravity:
+                agyAddGuide.padding(.horizontal, 24)
             }
         }
         .frame(maxWidth: .infinity).padding(.vertical, 18)
@@ -313,10 +322,14 @@ struct AccountListView: View {
         let claudeCard = p.provider == .claude
         // 연속 401 임계값 도달(표시 전용) — Claude 전용 신호다(usage 조회가 Claude만 돈다).
         let suspect = claudeCard && state.authSuspect.contains(p.id)
-        // 낙관적 표시: 수동 전환(Claude) 클릭 직후 pendingSwitchID로 그 카드를 즉시 활성으로
-        // 보여줘 UI가 스무스하게 전환된 것처럼 보이게 한다. Codex·평시엔 풀별 isActive.
-        let showActive = claudeCard && state.pendingSwitchID != nil
+        // 낙관적 표시: 수동 전환(Claude·Antigravity) 클릭 직후 pendingSwitchID로 그 카드를 즉시
+        // 활성으로 보여줘 UI가 스무스하게 전환된 것처럼 보이게 한다. Codex·평시엔 풀별 isActive.
+        let pendingInPool = state.pendingSwitchID.map { id in
+            state.file.accounts.first { $0.id == id }?.provider == p.provider } ?? false
+        let showActive = (claudeCard || p.provider == .antigravity) && pendingInPool
             ? (p.id == state.pendingSwitchID) : isActive(p)
+        // Antigravity: 키체인 쓰기가 시간을 넘겨 라이브 상태를 모르는 동안 활성 카드에 표시한다.
+        let agyChecking = p.provider == .antigravity && isActive(p) && state.agyIO.isLiveStateUnknown
         // 임계값 선제 경고 pill — Claude 전용, 경고 창이 아직 유효할 때만. 소진 카운트다운과
         // 같은 `now` 틱을 공유해 별도 타이머 없이 같은 주기로 나타나고 사라진다.
         let advisory = claudeCard && p.hasActiveAdvisory(now: now)
@@ -335,7 +348,7 @@ struct AccountListView: View {
                             }
                         },
                         onReauth: (p.needsReauth || suspect) && claudeCard ? { state.addAccount() } : nil,
-                        authSuspect: suspect, advisory: advisory)
+                        authSuspect: suspect, advisory: advisory, statusChecking: agyChecking)
             .onTapGesture {
                 guard !isActive(p) else { return }
                 withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
@@ -449,6 +462,12 @@ struct AccountListView: View {
                 .popover(isPresented: $showCodexAddGuide, arrowEdge: .bottom) {
                     codexAddGuide.padding(14).frame(width: 280)
                 }
+        case .antigravity:
+            Button { showAgyAddGuide.toggle() } label: { label }
+                .buttonStyle(.plain).foregroundStyle(.secondary)
+                .popover(isPresented: $showAgyAddGuide, arrowEdge: .bottom) {
+                    agyAddGuide.padding(14).frame(width: 280)
+                }
         case .all:
             Button { showAddChooser.toggle() } label: { label }
                 .buttonStyle(.plain).foregroundStyle(.secondary)
@@ -466,10 +485,23 @@ struct AccountListView: View {
                         .controlSize(.small)
                         Divider()
                         codexAddGuide
+                        Divider()
+                        agyAddGuide
                     }
                     .padding(14)
                     .frame(width: 280)
                 }
+        }
+    }
+
+    /// Antigravity 계정 추가 안내 — agy 에 비대화형 로그인 명령이 없어 adopt 방식만(설계 4.8).
+    private var agyAddGuide: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Label(loc("Antigravity는 터미널로 추가해요"), systemImage: "terminal")
+                .font(.system(size: 12, weight: .semibold))
+            Text(loc("터미널에서 `agy` 를 실행해 로그인하면 자동으로 등록돼요. 다른 계정을 더하려면 agy 에서 로그아웃한 뒤 그 계정으로 로그인하세요."))
+                .font(.system(size: 11)).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
