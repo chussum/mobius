@@ -387,7 +387,7 @@ Sources/MobiusApp/        SwiftUI 메뉴바 앱 + AppState(+Antigravity) + Views
 - ★ **바이너리에 기록된 SDK 버전이 MenuBarExtra 동작을 바꾼다**(실측 2026-09-24·2026-11-20). Swift 6.4 SwiftPM 의
   기본 빌드 시스템은 `LC_BUILD_VERSION` 의 sdk 를 14.0 으로 기록하는데, 그 앱은 팝오버 창이 내용이 줄어도
   줄지 않아(탭을 바꾸면 카드가 메뉴바에서 떨어져 창 가운데 뜬다) 다시 열 때 `onAppear` 도 부르지 않는다.
-  `make-app.sh` 가 `vtool` 로 실제 SDK 버전을 기록한다. 확인: `otool -l …/MobiusApp | grep -A4 LC_BUILD_VERSION`.
+  빌드 스크립트 쪽 대응은 이슈 #31 에서 다룬다. UI E2E 전에 확인: `otool -l …/MobiusApp | grep -A4 LC_BUILD_VERSION`.
 - ★ **팝오버는 상태 아이템 버튼으로 닫는다**(`AccountListView.dismissPopover`). 창을 `close()` 하면 SwiftUI 는
   열려 있다고 보고 다음 아이콘 클릭 한 번을 닫기로 써서 두 번 눌러야 열린다. 설정 창을 열 때 닫지 않으면
   활성화 정책이 `.regular` 로 바뀌며 팝오버가 메인 디스플레이로 옮겨 붙은 채 남는다(외부 디스플레이에서 연 경우).
