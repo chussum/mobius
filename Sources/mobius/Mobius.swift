@@ -63,13 +63,15 @@ func fmtReset(_ p: AccountProfile) -> String {
 /// `list --usage`가 usage 조회에 쓸 자격증명 blob. **활성 계정은 라이브 토큰**을 쓴다 — 저장 스냅샷은
 /// claude가 라이브를 갱신하는 동안 만료돼 있을 수 있다. 라이브 열쇠(이메일+조직)가 이 프로필과 일치할
 /// 때만 쓴다(AppState.usageQueryBlob과 같은 규칙 — 어긋난 라이브 토큰으로 조회해 다른 계정의 값을
-/// 보여주지 않는다). 아니면 저장 스냅샷으로 내려온다.
+/// 보여주지 않는다). 열쇠가 맞아도 Keychain 토큰은 다른 조직 것일 수 있으므로(실패 기록 24), 저장 경로와
+/// 같은 판정(`liveSnapshotVerdict == .storable`)을 통과할 때만 쓴다. 아니면 저장 스냅샷으로 내려온다.
 func usageBlob(for p: AccountProfile, store: AccountStore, io: ClaudeConfigIO) -> Data? {
     if store.file.activeByProvider[.claude] == p.id,
        let idx = store.file.accounts.firstIndex(where: { $0.id == p.id }),
        let liveKey = try? io.liveAccountKey(),
        store.file.firstIndex(provider: io.provider, matching: liveKey) == idx,
-       let live = try? io.readLiveSnapshot() {
+       let live = try? io.readLiveSnapshot(),
+       ClaudeConfigIO.liveSnapshotVerdict(live) == .storable {
         return live.keychainBlob
     }
     return (try? store.secret(for: p.id))?.keychainBlob
@@ -78,6 +80,13 @@ func usageBlob(for p: AccountProfile, store: AccountStore, io: ClaudeConfigIO) -
 /// 계정 한 줄 아래에 붙일 사용량 행. 429면 서버가 준 대기 시간을 그대로 밝힌다(재시도하지 않는다).
 func usageLines(for p: AccountProfile, store: AccountStore, io: ClaudeConfigIO) async -> [String] {
     guard let blob = usageBlob(for: p, store: store, io: io) else { return ["사용량: 저장된 자격증명 없음"] }
+    let isActive = store.file.activeByProvider[.claude] == p.id
+    // 활성이 아닌 계정의 저장 access 토큰은 대개 만료돼 있다(TTL 약 1시간). 만료 토큰으로 보내면 401만 받고
+    // 같은 계정의 조회 제한도 깎으므로(실패 기록 25) 보내지 않는다. CLI에서 refresh하지도 않는다 - 같은 계정의
+    // 동시 refresh를 막는 합류 장치(FallbackAuthChecker.inFlight)가 앱 프로세스 안에서만 동작한다.
+    if !isActive, let exp = UsageFetcher.expiresAt(from: blob), exp <= Date() {
+        return ["사용량: 저장 토큰 만료 (앱 팝오버를 열면 갱신됩니다)"]
+    }
     switch await UsageFetcher.fetchOutcome(keychainBlob: blob) {
     case .ok(let snap):
         return snap.summaryLines(now: Date())
@@ -85,7 +94,8 @@ func usageLines(for p: AccountProfile, store: AccountStore, io: ClaudeConfigIO) 
         let wait = retryAfter.map { " — \(UsageRateLimitBackoff.minutesUntilRetry(Date().addingTimeInterval($0), now: Date()))분 후 다시 시도" } ?? ""
         return ["사용량: 조회 제한 중\(wait)"]
     case .unauthorized:
-        return ["사용량: 토큰 거부됨 (만료됐을 수 있음 — claude를 한 번 실행해 보세요)"]
+        // claude를 실행해 갱신되는 것은 활성 계정의 토큰뿐이라, 그 안내는 활성 계정에만 붙인다.
+        return [isActive ? "사용량: 토큰 거부됨 (만료됐을 수 있음 — claude를 한 번 실행해 보세요)" : "사용량: 토큰 거부됨"]
     case .failed:
         return ["사용량: 조회 실패"]
     }
@@ -96,7 +106,7 @@ struct List: AsyncParsableCommand {
 
     // 기본은 네트워크 0 — usage 엔드포인트는 429를 주고 같은 계정을 부르는 모든 클라이언트가 제한을
     // 나눠 쓰므로(CLAUDE.md '사용량 엔드포인트'), 요청이 나가는 것은 사용자가 명시했을 때만이다.
-    @Flag(help: "Claude 계정별 5시간·7일 사용률과 리셋 시각도 표시 (usage API를 호출한다)")
+    @Flag(help: "Claude 계정별 5시간, 주간 사용률과 리셋 시각도 표시 (usage API를 호출한다)")
     var usage = false
 
     func run() async throws {
@@ -123,6 +133,10 @@ struct List: AsyncParsableCommand {
                     }
                 }
             }
+        }
+        // Codex만 등록한 사용자에게 --usage가 아무 말 없이 무시되지 않게 한다.
+        if usage, ctx.store.file.accounts(of: .claude).isEmpty {
+            print("사용량 표시는 Claude 계정만 지원합니다.")
         }
     }
 }
